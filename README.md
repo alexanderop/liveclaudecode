@@ -52,11 +52,19 @@ python3 -m liveclaudecode --hours 3        # only runs touched in the last 3 hou
 python3 -m liveclaudecode --port 9000 --open
 ```
 
-Install it if you want it on your PATH:
+Put it on your PATH without installing anything:
 
 ```bash
-pip install -e .
-liveclaudecode --open      # or: lcc --open
+ln -s ~/Projects/liveclaudecode/bin/liveclaudecode ~/bin/liveclaudecode
+liveclaudecode --open
+```
+
+Or install it properly. macOS system Python cannot be written to, so use a
+venv or pipx rather than `pip install -e .` against `/usr/bin/python3`:
+
+```bash
+pipx install .            # or: python3 -m venv .venv && .venv/bin/pip install -e .
+liveclaudecode --open     # or: lcc --open
 ```
 
 | Flag | Default | Meaning |

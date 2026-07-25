@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Run liveclaudecode straight from a checkout, with no install step.
+
+Symlink this anywhere on your PATH:
+    ln -s ~/Projects/liveclaudecode/bin/liveclaudecode ~/bin/liveclaudecode
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from liveclaudecode.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
