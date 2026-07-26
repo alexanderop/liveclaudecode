@@ -30,9 +30,10 @@ export function useLiveRuns() {
   const run = ref<RunResponse | null>(null)
   const events = ref<TranscriptEvent[]>([])
   const since = ref(0)
+  const eventRevision = ref(0)
   const offline = ref(false)
   const query = ref('')
-  const sourceFilter = ref<'all' | 'claude' | 'codex'>('all')
+  const sourceFilter = ref<'all' | 'claude' | 'codex' | 'copilot'>('all')
   const projectFilter = ref('all')
   const liveOnly = ref(false)
   const attentionOnly = ref(false)
@@ -152,11 +153,13 @@ export function useLiveRuns() {
     eventPending = true
     try {
       const response = await request<EventsResponse>(
-        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}`,
+        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${eventRevision.value}`,
       )
       if (!response || selectedKey.value !== key || selectedProject.value !== project) return
       since.value = response.next
-      events.value.push(...response.events)
+      eventRevision.value = response.revision
+      if (response.reset) events.value = [...response.events]
+      else events.value.push(...response.events)
     } finally {
       eventPending = false
     }
@@ -168,6 +171,7 @@ export function useLiveRuns() {
     selectedProject.value = project
     selectedKey.value = key
     since.value = 0
+    eventRevision.value = 0
     events.value = []
     run.value = null
     await Promise.all([pollEvents(), loadRun()])

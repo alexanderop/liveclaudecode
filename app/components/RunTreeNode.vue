@@ -10,6 +10,9 @@ const props = defineProps<{
 const emit = defineEmits<{ select: [key: string] }>()
 const expanded = ref(true)
 const hasChildren = computed(() => props.node.children.length > 0)
+const sourceLabel = computed(() =>
+  props.node.source === 'claude' ? 'Claude' : props.node.source === 'codex' ? 'Codex' : 'Copilot',
+)
 
 const running = computed(() =>
   props.node.spawnState === 'running'
@@ -44,11 +47,11 @@ function handleClick(): void {
         <span class="tree-title-row">
           <span class="tree-title">{{ node.label || node.key }}</span>
           <span class="source-tag" :class="node.source">
-            {{ node.source === 'claude' ? 'Claude' : 'Codex' }}
+            {{ sourceLabel }}
           </span>
         </span>
         <span class="tree-meta">
-          <span>{{ node.agentType || node.sourceDetail || (node.source === 'claude' ? 'Claude Code' : 'Codex') }}</span>
+          <span>{{ node.agentType || node.sourceDetail || sourceLabel }}</span>
           <span aria-hidden="true">·</span>
           <span>{{ node.subTools }} tools</span>
           <span v-if="node.subAgents">· {{ node.subAgents }} agents</span>

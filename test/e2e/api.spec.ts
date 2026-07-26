@@ -7,14 +7,24 @@ import { $fetch, setup } from '@nuxt/test-utils/e2e'
 import type { EventsResponse, RunResponse, TreeResponse } from '#shared/types/run'
 import * as fixture from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
+import * as copilot from '../fixtures/copilot'
 
 const SESSION = 'sess-1'
 const CODEX_SESSION = '11111111-1111-4111-8111-111111111111'
 const CODEX_AGENT = '22222222-2222-4222-8222-222222222222'
+const COPILOT_SESSION = '33333333-3333-4333-8333-333333333333'
 const directory = mkdtempSync(join(tmpdir(), 'liveclaudecode-api-'))
 const codexDirectory = mkdtempSync(join(tmpdir(), 'liveclaudecode-codex-api-'))
+const vscodeDirectory = mkdtempSync(join(tmpdir(), 'liveclaudecode-vscode-api-'))
 const codexDay = join(codexDirectory, '2026', '07', '26')
 const codexRootPath = join(codexDay, `rollout-2026-07-26T08-00-00-${CODEX_SESSION}.jsonl`)
+const copilotRootPath = join(
+  vscodeDirectory,
+  'workspaceStorage',
+  'repo-workspace',
+  'chatSessions',
+  `${COPILOT_SESSION}.jsonl`,
+)
 
 fixture.writeTranscript(join(directory, `${SESSION}.jsonl`), [
   fixture.userText('/ship @plan.md'),
@@ -75,8 +85,31 @@ codex.writeRollout(
   ],
 )
 
+copilot.writeLog(copilotRootPath, [
+  copilot.initial(copilot.snapshot({
+    id: COPILOT_SESSION,
+    title: 'Copilot API session',
+    workingDirectory: '/repo',
+    pendingRequests: [{ id: 'copilot-request' }],
+    requests: [copilot.request('copilot-request', 'Ship the Copilot adapter', {
+      timestamp: copilot.T0 + 5_000,
+      state: 0,
+      mode: 'agent',
+      response: [
+        copilot.tool('run_in_terminal', 'copilot-command', {
+          complete: false,
+          command: 'pnpm test:unit',
+        }),
+        copilot.textEdit('/repo/src/copilot.ts'),
+        copilot.markdown('Copilot is still working.'),
+      ],
+    })],
+  })),
+])
+
 vi.stubEnv('LCC_PROJECT', directory)
 vi.stubEnv('LCC_CODEX_SESSIONS', codexDirectory)
+vi.stubEnv('LCC_VSCODE_USER_DATA', vscodeDirectory)
 vi.stubEnv('LCC_HOURS', '99999')
 
 describe('read-only API', async () => {
@@ -89,6 +122,7 @@ describe('read-only API', async () => {
     vi.unstubAllEnvs()
     rmSync(directory, { recursive: true, force: true })
     rmSync(codexDirectory, { recursive: true, force: true })
+    rmSync(vscodeDirectory, { recursive: true, force: true })
   })
 
   it('returns a combined, provider-tagged run hierarchy and source health', async () => {
@@ -96,11 +130,17 @@ describe('read-only API', async () => {
     const project = response.projects.find(item => item.name === 'repo')
     const claudeRoot = project?.roots.find(root => root.key === SESSION)
     const codexRoot = project?.roots.find(root => root.key === `codex:${CODEX_SESSION}`)
+    const copilotRoot = project?.roots.find(root => root.key === `copilot:${COPILOT_SESSION}`)
 
     expect(project).toBeDefined()
     expect(claudeRoot?.source).toBe('claude')
     expect(claudeRoot?.children[0]?.agentType).toBe('implementation-worker')
     expect(codexRoot?.source).toBe('codex')
+    expect(copilotRoot).toMatchObject({
+      source: 'copilot',
+      sourceDetail: 'VS Code · agent',
+      live: true,
+    })
     expect(codexRoot?.children[0]).toMatchObject({
       key: `codex:${CODEX_AGENT}`,
       label: 'Codex worker',
@@ -109,6 +149,7 @@ describe('read-only API', async () => {
     expect(response.sources).toEqual([
       expect.objectContaining({ source: 'claude', state: 'ready', sessions: 1 }),
       expect.objectContaining({ source: 'codex', state: 'degraded', sessions: 1, malformed: 1 }),
+      expect.objectContaining({ source: 'copilot', state: 'ready', sessions: 1 }),
     ])
   })
 
@@ -167,6 +208,58 @@ describe('read-only API', async () => {
     const run = await $fetch<RunResponse>(`/api/run?key=${key}`)
     expect(run.root.subLive).toBe(false)
     expect(run.root.finalText).toBe('Codex run complete')
+  })
+
+  it('maps Copilot chat, tools, commands, edits, and targeted incremental updates', async () => {
+    const key = `copilot:${COPILOT_SESSION}`
+    const response = await $fetch<RunResponse>(`/api/run?key=${key}`)
+    expect(response.root).toMatchObject({ key, source: 'copilot', subLive: true })
+    expect(response.files).toEqual([['src/copilot.ts', 1]])
+    expect(response.node.commands).toEqual([
+      expect.objectContaining({ cmd: 'pnpm test:unit', ok: null }),
+    ])
+    expect(response.diagnostics.environment.entrypoint).toBe('VS Code')
+    expect(response.diagnostics.changes[0]?.path).toBe('src/copilot.ts')
+
+    const first = await $fetch<EventsResponse>(`/api/events?key=${key}&since=0`)
+    expect(first.events.some(event => event.kind === 'prompt')).toBe(true)
+    expect(first.events.some(event => event.tool === 'run_in_terminal')).toBe(true)
+
+    copilot.appendRecords(copilotRootPath, [
+      copilot.set(['requests', 0, 'response', 0], copilot.tool('run_in_terminal', 'copilot-command', {
+        command: 'pnpm test:unit',
+        exitCode: 0,
+      })),
+      copilot.set(['requests', 0, 'modelState'], { value: 1, completedAt: copilot.T0 + 8_000 }),
+      copilot.set(['pendingRequests'], []),
+    ])
+
+    const second = await $fetch<EventsResponse>(
+      `/api/events?key=${key}&since=${first.next}&revision=${first.revision}`,
+    )
+    expect(second.reset).toBe(true)
+    expect(second.events.filter(event => event.kind === 'tool_result')).toEqual([
+      expect.objectContaining({
+        kind: 'tool_result',
+        tool: 'run_in_terminal',
+        error: false,
+        body: 'Ran run_in_terminal',
+      }),
+    ])
+    const updated = await $fetch<RunResponse>(`/api/run?key=${key}`)
+    expect(updated.root.subLive).toBe(false)
+    expect(updated.node.commands[0]?.ok).toBe(true)
+
+    copilot.appendRecords(copilotRootPath, [
+      copilot.set(['requests', 0, 'response', 2, 'value'], 'Copilot response complete.'),
+    ])
+    const streamed = await $fetch<EventsResponse>(
+      `/api/events?key=${key}&since=${second.next}&revision=${second.revision}`,
+    )
+    expect(streamed.reset).toBe(true)
+    expect(streamed.events.filter(event => event.kind === 'text')).toEqual([
+      expect.objectContaining({ body: 'Copilot response complete.' }),
+    ])
   })
 
   it('returns 404 for an unknown key', async () => {
