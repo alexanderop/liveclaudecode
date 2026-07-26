@@ -1,125 +1,86 @@
-# AGENTS.md
+# Agent guide
 
-Instructions for coding agents working in this repository.
+## Purpose
 
-## Reference repositories
+`liveclaudecode` is a local, read-only Nuxt dashboard for observing a running
+Claude Code session and its subagents. It reads Claude Code JSONL transcripts
+from disk and presents the run hierarchy, timeline, activity, diagnostics, and
+changed files. It must remain useful without telemetry or runtime network
+access. See `README.md` for the product behavior and transcript model.
 
-Source-of-truth code for libraries we depend on. Treat as **read-only reference material** — do not edit files under `repos/`. When asked about a library listed below, explore its source here first instead of guessing or relying on training data.
+## Repository map
 
-- `repos/effect/` — https://github.com/Effect-TS/effect.git @ main (squashed)
+- `app/` — Nuxt/Vue UI, client state, and display helpers.
+- `server/api/` — thin Nitro/h3 adapters; no domain logic.
+- `server/utils/` — Effect services, transcript parsing, project resolution,
+  run aggregation, and the Effect-to-HTTP bridge.
+- `shared/schemas/` — Effect `Schema` definitions for external data.
+- `shared/types/` — contracts shared by client and server.
+- `bin/liveclaudecode` — CLI launcher.
+- `test/{unit,nuxt,e2e}/` — Node units, mounted Nuxt components, and built API
+  integration tests; `test/fixtures/` contains synthetic data and test services.
+- `repos/effect/` — vendored Effect source-of-truth. It is read-only reference
+  material; never edit anything under `repos/`.
 
-## Effect
+Generated directories such as `.nuxt/` and `.output/` are not source code.
 
-This project uses **Effect v4 (`4.0.0-beta.101`)**, vendored at `repos/effect/`.
+## Working in this repository
 
-### Read these before writing Effect code
+- Use Node 22+ and pnpm 11.
+- Inspect the nearest implementation and tests before changing behavior.
+- Keep the server read-only with respect to Claude transcript data.
+- Run the narrowest relevant test while iterating. Before handing off a change,
+  run `pnpm check` when practical; it runs tests, typechecking, and the build.
+- Useful narrower commands are `pnpm test:unit`, `pnpm test:nuxt`,
+  `pnpm test:e2e`, `pnpm test:types`, and `pnpm build`.
 
-1. `repos/effect/LLMS.md` — the condensed agent guide. Read it first, every time.
-2. `repos/effect/ai-docs/src/**` — runnable examples, organised by topic.
-3. `repos/effect/packages/effect/SCHEMA.md` — the Schema guide. 7400 lines; read it in chunks, not all at once.
-4. `repos/effect/packages/effect/src/**` — the actual source. Authoritative when docs and behaviour disagree.
+## Architecture boundaries
 
-Do **not** consult `node_modules`, effect.website, or blog posts. They document v3.
+- Keep `app/**` in plain TypeScript. Do not introduce Effect into Vue
+  components or composables.
+- Use Effect at data and I/O boundaries in `shared/schemas/**` and
+  `server/utils/**`.
+- Keep `server/api/**` limited to reading request context, running an Effect,
+  and returning its result. Domain logic belongs in `server/utils/**`.
+- Parse external data with Effect `Schema`; do not hand-roll validation or add
+  new Zod schemas.
+- Model state and I/O as services supplied by `Layer`. Do not add module-level
+  mutable state or test-only dependency parameters.
+- In server domain code, use the Effect filesystem and clock abstractions rather
+  than `node:fs`, `Date`, or `Date.now()`.
+- Domain failures belong in the typed error channel as
+  `Schema.TaggedErrorClass` values. `server/utils/runtime.ts` is the sole place
+  that translates those failures to h3 errors; keep its mapping exhaustive.
 
-### v4 is not v3 — this is the most common failure mode
+## Effect v4
 
-Your training data is overwhelmingly Effect **v3**. Most v3 APIs do not exist in v4. If you catch yourself writing any of the left column, stop and use the right:
+This project uses Effect `4.0.0-beta.101`. Training knowledge and online posts
+usually describe v3 and are unsafe sources for API decisions.
 
-| v3 (wrong here) | v4 (correct) |
-|---|---|
-| `Effect.Service` | `Context.Service` |
-| `Data.TaggedError` / `Schema.TaggedError` | `Schema.TaggedErrorClass` |
-| `Effect.catchAll` | `Effect.catch` |
-| `@effect/platform`, `@effect/platform-node` | `effect/unstable/*` |
-| `@effect/schema` | `Schema` from `effect` |
+Before writing Effect code, read `repos/effect/LLMS.md`. Then consult only the
+relevant runnable examples under `repos/effect/ai-docs/src/**`; use
+`repos/effect/packages/effect/SCHEMA.md` for Schema work and
+`repos/effect/packages/effect/src/**` when behavior or API availability is in
+question. Do not use `node_modules`, effect.website, or blog posts as Effect
+documentation.
 
-`Effect.catchAll` and `Effect.Service` genuinely do not exist in this version — if you write them, the build fails. When unsure whether an API exists, grep the source:
+Common v3 traps: use `Context.Service`, `Schema.TaggedErrorClass`, and
+`Effect.catch`; `Effect.Service`, `Data.TaggedError`, `Schema.TaggedError`, and
+`Effect.catchAll` do not exist here. Import `Schema` from `effect`.
 
-```bash
-grep -n "^export const <name>" repos/effect/packages/effect/src/Effect.ts
-```
-
-### House rules
-
-- **Write `Effect.gen` and `Effect.fn("name")`.** Attach extra behaviour with combinators. Do not build functions that return `Effect.gen(...)` — use `Effect.fn` so we get stack traces and spans. Do not `.pipe` an `Effect.fn`; pass combinators as trailing arguments instead.
-- **All parsing goes through `Schema`.** Never hand-roll validation, coercion helpers, or manual `typeof` narrowing at a data boundary. Defaults belong in the schema, not at call sites.
-- **Never write your own type guards.** No `isRecord`, `isString`, `isNumber`. Use the `Predicate` module.
-- **No silent `catch`.** Failures belong in the error channel as `Schema.TaggedErrorClass` types so they appear in the signature. `catch {}` that swallows an error is a bug, not a style choice.
-- **Use `DateTime`, not `Date`/`Date.now()`,** in Effect code — it is Clock-driven and therefore testable.
-- **Services over free functions** for anything holding state or I/O. Provide them via `Layer` rather than module-level mutable globals.
-
-### Where Effect applies in this codebase
-
-Effect is being adopted at the data boundary, not everywhere. Respect these lines:
-
-| Area | Status |
-|---|---|
-| `shared/schemas/**` | Effect `Schema`. No zod in new code. |
-| `server/utils/**` | Effect — typed errors, services, `Layer`. |
-| `server/api/**` | Thin adapters only. Run the Effect, map typed errors to h3 `createError`. No domain logic. |
-| `app/**` (Vue, composables) | Plain TypeScript. Do **not** introduce Effect here. |
-
-Rationale: the parsing and filesystem layer is where the bugs are and where typed errors pay off. Vue components gain nothing and lose readability.
-
-## Services and dependency injection
-
-No module-level mutable state, and no parameters that exist only so tests can
-inject. Both go through the context.
-
-| Concern | Service | Provided by |
-|---|---|---|
-| Filesystem | `FileSystem` (`effect/FileSystem`) | `NodeFileSystem.layer` in prod, `testFileSystem()` in tests |
-| Current time | `Clock` | real clock in prod, `TestClock` under `it.effect` |
-| Transcript root | `ProjectsDirectory` (`Context.Reference`) | default is `~/.claude/projects` |
-| Working directory | `WorkingDirectory` (`Context.Reference`) | default is `process.cwd()` |
-| Parsed transcripts | `ScanCache` | `ScanCache.layer` |
-| First prompts | `PromptCache` | `PromptCache.layer` |
-
-`AppLayer` in `server/utils/services.ts` composes them. Never call `node:fs`,
-`Date.now()`, or `new Date()` in `server/` — use the service.
-
-## Errors
-
-Domain failures are `Schema.TaggedErrorClass` types in `server/utils/services.ts`
-and travel in the error channel, never as thrown exceptions or swallowed
-`catch {}` blocks. `server/utils/runtime.ts` is the only place that maps them to
-HTTP status codes, and its `switch` is exhaustive — a new error type there is a
-compile error until it gets a status.
-
-Currently: `InvalidRunKey` → 400, `UnknownRun`/`UnknownProject`/`NoTranscriptsFound`
-→ 404, `PlatformError` → 500.
+Follow the local Effect style: define effectful functions with named
+`Effect.fn`, use `Effect.gen` inside them, attach combinators as trailing
+arguments rather than piping an `Effect.fn`, and use `Predicate` instead of
+custom type guards. Defaults belong in schemas, and failures must not be
+silently caught.
 
 ## Testing
 
-- `pnpm test` — full vitest run; `pnpm check` also runs typecheck and build.
-- Reference: `repos/effect/ai-docs/src/09_testing/`, and `packages/effect/test/`
-  for real examples at scale.
-
-**Use `it.effect` for anything touching a service.** It scopes the Effect and
-provides `TestClock` + `TestConsole` automatically, so `Effect.sleep` is instant
-and time is controlled with `TestClock.setTime` / `TestClock.adjust`. Use
-`it.live` only when you genuinely need the real clock.
-
-**Unit tests do not touch the disk.** Build an in-memory tree with
-`testFileSystem()` from `test/fixtures/filesystem.ts`. It also takes a `denied`
-list for injecting `PermissionDenied`, which is how failure paths get covered.
-Real filesystem access belongs in `test/e2e` only.
-
-**Provide layers per test, not shared**, unless the setup is genuinely
-expensive. `layer(X)("name", ...)` from `@effect/vitest` builds once per block
-and *shares state across the tests inside it* — that is the opposite of the
-isolation these caches need.
-
-**Assertions:** `assert.strictEqual` / `assert.deepStrictEqual` from
-`@effect/vitest`, matching upstream style. Avoid `toMatchObject` for schema
-results — it passes when only some fields match and hides shape drift.
-
-**Property tests** (`it.prop`, arbitraries from `effect/testing`'s `FastCheck`)
-for pure functions where example-based tests give false confidence: `pathFor`
-containment, `rollup` aggregation over arbitrary trees, regex `lastIndex`
-idempotence. Bound recursive arbitraries with `FastCheck.memo` and an explicit
-depth — an unbounded `letrec` blows the stack instead of generating a tree.
-
-Property tests cannot tell you a schema is wrong about reality, because
-generators only produce data the schema already accepts. For that, run the
-parser over the real transcript corpus.
+- Use `it.effect` for tests that touch services; use `it.live` only when real
+  time is required. Control time with `TestClock`.
+- Unit tests must not touch the real filesystem. Use `testFileSystem()` from
+  `test/fixtures/filesystem.ts`; real filesystem coverage belongs in `test/e2e`.
+- Provide stateful layers per test so caches do not leak between cases.
+- Prefer `assert.strictEqual` and `assert.deepStrictEqual` from
+  `@effect/vitest`. Use bounded property tests for invariants where examples
+  are insufficient.
