@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import type { ProjectRuns } from '#shared/types/run'
+import type { ProjectRuns, SessionSourceStatus } from '#shared/types/run'
 
 const props = defineProps<{
   projects: ProjectRuns[]
   allProjects: ProjectRuns[]
+  sources: SessionSourceStatus[]
+  projectOptions: Array<{ id: string, name: string }>
+  loading: boolean
   selectedProject: string | null
   selectedKey: string | null
 }>()
 
 const query = defineModel<string>('query', { required: true })
+const sourceFilter = defineModel<'all' | 'claude' | 'codex'>('sourceFilter', { required: true })
+const projectFilter = defineModel<string>('projectFilter', { required: true })
 const liveOnly = defineModel<boolean>('liveOnly', { required: true })
 const attentionOnly = defineModel<boolean>('attentionOnly', { required: true })
 const hideIdle = defineModel<boolean>('hideIdle', { required: true })
@@ -23,6 +28,14 @@ const organizeMenu = useTemplateRef('organizeMenu')
 const allRoots = computed(() => props.allProjects.flatMap(project => project.roots))
 const liveCount = computed(() => allRoots.value.filter(root => root.subLive).length)
 const attentionCount = computed(() => allRoots.value.filter(root => root.subErrors && !root.subLive).length)
+const recentRoots = computed(() => props.projects
+  .flatMap(project => project.roots.map(root => ({ project: project.id, root })))
+  .sort((a, b) => (b.root.subLast || '').localeCompare(a.root.subLast || '')))
+const sourceOptions = [
+  { value: 'all', label: 'All' },
+  { value: 'claude', label: 'Claude' },
+  { value: 'codex', label: 'Codex' },
+] as const
 
 function isExpanded(project: string): boolean {
   return !collapsedProjects.value.has(project)
@@ -71,8 +84,8 @@ function organizeBy(value: 'project' | 'list'): void {
         <UIcon name="i-lucide-terminal" />
       </div>
       <div class="workspace-name">
-        <strong>Live Claude</strong>
-        <span>Session viewer</span>
+        <strong>Live Sessions</strong>
+        <span>Claude + Codex</span>
       </div>
       <button
         type="button"
@@ -143,11 +156,41 @@ function organizeBy(value: 'project' | 'list'): void {
         placeholder="Filter sessions…"
         aria-label="Filter runs"
       />
+      <div class="source-filters" aria-label="Session source filter">
+        <button
+          v-for="option in sourceOptions"
+          :key="option.value"
+          type="button"
+          :class="{ selected: sourceFilter === option.value }"
+          :aria-pressed="sourceFilter === option.value"
+          @click="sourceFilter = option.value"
+        >{{ option.label }}</button>
+      </div>
+      <label class="project-filter">
+        <span>Project</span>
+        <select v-model="projectFilter" aria-label="Filter by project">
+          <option value="all">All projects</option>
+          <option v-for="project in projectOptions" :key="project.id" :value="project.id">
+            {{ project.name }}
+          </option>
+        </select>
+      </label>
       <div class="filters">
         <UCheckbox v-model="liveOnly" class="toggle" label="Live only" />
         <UCheckbox v-model="hideIdle" class="toggle" label="Hide empty" />
       </div>
-      <nav class="run-tree" aria-label="Claude Code runs">
+      <div v-if="sources.some(source => source.state !== 'ready')" class="source-statuses" aria-live="polite">
+        <p
+          v-for="source in sources.filter(source => source.state !== 'ready')"
+          :key="source.source"
+          :class="source.state"
+        >
+          <strong>{{ source.source === 'claude' ? 'Claude' : 'Codex' }}</strong>
+          {{ source.message }}
+        </p>
+      </div>
+      <nav class="run-tree" aria-label="Claude and Codex sessions">
+        <p v-if="loading" class="muted empty-sidebar">Loading local sessions…</p>
         <template v-if="organization === 'project'">
           <div v-for="project in projects" :key="project.id" class="project-group">
             <button
@@ -173,26 +216,27 @@ function organizeBy(value: 'project' | 'list'): void {
               <p v-if="!project.roots.length" class="muted empty-sidebar">No recent sessions.</p>
             </div>
           </div>
+          <p v-if="!loading && !projects.some(project => project.roots.length)" class="muted empty-sidebar">
+            No matching sessions.
+          </p>
         </template>
         <template v-else>
-          <template v-for="project in projects" :key="project.id">
-            <RunTreeNode
-              v-for="root in project.roots"
-              :key="`${project.id}/${root.key}`"
-              :node="root"
-              :depth="0"
-              :selected-key="selectedProject === project.id ? selectedKey : null"
-              @select="emit('select', project.id, $event)"
-            />
-          </template>
-          <p v-if="!projects.some(project => project.roots.length)" class="muted empty-sidebar">No matching sessions.</p>
+          <RunTreeNode
+            v-for="entry in recentRoots"
+            :key="`${entry.project}/${entry.root.key}`"
+            :node="entry.root"
+            :depth="0"
+            :selected-key="selectedProject === entry.project ? selectedKey : null"
+            @select="emit('select', entry.project, $event)"
+          />
+          <p v-if="!loading && !recentRoots.length" class="muted empty-sidebar">No matching sessions.</p>
         </template>
       </nav>
     </section>
 
     <footer class="sidebar-footer">
       <span class="connection-dot" />
-      <span>Watching local sessions</span>
+      <span>Watching Claude + Codex</span>
       <UIcon name="i-lucide-hard-drive" />
     </footer>
   </aside>

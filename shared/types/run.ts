@@ -1,5 +1,17 @@
 export type Timestamp = string | null
 
+export type SessionSource = 'claude' | 'codex'
+
+export type SourceState = 'ready' | 'degraded' | 'unavailable'
+
+export interface SessionSourceStatus {
+  source: SessionSource
+  state: SourceState
+  sessions: number
+  malformed: number
+  message: string
+}
+
 export type EventKind =
   | 'text'
   | 'thinking'
@@ -253,6 +265,8 @@ export interface TranscriptStats {
 }
 
 export interface RunNode extends TranscriptStats {
+  source: SessionSource
+  sourceDetail: string
   key: string
   kind: 'session' | 'subagent'
   sid: string
@@ -293,6 +307,7 @@ export interface TimelineLane {
 
 export interface TreeResponse {
   projects: ProjectRuns[]
+  sources: SessionSourceStatus[]
   now: number
 }
 

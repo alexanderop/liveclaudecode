@@ -62,7 +62,10 @@ const kpis = computed(() => {
         >
           <UIcon name="i-lucide-panel-left" />
         </button>
-        <span class="breadcrumb-root"><UIcon name="i-lucide-terminal-square" /> Claude Code</span>
+        <span class="breadcrumb-root">
+          <UIcon name="i-lucide-terminal-square" />
+          {{ root ? (root.source === 'claude' ? 'Claude' : 'Codex') : 'Local sessions' }}
+        </span>
         <UIcon name="i-lucide-chevron-right" />
         <span>Sessions</span>
         <UIcon name="i-lucide-chevron-right" />
@@ -86,9 +89,9 @@ const kpis = computed(() => {
       <div class="session-heading">
         <div class="session-kicker">
           <UIcon :name="selected?.agentType ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
-          {{ selected?.agentType || 'Main session' }}
+          {{ selected?.agentType || (root?.source === 'codex' ? 'Codex session' : 'Claude session') }}
         </div>
-        <h1>{{ root?.label || 'Select a Claude Code session' }}</h1>
+        <h1>{{ root?.label || 'Select a local session' }}</h1>
         <div class="status-line">
           <template v-if="busy.length">
             <span class="status-dot running" />

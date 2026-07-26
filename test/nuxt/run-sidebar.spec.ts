@@ -5,6 +5,8 @@ import type { RunNode } from '#shared/types/run'
 
 function run(): RunNode {
   return {
+    source: 'claude',
+    sourceDetail: 'Claude Code',
     key: 'session',
     kind: 'session',
     sid: 'session',
@@ -53,9 +55,17 @@ describe('RunSidebar', () => {
       props: {
         projects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
         allProjects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
+        sources: [
+          { source: 'claude', state: 'ready', sessions: 1, malformed: 0, message: '' },
+          { source: 'codex', state: 'ready', sessions: 0, malformed: 0, message: '' },
+        ],
+        projectOptions: [{ id: 'workout', name: 'workoutTracker' }],
+        loading: false,
         selectedProject: null,
         selectedKey: null,
         query: '',
+        sourceFilter: 'all',
+        projectFilter: 'all',
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
@@ -97,9 +107,20 @@ describe('RunSidebar', () => {
           { id: 'workout', name: 'workoutTracker', roots: [first] },
           { id: 'other', name: 'other-project', roots: [second] },
         ],
+        sources: [
+          { source: 'claude', state: 'ready', sessions: 2, malformed: 0, message: '' },
+          { source: 'codex', state: 'ready', sessions: 0, malformed: 0, message: '' },
+        ],
+        projectOptions: [
+          { id: 'workout', name: 'workoutTracker' },
+          { id: 'other', name: 'other-project' },
+        ],
+        loading: false,
         selectedProject: null,
         selectedKey: null,
         query: '',
+        sourceFilter: 'all',
+        projectFilter: 'all',
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
@@ -112,5 +133,50 @@ describe('RunSidebar', () => {
     ])
     await component.findAll('.tree-node')[1]!.trigger('click')
     expect(component.emitted('select')).toContainEqual(['other', 'second-session'])
+  })
+
+  it('updates provider/project filters and distinguishes loading, empty, and degraded states', async () => {
+    const component = await mountSuspended(RunSidebar, {
+      props: {
+        projects: [],
+        allProjects: [],
+        sources: [
+          { source: 'claude', state: 'ready', sessions: 0, malformed: 0, message: '' },
+          {
+            source: 'codex',
+            state: 'degraded',
+            sessions: 1,
+            malformed: 2,
+            message: '2 malformed records skipped',
+          },
+        ],
+        projectOptions: [{ id: '/repo', name: 'repo' }],
+        loading: true,
+        selectedProject: null,
+        selectedKey: null,
+        query: '',
+        sourceFilter: 'all',
+        projectFilter: 'all',
+        liveOnly: false,
+        attentionOnly: false,
+        hideIdle: true,
+      },
+    })
+
+    expect(component.text()).toContain('Loading local sessions')
+    expect(component.text()).toContain('Codex 2 malformed records skipped')
+
+    const codexButton = component.findAll('.source-filters button')
+      .find(button => button.text() === 'Codex')
+    expect(codexButton).toBeDefined()
+    await codexButton!.trigger('click')
+    expect(component.emitted('update:sourceFilter')).toContainEqual(['codex'])
+
+    await component.get('select[aria-label="Filter by project"]').setValue('/repo')
+    expect(component.emitted('update:projectFilter')).toContainEqual(['/repo'])
+
+    await component.setProps({ loading: false })
+    expect(component.text()).not.toContain('Loading local sessions')
+    expect(component.text()).toContain('No matching sessions')
   })
 })

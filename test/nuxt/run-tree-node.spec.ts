@@ -5,6 +5,8 @@ import type { RunNode } from '#shared/types/run'
 
 function node(overrides: Partial<RunNode> = {}): RunNode {
   return {
+    source: 'claude',
+    sourceDetail: 'Claude Code',
     key: 'session',
     kind: 'session',
     sid: 'session',
@@ -53,10 +55,28 @@ describe('RunTreeNode', () => {
       props: { node: node(), depth: 0, selectedKey: 'session' },
     })
     expect(component.text()).toContain('Ship the dashboard')
+    expect(component.text()).toContain('Claude')
     expect(component.text()).toContain('2 tools')
     expect(component.get('button').classes()).toContain('selected')
     await component.get('button').trigger('click')
     expect(component.emitted('select')).toEqual([['session']])
+  })
+
+  it('visibly tags Codex sessions and keeps their producer detail', async () => {
+    const component = await mountSuspended(RunTreeNode, {
+      props: {
+        node: node({
+          source: 'codex',
+          sourceDetail: 'Codex Desktop',
+          key: 'codex:session',
+        }),
+        depth: 0,
+        selectedKey: null,
+      },
+    })
+
+    expect(component.text()).toContain('Codex')
+    expect(component.text()).toContain('Codex Desktop')
   })
 
   it('renders current activity for a live worker', async () => {

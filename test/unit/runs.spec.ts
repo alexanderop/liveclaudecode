@@ -168,6 +168,8 @@ describe('rollup', () => {
     live: boolean,
     children: RunNode[],
   ): RunNode => ({
+    source: 'claude',
+    sourceDetail: 'Claude Code',
     tools,
     errors,
     lastTs,

@@ -216,6 +216,7 @@ export function shortPath(path: string, root = ''): string {
 export class TranscriptScan {
   readonly path: string
   line = 0
+  malformed = 0
   readonly events: TranscriptEvent[] = []
   readonly toolUses = new Map<string, ToolRecord>()
   readonly openTools = new Map<string, ToolRecord>()
@@ -299,10 +300,12 @@ export class TranscriptScan {
         try {
           value = JSON.parse(line)
         } catch {
+          self.malformed += 1
           continue
         }
         const parsed = parseClaudeRecord(value)
         if (parsed.success) self.ingest(parsed.record, index)
+        else self.malformed += 1
       }
       self.line = completeLines.length
       return self

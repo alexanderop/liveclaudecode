@@ -1,0 +1,327 @@
+import { basename } from 'node:path'
+import { Clock, Effect, Result } from 'effect'
+import {
+  buildCodexTree,
+  codexRunDiagnostics,
+  type CodexTree,
+} from './codex-runs'
+import { buildTree, flatten, pathFor, rootOf, runDiagnostics, runPhases, stripNode } from './runs'
+import { projectName, resolveProjectDirectories } from './project'
+import {
+  CodexScanCache,
+  ScanCache,
+  SessionLocatorCache,
+  UnknownRun,
+} from './services'
+import type {
+  EventsResponse,
+  ProjectRuns,
+  RunNode,
+  RunResponse,
+  SessionSourceStatus,
+  TreeResponse,
+} from '#shared/types/run'
+
+interface ClaudeTree {
+  roots: RunNode[]
+  byKey: Map<string, RunNode>
+  cwd: string
+  malformed: number
+}
+
+type SessionLocator =
+  | {
+      source: 'claude'
+      projectId: string
+      projectDirectory: string
+      tree: ClaudeTree
+      node: RunNode
+    }
+  | {
+      source: 'codex'
+      projectId: string
+      tree: CodexTree
+      node: RunNode
+    }
+
+interface SessionCatalog {
+  projects: ProjectRuns[]
+  sources: SessionSourceStatus[]
+  locators: Map<string, SessionLocator>
+}
+
+interface MutableProject {
+  id: string
+  name: string
+  path: string
+  roots: RunNode[]
+}
+
+const UNASSIGNED_PROJECT = '__unassigned__'
+
+function locatorKey(project: string, key: string): string {
+  return `${project}\0${key}`
+}
+
+function projectIdentity(path: string): { id: string, name: string, path: string } {
+  if (!path) return { id: UNASSIGNED_PROJECT, name: 'Unassigned', path: '' }
+  return { id: path, name: projectName(path), path }
+}
+
+function addProject(
+  projects: Map<string, MutableProject>,
+  path: string,
+  roots: RunNode[],
+): MutableProject {
+  const identity = projectIdentity(path)
+  const existing = projects.get(identity.id)
+  if (existing) {
+    existing.roots.push(...roots)
+    return existing
+  }
+  const project = { ...identity, roots: [...roots] }
+  projects.set(identity.id, project)
+  return project
+}
+
+function failureMessage(error: { readonly _tag: string, readonly message?: string }): string {
+  if (error._tag === 'PlatformError' && 'reason' in error) {
+    const reason = error.reason as { readonly _tag?: string }
+    return `Storage unavailable: ${reason._tag || 'filesystem error'}`
+  }
+  return error.message || 'Storage unavailable'
+}
+
+function sourceStatus(
+  source: SessionSourceStatus['source'],
+  sessions: number,
+  malformed: number,
+  message = '',
+  unreadable = 0,
+): SessionSourceStatus {
+  if (message) return { source, state: 'unavailable', sessions: 0, malformed: 0, message }
+  if (malformed > 0 || unreadable > 0) {
+    const malformedMessage = malformed > 0
+      ? malformed + ' malformed record' + (malformed === 1 ? '' : 's') + ' skipped'
+      : ''
+    const unreadableMessage = unreadable > 0
+      ? unreadable + ' unreadable rollout' + (unreadable === 1 ? '' : 's') + ' skipped'
+      : ''
+    return {
+      source,
+      state: 'degraded',
+      sessions,
+      malformed,
+      message: [malformedMessage, unreadableMessage].filter(Boolean).join('; '),
+    }
+  }
+  return { source, state: 'ready', sessions, malformed: 0, message: '' }
+}
+
+function matchesProjectInput(project: MutableProject, input: string): boolean {
+  if (!input) return true
+  if (project.roots.some(root => root.source === 'claude')) return true
+  const trimmed = input.replace(/\/$/, '')
+  const inputName = basename(trimmed)
+  return project.id === input
+    || project.path === trimmed
+    || project.name === input
+    || project.name === inputName
+    || project.id.endsWith(`/${input}`)
+}
+
+function visit(node: RunNode, use: (node: RunNode) => void): void {
+  use(node)
+  node.children.forEach(child => visit(child, use))
+}
+
+export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
+  projectInput: string,
+  hours: number,
+) {
+  const locatorCache = yield* SessionLocatorCache
+  const projects = new Map<string, MutableProject>()
+  const locators = new Map<string, SessionLocator>()
+  const statuses: SessionSourceStatus[] = []
+
+  const claudeResult = yield* Effect.result(Effect.gen(function*() {
+    const directories = yield* resolveProjectDirectories(projectInput)
+    return yield* Effect.forEach(directories, directory => Effect.gen(function*() {
+      const tree = yield* buildTree(directory.directory, hours)
+      return { directory: directory.directory, tree }
+    }), { concurrency: 'unbounded' })
+  }))
+
+  if (Result.isSuccess(claudeResult)) {
+    let malformed = 0
+    let sessions = 0
+    for (const item of claudeResult.success) {
+      malformed += item.tree.malformed
+      sessions += item.tree.roots.length
+      if (!item.tree.roots.length) continue
+      const path = item.tree.cwd || item.directory
+      const project = addProject(projects, path, item.tree.roots)
+      for (const root of item.tree.roots) {
+        visit(root, node => locators.set(locatorKey(project.id, node.key), {
+          source: 'claude',
+          projectId: project.id,
+          projectDirectory: item.directory,
+          tree: item.tree,
+          node,
+        }))
+      }
+    }
+    statuses.push(sourceStatus('claude', sessions, malformed))
+  } else {
+    statuses.push(sourceStatus('claude', 0, 0, failureMessage(claudeResult.failure)))
+  }
+
+  const codexResult = yield* Effect.result(buildCodexTree(hours))
+  if (Result.isSuccess(codexResult)) {
+    const tree = codexResult.success
+    for (const root of tree.roots) {
+      const project = addProject(projects, tree.cwdByKey.get(root.key) || '', [root])
+      visit(root, node => locators.set(locatorKey(project.id, node.key), {
+        source: 'codex',
+        projectId: project.id,
+        tree,
+        node,
+      }))
+    }
+    const suffix = tree.duplicates
+      ? `; ${tree.duplicates} duplicate rollout${tree.duplicates === 1 ? '' : 's'} deduplicated`
+      : ''
+    const status = sourceStatus('codex', tree.roots.length, tree.malformed, '', tree.unreadable)
+    statuses.push(suffix ? { ...status, message: `${status.message}${suffix}`.replace(/^; /, '') } : status)
+  } else {
+    statuses.push(sourceStatus('codex', 0, 0, failureMessage(codexResult.failure)))
+  }
+
+  const visible = [...projects.values()].filter(project => matchesProjectInput(project, projectInput))
+  const visibleIds = new Set(visible.map(project => project.id))
+  for (const [key, locator] of locators) {
+    if (!visibleIds.has(locator.projectId)) locators.delete(key)
+  }
+
+  for (const project of visible) {
+    project.roots.sort((a, b) => (b.subLast || '').localeCompare(a.subLast || ''))
+  }
+  visible.sort((a, b) => {
+    const aLast = a.roots[0]?.subLast || ''
+    const bLast = b.roots[0]?.subLast || ''
+    return bLast.localeCompare(aLast) || a.name.localeCompare(b.name)
+  })
+
+  yield* locatorCache.replace([...locators.values()].flatMap((locator) => {
+    const transcriptPath = locator.source === 'codex'
+      ? locator.tree.pathByKey.get(locator.node.key) || ''
+      : ''
+    if (locator.source === 'codex' && !transcriptPath) return []
+    return [{
+      source: locator.source,
+      projectId: locator.projectId,
+      key: locator.node.key,
+      node: locator.node,
+      projectDirectory: locator.source === 'claude' ? locator.projectDirectory : '',
+      transcriptPath,
+    }]
+  }))
+
+  return {
+    projects: visible.map(({ id, name, roots }) => ({ id, name, roots })),
+    sources: statuses,
+    locators,
+  } satisfies SessionCatalog
+})
+
+function findLocator(catalog: SessionCatalog, project: string, key: string): SessionLocator | null {
+  if (project) return catalog.locators.get(locatorKey(project, key)) || null
+  const matches = [...catalog.locators.values()].filter(locator => locator.node.key === key)
+  return matches.length === 1 ? matches[0]! : null
+}
+
+export const listSessions = Effect.fn('listSessions')(function*(
+  projectInput: string,
+  hours: number,
+) {
+  const catalog = yield* loadSessionCatalog(projectInput, hours)
+  return {
+    projects: catalog.projects,
+    sources: catalog.sources,
+    now: (yield* Clock.currentTimeMillis) / 1_000,
+  }
+})
+
+export const getSessionRun = Effect.fn('getSessionRun')(function*(
+  projectInput: string,
+  hours: number,
+  project: string,
+  key: string,
+) {
+  const catalog = yield* loadSessionCatalog(projectInput, hours)
+  const locator = findLocator(catalog, project, key)
+  if (!locator) return yield* new UnknownRun({ key })
+  const root = rootOf(locator.tree.roots, key)
+  if (!root) return yield* new UnknownRun({ key })
+
+  const diagnostics = locator.source === 'claude'
+    ? yield* runDiagnostics(locator.projectDirectory, root)
+    : codexRunDiagnostics(root, locator.tree.scanByKey)
+
+  return {
+    key,
+    lanes: flatten(root),
+    files: Object.entries(root.subFiles).sort((a, b) => b[1] - a[1]),
+    phases: runPhases(root),
+    diagnostics,
+    node: stripNode(locator.node),
+    root: stripNode(root),
+  }
+})
+
+export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
+  projectInput: string,
+  hours: number,
+  project: string,
+  key: string,
+  since: number,
+) {
+  const locatorCache = yield* SessionLocatorCache
+  let location = yield* locatorCache.get(project, key)
+  if (!location) {
+    yield* loadSessionCatalog(projectInput, hours)
+    location = yield* locatorCache.get(project, key)
+  }
+  if (!location) return yield* new UnknownRun({ key })
+
+  if (location.source === 'codex') {
+    const cache = yield* CodexScanCache
+    const scan = yield* cache.get(location.transcriptPath)
+    const node = { ...location.node, ...(yield* scan.stats) }
+    return {
+      key,
+      events: scan.events.slice(since),
+      next: scan.events.length,
+      node: stripNode(node),
+    }
+  }
+
+  const cache = yield* ScanCache
+  const scan = yield* cache.get(yield* pathFor(location.projectDirectory, key))
+  const node = { ...location.node, ...(yield* scan.stats) }
+  const childByToolId = new Map(
+    location.node.children
+      .filter(child => child.toolUseId)
+      .map(child => [child.toolUseId!, child.key]),
+  )
+  const events = scan.events.slice(since).map((entry) => {
+    const childKey = entry.spawn && entry.id ? childByToolId.get(entry.id) : undefined
+    return childKey ? { ...entry, childKey } : entry
+  })
+  return {
+    key,
+    events,
+    next: scan.events.length,
+    node: stripNode(node),
+  }
+})

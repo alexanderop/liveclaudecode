@@ -146,6 +146,8 @@ export const buildTree = Effect.fn('buildTree')(function*(
   for (const [index, item] of items.entries()) {
     const node: RunNode = {
       ...stats[index]!,
+      source: 'claude',
+      sourceDetail: 'Claude Code',
       key: item.key,
       kind: item.kind,
       sid: item.sid,
@@ -193,7 +195,12 @@ export const buildTree = Effect.fn('buildTree')(function*(
 
   for (const root of roots) rollup(root)
   roots.sort((a, b) => (b.subLast || '').localeCompare(a.subLast || ''))
-  return { roots, byKey, cwd: scans.find(scan => scan.cwd)?.cwd || '' }
+  return {
+    roots,
+    byKey,
+    cwd: scans.find(scan => scan.cwd)?.cwd || '',
+    malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
+  }
 })
 
 export function rollup(node: RunNode): RunNode {

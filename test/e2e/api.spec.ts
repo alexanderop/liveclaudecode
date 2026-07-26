@@ -6,9 +6,15 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import { $fetch, setup } from '@nuxt/test-utils/e2e'
 import type { EventsResponse, RunResponse, TreeResponse } from '#shared/types/run'
 import * as fixture from '../fixtures/transcripts'
+import * as codex from '../fixtures/codex'
 
 const SESSION = 'sess-1'
+const CODEX_SESSION = '11111111-1111-4111-8111-111111111111'
+const CODEX_AGENT = '22222222-2222-4222-8222-222222222222'
 const directory = mkdtempSync(join(tmpdir(), 'liveclaudecode-api-'))
+const codexDirectory = mkdtempSync(join(tmpdir(), 'liveclaudecode-codex-api-'))
+const codexDay = join(codexDirectory, '2026', '07', '26')
+const codexRootPath = join(codexDay, `rollout-2026-07-26T08-00-00-${CODEX_SESSION}.jsonl`)
 
 fixture.writeTranscript(join(directory, `${SESSION}.jsonl`), [
   fixture.userText('/ship @plan.md'),
@@ -23,7 +29,54 @@ fixture.writeSubagent(join(directory, SESSION), 'agent-a', [
   fixture.userResult('e1', 'ok'),
 ], { agentType: 'implementation-worker', description: 'slice A', toolUseId: 'spawn-a' })
 
+codex.writeRollout(codexRootPath, [
+  codex.sessionMeta(CODEX_SESSION, {
+    cwd: '/repo',
+    originator: 'Codex Desktop',
+    source: 'vscode',
+  }),
+  codex.turnContext({ cwd: '/repo', model: 'gpt-5.6-test', effort: 'high' }),
+  codex.message('user', 'Ship the Codex adapter'),
+  codex.event('task_started'),
+  codex.toolCall('update_plan', 'plan-1', {
+    plan: [{ step: 'Parse rollouts', status: 'completed' }],
+  }),
+  codex.toolOutput('plan-1', { ok: true }),
+  codex.event('patch_apply_end', {
+    call_id: 'patch-1',
+    success: true,
+    changes: { '/repo/src/codex.ts': { kind: 'update' } },
+  }),
+  codex.event('token_count', {
+    info: {
+      total_token_usage: {
+        input_tokens: 30,
+        cached_input_tokens: 10,
+        output_tokens: 12,
+      },
+    },
+  }),
+  codex.toolCall('exec_command', 'live-command', { cmd: 'pnpm test' }),
+], { malformed: true })
+codex.writeRollout(
+  join(codexDay, `rollout-2026-07-26T08-01-00-${CODEX_AGENT}.jsonl`),
+  [
+    codex.sessionMeta(CODEX_AGENT, {
+      cwd: '/repo',
+      source: codex.subagentSource(CODEX_SESSION, {
+        nickname: 'Codex worker',
+        role: 'worker',
+        path: '/root/codex_worker',
+      }),
+    }),
+    codex.turnContext({ cwd: '/repo' }),
+    codex.message('assistant', 'Worker finished'),
+    codex.event('task_complete'),
+  ],
+)
+
 vi.stubEnv('LCC_PROJECT', directory)
+vi.stubEnv('LCC_CODEX_SESSIONS', codexDirectory)
 vi.stubEnv('LCC_HOURS', '99999')
 
 describe('read-only API', async () => {
@@ -35,13 +88,28 @@ describe('read-only API', async () => {
   afterAll(() => {
     vi.unstubAllEnvs()
     rmSync(directory, { recursive: true, force: true })
+    rmSync(codexDirectory, { recursive: true, force: true })
   })
 
-  it('returns the run hierarchy', async () => {
+  it('returns a combined, provider-tagged run hierarchy and source health', async () => {
     const response = await $fetch<TreeResponse>('/api/tree')
-    expect(response.projects[0]?.name).toBe('repo')
-    expect(response.projects[0]?.roots[0]?.key).toBe(SESSION)
-    expect(response.projects[0]?.roots[0]?.children[0]?.agentType).toBe('implementation-worker')
+    const project = response.projects.find(item => item.name === 'repo')
+    const claudeRoot = project?.roots.find(root => root.key === SESSION)
+    const codexRoot = project?.roots.find(root => root.key === `codex:${CODEX_SESSION}`)
+
+    expect(project).toBeDefined()
+    expect(claudeRoot?.source).toBe('claude')
+    expect(claudeRoot?.children[0]?.agentType).toBe('implementation-worker')
+    expect(codexRoot?.source).toBe('codex')
+    expect(codexRoot?.children[0]).toMatchObject({
+      key: `codex:${CODEX_AGENT}`,
+      label: 'Codex worker',
+      parentAgentId: CODEX_SESSION,
+    })
+    expect(response.sources).toEqual([
+      expect.objectContaining({ source: 'claude', state: 'ready', sessions: 1 }),
+      expect.objectContaining({ source: 'codex', state: 'degraded', sessions: 1, malformed: 1 }),
+    ])
   })
 
   it('describes the whole run for a selected worker', async () => {
@@ -64,6 +132,41 @@ describe('read-only API', async () => {
     const second = await $fetch<EventsResponse>(`/api/events?key=${SESSION}&since=${first.next}`)
     expect(second.events).toEqual([])
     expect(second.next).toBe(first.next)
+  })
+
+  it('maps a Codex rollout into the same run, file, plan, usage, and event contracts', async () => {
+    const key = `codex:${CODEX_SESSION}`
+    const response = await $fetch<RunResponse>(`/api/run?key=${key}`)
+
+    expect(response.root).toMatchObject({ key, source: 'codex', subLive: true })
+    expect(response.lanes).toHaveLength(2)
+    expect(response.files).toEqual([['src/codex.ts', 1]])
+    expect(response.node.todos).toEqual([{ content: 'Parse rollouts', status: 'completed' }])
+    expect(response.node.current).toMatchObject({ tool: 'exec_command', summary: 'pnpm test' })
+    expect(response.diagnostics.usage).toEqual({ in: 30, out: 12, cr: 10, cw: 0 })
+    expect(response.diagnostics.agents).toHaveLength(2)
+
+    const events = await $fetch<EventsResponse>(`/api/events?key=${key}&since=0`)
+    expect(events.events.some(event => event.kind === 'prompt')).toBe(true)
+    expect(events.events.some(event => event.tool === 'exec_command')).toBe(true)
+  })
+
+  it('reads newly appended complete Codex records without duplicating prior events', async () => {
+    const key = `codex:${CODEX_SESSION}`
+    const first = await $fetch<EventsResponse>(`/api/events?key=${key}&since=0`)
+    codex.appendRecords(codexRootPath, [
+      codex.toolOutput('live-command', { exit_code: 0, output: 'passed' }),
+      codex.message('assistant', 'Codex run complete', { ts: codex.C0(9) }),
+      codex.event('task_complete', {}, codex.C0(10)),
+    ])
+
+    const second = await $fetch<EventsResponse>(`/api/events?key=${key}&since=${first.next}`)
+    expect(second.events.map(event => event.kind)).toEqual(['tool_result', 'text'])
+    expect(second.next).toBe(first.next + 2)
+
+    const run = await $fetch<RunResponse>(`/api/run?key=${key}`)
+    expect(run.root.subLive).toBe(false)
+    expect(run.root.finalText).toBe('Codex run complete')
   })
 
   it('returns 404 for an unknown key', async () => {

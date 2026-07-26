@@ -3,6 +3,7 @@ import type {
   ProjectRuns,
   RunNode,
   RunResponse,
+  SessionSourceStatus,
   TranscriptEvent,
   TreeResponse,
 } from '#shared/types/run'
@@ -22,6 +23,8 @@ function deepestLive(node: RunNode): RunNode {
 
 export function useLiveRuns() {
   const projects = ref<ProjectRuns[]>([])
+  const sources = ref<SessionSourceStatus[]>([])
+  const loading = ref(true)
   const selectedProject = ref<string | null>(null)
   const selectedKey = ref<string | null>(null)
   const run = ref<RunResponse | null>(null)
@@ -29,6 +32,8 @@ export function useLiveRuns() {
   const since = ref(0)
   const offline = ref(false)
   const query = ref('')
+  const sourceFilter = ref<'all' | 'claude' | 'codex'>('all')
+  const projectFilter = ref('all')
   const liveOnly = ref(false)
   const attentionOnly = ref(false)
   const hideIdle = ref(true)
@@ -73,27 +78,19 @@ export function useLiveRuns() {
   })
 
   const visibleProjects = computed(() => {
-    const needle = query.value.toLowerCase()
-    const filter = (node: RunNode, projectMatches: boolean): RunNode | null => {
-      const children = node.children.map(child => filter(child, projectMatches))
-        .filter((child): child is RunNode => Boolean(child))
-      const self = (!liveOnly.value || node.subLive)
-        && (!attentionOnly.value || (node.subErrors > 0 && !node.subLive))
-        && (!hideIdle.value || node.tools > 0 || children.length > 0)
-        && (!needle || projectMatches
-          || node.label.toLowerCase().includes(needle)
-          || node.agentType.toLowerCase().includes(needle))
-      return self || children.length ? { ...node, children } : null
-    }
-    return projects.value.map((project) => {
-      const projectMatches = project.name.toLowerCase().includes(needle)
-      return {
-        ...project,
-        roots: project.roots.map(root => filter(root, projectMatches))
-          .filter((root): root is RunNode => Boolean(root)),
-      }
-    }).filter(project => !needle || project.name.toLowerCase().includes(needle) || project.roots.length)
+    return filterSessionProjects(projects.value, {
+      query: query.value,
+      source: sourceFilter.value,
+      project: projectFilter.value,
+      liveOnly: liveOnly.value,
+      attentionOnly: attentionOnly.value,
+      hideIdle: hideIdle.value,
+    })
   })
+
+  const projectOptions = computed(() => projects.value
+    .map(project => ({ id: project.id, name: project.name }))
+    .sort((a, b) => a.name.localeCompare(b.name)))
 
   async function request<T>(url: string): Promise<T | null> {
     try {
@@ -111,8 +108,13 @@ export function useLiveRuns() {
     treePending = true
     try {
       const response = await request<TreeResponse>('/api/tree')
-      if (!response) return
+      if (!response) {
+        loading.value = false
+        return
+      }
       projects.value = response.projects
+      sources.value = response.sources
+      loading.value = false
 
       if (!selectedKey.value) {
         const firstProject = visibleProjects.value.find(project => project.roots.length)
@@ -186,7 +188,10 @@ export function useLiveRuns() {
 
   return {
     projects,
+    sources,
+    loading,
     visibleProjects,
+    projectOptions,
     selectedProject,
     selectedKey,
     selectedNode,
@@ -195,6 +200,8 @@ export function useLiveRuns() {
     events,
     offline,
     query,
+    sourceFilter,
+    projectFilter,
     liveOnly,
     attentionOnly,
     hideIdle,

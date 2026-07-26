@@ -97,7 +97,7 @@ const gitEvents = computed(() => [...(props.run?.diagnostics.git || [])].reverse
 
         <section class="content-section command-section">
           <div class="section-heading">
-            <div><h3>Git outcomes</h3><p>Commits, pushes, branches, and pull requests detected by Claude</p></div>
+            <div><h3>Git outcomes</h3><p>Commits, pushes, branches, and pull requests detected in the session</p></div>
             <span class="section-count">{{ gitEvents.length }}</span>
           </div>
           <div v-if="gitEvents.length" class="git-event-list">

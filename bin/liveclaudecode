@@ -43,7 +43,7 @@ function help() {
 Usage: liveclaudecode [project] [options]
 
 Arguments:
-  project              optional repo path or ~/.claude/projects slug
+  project              optional repo path or Claude project-storage slug
 
 Options:
   -p, --port <port>    port to bind (default: 8787)
@@ -104,7 +104,7 @@ export function main(argv = process.argv.slice(2)) {
     ? [outputEntry]
     : [nuxtEntry, 'dev', packageRoot, '--host', options.host, '--port', String(options.port)]
 
-  console.log(`watching : ${options.project || '~/.claude/projects'}`)
+  console.log(`watching : ${options.project || 'local Claude + Codex sessions'}`)
   console.log(`open     : ${url}`)
   if (options.open) openBrowser(url)
 

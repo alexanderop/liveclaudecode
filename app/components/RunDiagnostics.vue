@@ -45,7 +45,7 @@ function turnWidth(turn: TurnTiming): string {
         <div>
           <span class="section-eyebrow">Session diagnostics</span>
           <h2>Why the session behaved this way</h2>
-          <p>Native Claude events, timing, context usage, and causal signals across the full agent tree.</p>
+          <p>Native provider events, timing, context usage, and causal signals across the full agent tree.</p>
         </div>
         <span class="diagnostic-health" :class="errorCount ? 'failed' : warningCount ? 'warning' : 'healthy'">
           <UIcon :name="errorCount ? 'i-lucide-circle-alert' : warningCount ? 'i-lucide-triangle-alert' : 'i-lucide-circle-check'" />
@@ -111,7 +111,7 @@ function turnWidth(turn: TurnTiming): string {
           <div class="section-heading">
             <div>
               <h3>Slowest turns</h3>
-              <p>Claude's native turn-duration measurements</p>
+              <p>Native turn-duration measurements when recorded by the provider</p>
             </div>
             <span class="section-count">{{ run.diagnostics.turns.length }}</span>
           </div>
@@ -132,7 +132,7 @@ function turnWidth(turn: TurnTiming): string {
               <strong class="turn-duration">{{ formatMilliseconds(turn.durationMs) }}</strong>
             </button>
           </div>
-          <p v-else class="empty-note">This Claude version did not emit turn timing records.</p>
+          <p v-else class="empty-note">This session did not emit turn timing records.</p>
         </section>
       </div>
 
@@ -196,7 +196,7 @@ function turnWidth(turn: TurnTiming): string {
         </section>
 
         <section class="content-section environment-section">
-          <div class="section-heading"><div><h3>Reproduction context</h3><p>Environment recorded by Claude Code</p></div></div>
+          <div class="section-heading"><div><h3>Reproduction context</h3><p>Environment recorded by the session provider</p></div></div>
           <div class="environment-list">
             <div><span>Version</span><strong>{{ run.diagnostics.environment.version || 'Unknown' }}</strong></div>
             <div><span>Entrypoint</span><strong>{{ run.diagnostics.environment.entrypoint || 'Unknown' }}</strong></div>

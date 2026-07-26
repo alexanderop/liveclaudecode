@@ -5,6 +5,8 @@ import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import { NodeFileSystem } from '@effect/platform-node'
 import { TranscriptScan } from './transcript'
+import { CodexTranscriptScan } from './codex-transcript'
+import type { RunNode, SessionSource } from '#shared/types/run'
 
 /**
  * Root of Claude Code's transcript store.
@@ -15,7 +17,19 @@ import { TranscriptScan } from './transcript'
  */
 export const ProjectsDirectory = Context.Reference<string>(
   'lcc/ProjectsDirectory',
-  { defaultValue: () => join(homedir(), '.claude', 'projects') },
+  {
+    defaultValue: () => process.env.LCC_CLAUDE_PROJECTS
+      || join(homedir(), '.claude', 'projects'),
+  },
+)
+
+/** Root shared by Codex CLI, desktop, exec sessions, and subagents. */
+export const CodexSessionsDirectory = Context.Reference<string>(
+  'lcc/CodexSessionsDirectory',
+  {
+    defaultValue: () => process.env.LCC_CODEX_SESSIONS
+      || join(homedir(), '.codex', 'sessions'),
+  },
 )
 
 /** The process working directory, as a service so tests can override it. */
@@ -93,6 +107,73 @@ export class ScanCache extends Context.Service<ScanCache, {
   )
 }
 
+/** Incrementally parsed Codex rollout files, scoped to the provided Layer. */
+export class CodexScanCache extends Context.Service<CodexScanCache, {
+  readonly get: (
+    path: string,
+  ) => Effect.Effect<CodexTranscriptScan, PlatformError.PlatformError, FileSystem.FileSystem>
+  readonly peek: (path: string) => Effect.Effect<CodexTranscriptScan | undefined>
+}>()('lcc/CodexScanCache') {
+  static readonly layer = Layer.effect(
+    CodexScanCache,
+    Effect.sync(() => {
+      const scans = new Map<string, CodexTranscriptScan>()
+      return CodexScanCache.of({
+        get: Effect.fn('CodexScanCache.get')(function*(path: string) {
+          let scan = scans.get(path)
+          if (!scan) {
+            scan = new CodexTranscriptScan(path)
+            scans.set(path, scan)
+          }
+          return yield* scan.refresh
+        }),
+        peek: (path: string) => Effect.sync(() => scans.get(path)),
+      })
+    }),
+  )
+}
+
+export interface SessionEventLocation {
+  source: SessionSource
+  projectId: string
+  key: string
+  node: RunNode
+  projectDirectory: string
+  transcriptPath: string
+}
+
+/**
+ * Lightweight locators published by the latest tree scan.
+ *
+ * Event polling uses this index to refresh only the selected transcript rather
+ * than rediscovering and rebuilding every session on each two-second poll.
+ */
+export class SessionLocatorCache extends Context.Service<SessionLocatorCache, {
+  readonly replace: (locations: ReadonlyArray<SessionEventLocation>) => Effect.Effect<void>
+  readonly get: (project: string, key: string) => Effect.Effect<SessionEventLocation | undefined>
+}>()('lcc/SessionLocatorCache') {
+  static readonly layer = Layer.effect(
+    SessionLocatorCache,
+    Effect.sync(() => {
+      let locations = new Map<string, SessionEventLocation>()
+      const indexKey = (project: string, key: string): string => `${project}\0${key}`
+      return SessionLocatorCache.of({
+        replace: next => Effect.sync(() => {
+          locations = new Map(next.map(location => [
+            indexKey(location.projectId, location.key),
+            location,
+          ]))
+        }),
+        get: (project, key) => Effect.sync(() => {
+          if (project) return locations.get(indexKey(project, key))
+          const matches = [...locations.values()].filter(location => location.key === key)
+          return matches.length === 1 ? matches[0] : undefined
+        }),
+      })
+    }),
+  )
+}
+
 /**
  * First user prompt per transcript. Immutable once read, so it is cached for
  * the lifetime of the layer.
@@ -123,5 +204,7 @@ export class PromptCache extends Context.Service<PromptCache, {
 /** Everything the server needs, backed by the real filesystem. */
 export const AppLayer = Layer.mergeAll(
   ScanCache.layer,
+  CodexScanCache.layer,
+  SessionLocatorCache.layer,
   PromptCache.layer,
 ).pipe(Layer.provideMerge(NodeFileSystem.layer))

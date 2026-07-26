@@ -36,7 +36,7 @@ const emptyState = computed(() => {
   if (!props.events.length) {
     return {
       title: 'No activity yet',
-      description: 'Select a session from the sidebar to follow Claude’s work.',
+      description: 'Select a session from the sidebar to follow its activity.',
     }
   }
   if (props.errorsOnly) {
@@ -75,7 +75,7 @@ function eventClass(event: TranscriptEvent): Record<string, boolean> {
 function labelFor(event: TranscriptEvent): string {
   if (event.spawn) return 'Delegated work'
   if (event.kind === 'prompt') return 'You'
-  if (event.kind === 'text') return 'Claude'
+  if (event.kind === 'text') return 'Assistant'
   if (event.kind === 'thinking') return 'Reasoning'
   if (event.kind === 'tool_result') return event.error ? `${event.tool || 'Action'} failed` : `${event.tool || 'Action'} result`
   if (event.kind !== 'tool_use') return 'System'

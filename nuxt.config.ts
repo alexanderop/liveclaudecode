@@ -28,9 +28,9 @@ export default defineNuxtConfig({
   app: {
     head: {
       htmlAttrs: { lang: 'en' },
-      title: 'Claude Run — Live',
+      title: 'Claude + Codex Sessions — Live',
       meta: [
-        { name: 'description', content: 'Live view of Claude Code sessions and subagents' },
+        { name: 'description', content: 'Local live view of Claude Code and Codex sessions' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       ],
     },

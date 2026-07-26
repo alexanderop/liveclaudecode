@@ -9,6 +9,13 @@ function hoursFor(event: H3Event): number {
   return Number.isFinite(hours) && hours >= 0 ? hours : 24
 }
 
+export function browserOptionsFor(event: H3Event): { project: string, hours: number } {
+  return {
+    project: String(useRuntimeConfig(event).lcc.project || ''),
+    hours: hoursFor(event),
+  }
+}
+
 export const getProjectsContext = Effect.fn('getProjectsContext')(function*(event: H3Event) {
   const config = useRuntimeConfig(event)
   return {

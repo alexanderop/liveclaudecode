@@ -41,9 +41,14 @@ function handleClick(): void {
         <UIcon :name="node.kind === 'subagent' ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
       </span>
       <span class="tree-content">
-        <span class="tree-title">{{ node.label || node.key }}</span>
+        <span class="tree-title-row">
+          <span class="tree-title">{{ node.label || node.key }}</span>
+          <span class="source-tag" :class="node.source">
+            {{ node.source === 'claude' ? 'Claude' : 'Codex' }}
+          </span>
+        </span>
         <span class="tree-meta">
-          <span>{{ node.agentType || 'Claude Code' }}</span>
+          <span>{{ node.agentType || node.sourceDetail || (node.source === 'claude' ? 'Claude Code' : 'Codex') }}</span>
           <span aria-hidden="true">·</span>
           <span>{{ node.subTools }} tools</span>
           <span v-if="node.subAgents">· {{ node.subAgents }} agents</span>

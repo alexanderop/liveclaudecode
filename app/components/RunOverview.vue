@@ -116,7 +116,7 @@ const currentPhase = computed(() => props.run?.phases.at(-1) || null)
               <span>{{ todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content }}</span>
             </div>
           </div>
-          <p v-else class="empty-note">Claude has not emitted a todo list for this session.</p>
+          <p v-else class="empty-note">The provider has not emitted a todo list for this session.</p>
         </section>
 
         <section class="content-section phase-card">
@@ -140,7 +140,7 @@ const currentPhase = computed(() => props.run?.phases.at(-1) || null)
               </div>
             </div>
           </div>
-          <p v-else class="empty-note">Phases will appear when Claude announces meaningful work stages.</p>
+          <p v-else class="empty-note">Phases will appear when the assistant announces meaningful work stages.</p>
         </section>
       </div>
 
