@@ -1,16 +1,121 @@
-#!/usr/bin/env python3
-"""Run liveclaudecode straight from a checkout, with no install step.
+#!/usr/bin/env node
+import process from 'node:process'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { spawn } from 'node:child_process'
 
-Symlink this anywhere on your PATH:
-    ln -s ~/Projects/liveclaudecode/bin/liveclaudecode ~/bin/liveclaudecode
-"""
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
 
-import sys
-from pathlib import Path
+export function parseArguments(argv) {
+  const options = {
+    project: '',
+    port: 8787,
+    host: '127.0.0.1',
+    hours: 24,
+    open: false,
+  }
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]
+    if (argument === '-p' || argument === '--port') options.port = Number(argv[++index])
+    else if (argument === '--host') options.host = argv[++index]
+    else if (argument === '--hours') options.hours = Number(argv[++index])
+    else if (argument === '--open') options.open = true
+    else if (argument === '-V' || argument === '--version') options.version = true
+    else if (argument === '-h' || argument === '--help') options.help = true
+    else if (argument?.startsWith('-')) throw new Error(`Unknown option: ${argument}`)
+    else if (!options.project) options.project = argument || ''
+    else throw new Error(`Unexpected argument: ${argument}`)
+  }
+  if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65_535) {
+    throw new Error('Port must be an integer between 1 and 65535')
+  }
+  if (!Number.isFinite(options.hours) || options.hours < 0) {
+    throw new Error('Hours must be a non-negative number')
+  }
+  return options
+}
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+function help() {
+  return `liveclaudecode ${packageJson.version}
 
-from liveclaudecode.cli import main  # noqa: E402
+Usage: liveclaudecode [project] [options]
 
-if __name__ == "__main__":
-    sys.exit(main())
+Arguments:
+  project              optional repo path or ~/.claude/projects slug
+
+Options:
+  -p, --port <port>    port to bind (default: 8787)
+      --host <host>    host to bind (default: 127.0.0.1)
+      --hours <hours>  only show recently touched runs (default: 24)
+      --open            open the viewer in a browser
+  -V, --version        print the version
+  -h, --help           show this help`
+}
+
+function openBrowser(url) {
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open'
+  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url]
+  const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+  child.unref()
+}
+
+export function main(argv = process.argv.slice(2)) {
+  let options
+  try {
+    options = parseArguments(argv)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    console.error('Run liveclaudecode --help for usage.')
+    return 2
+  }
+  if (options.help) {
+    console.log(help())
+    return 0
+  }
+  if (options.version) {
+    console.log(packageJson.version)
+    return 0
+  }
+
+  const url = `http://${options.host}:${options.port}`
+  const outputEntry = join(packageRoot, '.output', 'server', 'index.mjs')
+  const nuxtEntry = join(packageRoot, 'node_modules', 'nuxt', 'bin', 'nuxt.mjs')
+  const production = existsSync(outputEntry)
+  if (!production && !existsSync(nuxtEntry)) {
+    console.error('Nuxt dependencies are missing. Run pnpm install first.')
+    return 1
+  }
+
+  const env = {
+    ...process.env,
+    LCC_PROJECT: options.project,
+    LCC_HOURS: String(options.hours),
+    NUXT_LCC_PROJECT: options.project,
+    NUXT_LCC_HOURS: String(options.hours),
+    HOST: options.host,
+    PORT: String(options.port),
+    NITRO_HOST: options.host,
+    NITRO_PORT: String(options.port),
+  }
+  const command = process.execPath
+  const args = production
+    ? [outputEntry]
+    : [nuxtEntry, 'dev', packageRoot, '--host', options.host, '--port', String(options.port)]
+
+  console.log(`watching : ${options.project || '~/.claude/projects'}`)
+  console.log(`open     : ${url}`)
+  if (options.open) openBrowser(url)
+
+  const child = spawn(command, args, { cwd: process.cwd(), env, stdio: 'inherit' })
+  child.on('exit', code => { process.exitCode = code ?? 0 })
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => child.kill(signal))
+  }
+  return 0
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  process.exitCode = main()
+}

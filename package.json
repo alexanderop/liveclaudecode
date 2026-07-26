@@ -1,0 +1,51 @@
+{
+  "name": "liveclaudecode",
+  "version": "0.2.0",
+  "description": "Live web view of a running Claude Code session and its subagents",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "bin": {
+    "liveclaudecode": "./bin/liveclaudecode",
+    "lcc": "./bin/liveclaudecode"
+  },
+  "scripts": {
+    "build": "nuxt build",
+    "check": "pnpm test && pnpm test:types && pnpm build",
+    "dev": "nuxt dev",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:nuxt": "vitest run --project nuxt",
+    "test:e2e": "vitest run --project e2e",
+    "test:types": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@comark/nuxt": "0.5.1",
+    "@iconify-json/lucide": "1.2.119",
+    "@nuxt/ui": "4.10.0",
+    "@vue-flow/background": "1.3.2",
+    "@vue-flow/controls": "1.1.3",
+    "@vue-flow/core": "1.48.2",
+    "@vue-flow/minimap": "1.5.4",
+    "nuxt": "4.4.8",
+    "tailwindcss": "4.3.3",
+    "vue": "3.5.39",
+    "vue-router": "5.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@nuxt/test-utils": "4.0.3",
+    "@types/node": "24.13.2",
+    "@vue/test-utils": "2.4.11",
+    "happy-dom": "^20.11.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.9",
+    "vue-tsc": "3.3.6"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.15.0"
+}

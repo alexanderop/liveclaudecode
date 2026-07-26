@@ -1,13 +1,16 @@
-.PHONY: run test lint install
+.PHONY: run test lint install build
 
 run:
-	python3 -m liveclaudecode --open
+	./bin/liveclaudecode --open
 
 test:
-	python3 -m unittest discover -s tests -t .
+	pnpm test
 
 lint:
-	python3 -m compileall -q liveclaudecode tests
+	pnpm test:types
 
 install:
-	pip install -e .
+	pnpm install
+
+build:
+	pnpm build

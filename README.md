@@ -1,135 +1,146 @@
 # liveclaudecode
 
-A live web view of a running Claude Code session — including every subagent it
-spawns — read straight from the JSONL transcripts on disk.
+A live Nuxt dashboard for a running Claude Code session—including every
+subagent it spawns—read directly from the JSONL transcripts on disk.
 
-When you kick off something long (`/implement`, `/ship`, a fan-out of workers)
-the terminal shows you one stream. This shows you the whole run: who is
-working, what they are running right now, what phase the orchestrator thinks
-it is in, which files have changed, and which commands passed or failed.
+When you start a long orchestration run, the terminal shows one stream. This
+viewer shows the complete run: its real agent hierarchy, parallel timeline,
+current activity, announced phases, changed files, command outcomes, and event
+feed.
 
-No dependencies, no telemetry, no network. Reads `~/.claude/projects/**.jsonl`
-and never writes to them.
+The server is read-only, binds to localhost by default, performs no telemetry,
+and needs no network access at runtime.
 
-```bash
-python3 -m liveclaudecode          # in your repo; opens on :8787
-```
+## Run it
 
-## What it shows
-
-**Run tree** — sessions and the subagents they spawned, nested by their real
-spawn hierarchy. Each subagent transcript records the `toolUseId` of the Agent
-call that created it, so the parent is whichever transcript issued that call.
-Green pulse means the file is still being written to.
-
-**Agent timeline** — a lane per agent, bars placed by actual start and end
-time. Parallel waves are obvious at a glance: four bars starting together are
-four workers dispatched in one wave. Green bar = running, red = hit errors.
-
-**Status line** — one sentence of plain language: which agents are working and
-what the active one is running right now, derived from the tool call that has
-no result yet.
-
-**Plan & phases** — the live `TodoWrite` checklist, plus phases announced
-anywhere in the run, merged in time order. Explicit `Wave 1` / `Slice B` /
-`Phase 2` markers win over incidental bold headings, so an orchestrator's plan
-does not get buried under its workers' report formatting.
-
-**What it changed** — every file written across the run with edit counts, and
-each agent's shell commands with pass/fail inferred from their output.
-
-**Feed** — the message stream at three densities: `compact` (one line per
-action), `normal` (cards with expandable tool input and results), `raw`
-(including system reminders). Errors expand by default; "errors only" filters
-to just those.
-
-## Usage
+Requirements: Node.js 22 or newer and pnpm.
 
 ```bash
-python3 -m liveclaudecode                  # transcripts for the current directory
-python3 -m liveclaudecode ~/code/other     # another repo
-python3 -m liveclaudecode --hours 3        # only runs touched in the last 3 hours
-python3 -m liveclaudecode --port 9000 --open
+pnpm install
+./bin/liveclaudecode --open
 ```
 
-Put it on your PATH without installing anything:
+From a source checkout, the launcher starts Nuxt in development mode. After a
+production build it automatically uses the built Node server:
+
+```bash
+pnpm build
+./bin/liveclaudecode --open
+```
+
+You can symlink the launcher onto your path:
 
 ```bash
 ln -s ~/Projects/liveclaudecode/bin/liveclaudecode ~/bin/liveclaudecode
 liveclaudecode --open
 ```
 
-Or install it properly. macOS system Python cannot be written to, so use a
-venv or pipx rather than `pip install -e .` against `/usr/bin/python3`:
-
-```bash
-pipx install .            # or: python3 -m venv .venv && .venv/bin/pip install -e .
-liveclaudecode --open     # or: lcc --open
-```
+### Options
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `project` | current directory | repo path, or a slug under `~/.claude/projects` |
-| `-p, --port` | `8787` | port to bind |
-| `--host` | `127.0.0.1` | bind address — localhost only by default |
-| `--hours` | `24` | ignore transcripts older than this |
-| `--open` | off | open a browser window |
+| `project` | all projects | Repository path, transcript directory, or slug under `~/.claude/projects` |
+| `-p, --port` | `8787` | Port to bind |
+| `--host` | `127.0.0.1` | Host to bind |
+| `--hours` | `24` | Ignore transcripts older than this |
+| `--open` | off | Open the viewer in a browser |
 
-Two toggles are worth knowing: **follow the active agent** keeps the feed on
-whichever agent in *this run* is currently writing while the header and
-timeline stay put, and **follow output** pins the feed to the newest message.
+Examples:
 
-## How it works
-
-Claude Code appends JSON Lines to `~/.claude/projects/<slugified-cwd>/`:
-
+```bash
+liveclaudecode ~/code/other
+liveclaudecode --hours 3
+liveclaudecode --port 9000 --open
 ```
+
+## What it shows
+
+- **Run tree:** sessions and subagents nested by their real spawn hierarchy.
+- **Agent timeline:** a lane per agent, positioned by actual start and end time.
+- **Live status:** which agents are active and which tool is currently in flight.
+- **Plan and phases:** the latest todo state and phase markers merged across the run.
+- **Diagnostics:** explicit API/tool failures, denials, timeouts, native turn timing,
+  context/cache pressure, compaction boundaries, causal branching, and agent receipts.
+- **Changed work:** files written across the run and command outcomes per agent.
+- **Change provenance:** structured line deltas plus detected commits, pushes, branches,
+  and pull requests linked back to the responsible agent.
+- **Event feed:** compact, normal, and raw densities with an errors-only filter.
+
+The viewer can follow the currently active agent while keeping the run-wide
+header and timeline stable. A separate control follows new event output.
+
+## Architecture
+
+The port follows Nuxt 4's application/server/shared structure, modeled after
+the conventions used by [npmx.dev](https://github.com/npmx-dev/npmx.dev):
+
+```text
+app/
+  components/       Vue dashboard components
+  composables/      polling and selection state
+  pages/            file-based routes
+  utils/            display-only helpers
+server/
+  api/              Nitro API endpoints
+  utils/            transcript parsing and run aggregation
+shared/
+  types/            API and domain contracts shared by client and server
+test/
+  unit/             fast Node tests
+  nuxt/             Nuxt-aware component tests
+  e2e/              built server/API integration tests
+  fixtures/         synthetic transcript builders
+```
+
+Claude Code appends JSON Lines under
+`~/.claude/projects/<slugified-cwd>/`:
+
+```text
 <session-id>.jsonl
 <session-id>/subagents/<agent-id>.jsonl
-<session-id>/subagents/<agent-id>.meta.json   # agentType, description, toolUseId
+<session-id>/subagents/<agent-id>.meta.json
 ```
 
-`Scan` (in `transcript.py`) keeps a parsed view of one file and only reads the
-lines appended since the last poll, so watching a 2 MB transcript costs almost
-nothing. A trailing line without a newline is a record mid-write, so it is left
-for the next pass rather than parsed as broken JSON.
+`TranscriptScan` caches the parsed view of each file and only ingests complete
+lines it has not seen before. A trailing line without a newline is treated as
+an in-progress write. `runs.ts` resolves parentage through each subagent's
+`toolUseId` and rolls subtree totals onto every node.
 
-`runs.py` builds the tree, resolves parents through `toolUseId`, and rolls
-subtree totals (agents, tools, errors, files) onto every node. `server.py`
-exposes three read-only JSON endpoints that the page polls every 2–6 seconds:
+The browser polls three read-only endpoints:
 
 | Endpoint | Returns |
 | --- | --- |
-| `/api/tree` | every run in the project, nested |
-| `/api/run?key=` | timeline lanes, files written, merged phases |
-| `/api/events?key=&since=` | transcript events after index `since` |
+| `/api/tree` | Every recent run in the project, nested |
+| `/api/run?key=` | Timeline lanes, files written, and merged phases |
+| `/api/events?key=&since=` | New transcript events after index `since` |
 
-The page survives the server restarting: fetches never throw, and an offline
-badge appears until it reconnects.
+This application must run as a Node server on the same machine as the Claude
+Code transcripts. Static, edge, or remote deployments cannot read those local
+files.
 
-## Development
+## Development and testing
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 43 tests, no dependencies
+pnpm dev          # Nuxt development server
+pnpm test         # all Vitest projects
+pnpm test:unit    # parser, hierarchy, project resolution, CLI
+pnpm test:nuxt    # Nuxt-mounted component behavior
+pnpm test:e2e     # real Nitro endpoints with synthetic JSONL fixtures
+pnpm test:types   # strict Nuxt/Vue TypeScript checks
+pnpm build        # production Node server build
 ```
 
-Tests build synthetic transcripts (`tests/fixtures.py`) rather than depending
-on a real session, and cover the parts that are easy to get subtly wrong:
-incremental reads against a file being appended to, half-written trailing
-lines, tool-call/result pairing, spawn-hierarchy resolution, and phase-marker
-precedence.
-
-The UI is plain HTML/CSS/JS in `liveclaudecode/static/` — no build step. Edit
-and reload.
+Tests never depend on a real Claude Code session. They construct synthetic
+transcripts and cover the subtle behavior: partial trailing lines, malformed
+records, tool/result pairing, current activity, spawn hierarchy, phase
+precedence, subtree totals, incremental event pagination, and API errors.
 
 ## Limitations
 
-- Polling, not file watching. Fine for one project; would want inotify/FSEvents
-  for hundreds of transcripts.
-- Command pass/fail is inferred from output text, so it is a hint, not a truth.
-- Phase detection reads the agent's own prose. Agents that never announce
-  phases show only their todos.
-- Transcript layout is Claude Code's internal format and may change.
+- The client polls rather than watching the filesystem.
+- Command success is inferred from output text and is only a hint.
+- Phase detection reads the agents' own prose.
+- Claude Code's transcript format is internal and may change.
 
 ## License
 

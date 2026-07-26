@@ -1,9 +1,7 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-build/
-dist/
+.nuxt/
+.output/
+node_modules/
+coverage/
+.data/
 *.egg-info/
 .DS_Store
-.pytest_cache/
