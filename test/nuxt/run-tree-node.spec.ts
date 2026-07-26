@@ -79,6 +79,23 @@ describe('RunTreeNode', () => {
     expect(component.text()).toContain('Codex Desktop')
   })
 
+  it('visibly tags Copilot sessions and keeps their VS Code mode detail', async () => {
+    const component = await mountSuspended(RunTreeNode, {
+      props: {
+        node: node({
+          source: 'copilot',
+          sourceDetail: 'VS Code Insiders · agent',
+          key: 'copilot:session',
+        }),
+        depth: 0,
+        selectedKey: null,
+      },
+    })
+
+    expect(component.text()).toContain('Copilot')
+    expect(component.text()).toContain('VS Code Insiders · agent')
+  })
+
   it('renders current activity for a live worker', async () => {
     const component = await mountSuspended(RunTreeNode, {
       props: {

@@ -12,7 +12,7 @@ const props = defineProps<{
 }>()
 
 const query = defineModel<string>('query', { required: true })
-const sourceFilter = defineModel<'all' | 'claude' | 'codex'>('sourceFilter', { required: true })
+const sourceFilter = defineModel<'all' | 'claude' | 'codex' | 'copilot'>('sourceFilter', { required: true })
 const projectFilter = defineModel<string>('projectFilter', { required: true })
 const liveOnly = defineModel<boolean>('liveOnly', { required: true })
 const attentionOnly = defineModel<boolean>('attentionOnly', { required: true })
@@ -35,6 +35,7 @@ const sourceOptions = [
   { value: 'all', label: 'All' },
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
+  { value: 'copilot', label: 'Copilot' },
 ] as const
 
 function isExpanded(project: string): boolean {
@@ -85,7 +86,7 @@ function organizeBy(value: 'project' | 'list'): void {
       </div>
       <div class="workspace-name">
         <strong>Live Sessions</strong>
-        <span>Claude + Codex</span>
+        <span>Claude + Codex + Copilot</span>
       </div>
       <button
         type="button"
@@ -185,11 +186,11 @@ function organizeBy(value: 'project' | 'list'): void {
           :key="source.source"
           :class="source.state"
         >
-          <strong>{{ source.source === 'claude' ? 'Claude' : 'Codex' }}</strong>
+          <strong>{{ source.source === 'claude' ? 'Claude' : source.source === 'codex' ? 'Codex' : 'Copilot' }}</strong>
           {{ source.message }}
         </p>
       </div>
-      <nav class="run-tree" aria-label="Claude and Codex sessions">
+      <nav class="run-tree" aria-label="Claude, Codex, and Copilot sessions">
         <p v-if="loading" class="muted empty-sidebar">Loading local sessions…</p>
         <template v-if="organization === 'project'">
           <div v-for="project in projects" :key="project.id" class="project-group">
@@ -236,7 +237,7 @@ function organizeBy(value: 'project' | 'list'): void {
 
     <footer class="sidebar-footer">
       <span class="connection-dot" />
-      <span>Watching Claude + Codex</span>
+      <span>Watching Claude + Codex + Copilot</span>
       <UIcon name="i-lucide-hard-drive" />
     </footer>
   </aside>

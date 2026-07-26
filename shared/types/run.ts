@@ -1,6 +1,6 @@
 export type Timestamp = string | null
 
-export type SessionSource = 'claude' | 'codex'
+export type SessionSource = 'claude' | 'codex' | 'copilot'
 
 export type SourceState = 'ready' | 'degraded' | 'unavailable'
 
@@ -331,5 +331,7 @@ export interface EventsResponse {
   key: string
   events: TranscriptEvent[]
   next: number
+  revision: number
+  reset: boolean
   node: PublicRunNode
 }

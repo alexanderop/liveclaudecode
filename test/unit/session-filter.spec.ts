@@ -10,7 +10,9 @@ function run(
 ): RunNode {
   return {
     source,
-    sourceDetail: options.detail || (source === 'claude' ? 'Claude Code' : 'Codex Desktop'),
+    sourceDetail: options.detail || (source === 'claude'
+      ? 'Claude Code'
+      : source === 'codex' ? 'Codex Desktop' : 'VS Code · agent'),
     key,
     kind: 'session',
     sid: key,
@@ -59,6 +61,7 @@ const projects: ProjectRuns[] = [
     roots: [
       run('claude-1', 'claude', 'Fix API'),
       run('codex:1', 'codex', 'Release dashboard', { detail: 'Codex Desktop' }),
+      run('copilot:1', 'copilot', 'Repair extension', { detail: 'VS Code Insiders · agent' }),
     ],
   },
   {
@@ -115,5 +118,17 @@ describe('combined session filters', () => {
     })
     assert.deepStrictEqual(filtered.map(project => project.name), ['Unassigned'])
     assert.deepStrictEqual(filtered[0]?.roots.map(root => root.key), ['codex:2'])
+  })
+
+  it('combines Copilot source, project, and text filtering', () => {
+    const filtered = filterSessionProjects(projects, {
+      query: 'extension',
+      source: 'copilot',
+      project: '/repo',
+      liveOnly: false,
+      attentionOnly: false,
+      hideIdle: true,
+    })
+    assert.deepStrictEqual(filtered.flatMap(project => project.roots.map(root => root.key)), ['copilot:1'])
   })
 })

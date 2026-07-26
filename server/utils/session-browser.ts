@@ -5,10 +5,16 @@ import {
   codexRunDiagnostics,
   type CodexTree,
 } from './codex-runs'
+import {
+  buildCopilotTree,
+  copilotRunDiagnostics,
+  type CopilotTree,
+} from './copilot-runs'
 import { buildTree, flatten, pathFor, rootOf, runDiagnostics, runPhases, stripNode } from './runs'
 import { projectName, resolveProjectDirectories } from './project'
 import {
   CodexScanCache,
+  CopilotScanCache,
   ScanCache,
   SessionLocatorCache,
   UnknownRun,
@@ -41,6 +47,12 @@ type SessionLocator =
       source: 'codex'
       projectId: string
       tree: CodexTree
+      node: RunNode
+    }
+  | {
+      source: 'copilot'
+      projectId: string
+      tree: CopilotTree
       node: RunNode
     }
 
@@ -98,6 +110,7 @@ function sourceStatus(
   malformed: number,
   message = '',
   unreadable = 0,
+  unreadableNoun = 'rollout',
 ): SessionSourceStatus {
   if (message) return { source, state: 'unavailable', sessions: 0, malformed: 0, message }
   if (malformed > 0 || unreadable > 0) {
@@ -105,7 +118,7 @@ function sourceStatus(
       ? malformed + ' malformed record' + (malformed === 1 ? '' : 's') + ' skipped'
       : ''
     const unreadableMessage = unreadable > 0
-      ? unreadable + ' unreadable rollout' + (unreadable === 1 ? '' : 's') + ' skipped'
+      ? unreadable + ` unreadable ${unreadableNoun}` + (unreadable === 1 ? '' : 's') + ' skipped'
       : ''
     return {
       source,
@@ -197,6 +210,45 @@ export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
     statuses.push(sourceStatus('codex', 0, 0, failureMessage(codexResult.failure)))
   }
 
+  const copilotResult = yield* Effect.result(buildCopilotTree(hours))
+  if (Result.isSuccess(copilotResult)) {
+    const tree = copilotResult.success
+    for (const root of tree.roots) {
+      const project = addProject(projects, tree.cwdByKey.get(root.key) || '', [root])
+      visit(root, node => locators.set(locatorKey(project.id, node.key), {
+        source: 'copilot',
+        projectId: project.id,
+        tree,
+        node,
+      }))
+    }
+    if (tree.rootsPresent === 0) {
+      statuses.push(sourceStatus(
+        'copilot',
+        0,
+        0,
+        'VS Code Stable and Insiders storage unavailable',
+      ))
+    } else {
+      const suffix = tree.duplicates
+        ? `; ${tree.duplicates} duplicate session${tree.duplicates === 1 ? '' : 's'} deduplicated`
+        : ''
+      const status = sourceStatus(
+        'copilot',
+        tree.roots.length,
+        tree.malformed,
+        '',
+        tree.unreadable,
+        'session file',
+      )
+      statuses.push(suffix
+        ? { ...status, message: `${status.message}${suffix}`.replace(/^; /, '') }
+        : status)
+    }
+  } else {
+    statuses.push(sourceStatus('copilot', 0, 0, failureMessage(copilotResult.failure)))
+  }
+
   const visible = [...projects.values()].filter(project => matchesProjectInput(project, projectInput))
   const visibleIds = new Set(visible.map(project => project.id))
   for (const [key, locator] of locators) {
@@ -213,10 +265,10 @@ export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
   })
 
   yield* locatorCache.replace([...locators.values()].flatMap((locator) => {
-    const transcriptPath = locator.source === 'codex'
-      ? locator.tree.pathByKey.get(locator.node.key) || ''
-      : ''
-    if (locator.source === 'codex' && !transcriptPath) return []
+    const transcriptPath = locator.source === 'claude'
+      ? ''
+      : locator.tree.pathByKey.get(locator.node.key) || ''
+    if (locator.source !== 'claude' && !transcriptPath) return []
     return [{
       source: locator.source,
       projectId: locator.projectId,
@@ -266,7 +318,9 @@ export const getSessionRun = Effect.fn('getSessionRun')(function*(
 
   const diagnostics = locator.source === 'claude'
     ? yield* runDiagnostics(locator.projectDirectory, root)
-    : codexRunDiagnostics(root, locator.tree.scanByKey)
+    : locator.source === 'codex'
+      ? codexRunDiagnostics(root, locator.tree.scanByKey)
+      : copilotRunDiagnostics(locator.tree.scanByKey.get(locator.node.key)!)
 
   return {
     key,
@@ -285,6 +339,7 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
   project: string,
   key: string,
   since: number,
+  revision: number,
 ) {
   const locatorCache = yield* SessionLocatorCache
   let location = yield* locatorCache.get(project, key)
@@ -302,6 +357,27 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
       key,
       events: scan.events.slice(since),
       next: scan.events.length,
+      revision: 0,
+      reset: false,
+      node: stripNode(node),
+    }
+  }
+
+  if (location.source === 'copilot') {
+    const cache = yield* CopilotScanCache
+    const scan = yield* cache.get({
+      path: location.transcriptPath,
+      application: location.node.sourceDetail.split(' · ')[0] || 'VS Code',
+      workspace: location.projectId === UNASSIGNED_PROJECT ? '' : location.projectId,
+    })
+    const node = { ...location.node, ...(yield* scan.stats) }
+    const reset = revision !== scan.eventRevision || since > scan.events.length
+    return {
+      key,
+      events: reset ? [...scan.events] : scan.events.slice(since),
+      next: scan.events.length,
+      revision: scan.eventRevision,
+      reset,
       node: stripNode(node),
     }
   }
@@ -322,6 +398,8 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
     key,
     events,
     next: scan.events.length,
+    revision: 0,
+    reset: false,
     node: stripNode(node),
   }
 })

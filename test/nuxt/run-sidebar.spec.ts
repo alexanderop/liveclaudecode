@@ -172,6 +172,12 @@ describe('RunSidebar', () => {
     await codexButton!.trigger('click')
     expect(component.emitted('update:sourceFilter')).toContainEqual(['codex'])
 
+    const copilotButton = component.findAll('.source-filters button')
+      .find(button => button.text() === 'Copilot')
+    expect(copilotButton).toBeDefined()
+    await copilotButton!.trigger('click')
+    expect(component.emitted('update:sourceFilter')).toContainEqual(['copilot'])
+
     await component.get('select[aria-label="Filter by project"]').setValue('/repo')
     expect(component.emitted('update:projectFilter')).toContainEqual(['/repo'])
 

@@ -212,7 +212,7 @@ kbd {
 .run-filter input { background: #151517 !important; color: var(--fg-soft) !important; }
 .source-filters {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2px;
   margin: 0 9px 7px;
   padding: 2px;
@@ -335,6 +335,7 @@ kbd {
   text-transform: uppercase;
 }
 .source-tag.codex { border-color: #31584b; background: #172720; color: #82c5a6; }
+.source-tag.copilot { border-color: #4b3f72; background: #211b35; color: #b8a7ef; }
 .tree-meta {
   display: flex;
   min-width: 0;

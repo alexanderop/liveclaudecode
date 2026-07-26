@@ -19,6 +19,9 @@ function flatten(node: RunNode, output: RunNode[] = []): RunNode[] {
 
 const busy = computed(() => props.root ? flatten(props.root).filter(node => node.live) : [])
 const lead = computed(() => busy.value.filter(node => node.current).at(-1) || null)
+const sourceLabel = computed(() =>
+  props.root?.source === 'claude' ? 'Claude' : props.root?.source === 'codex' ? 'Codex' : 'Copilot',
+)
 const status = computed(() => {
   const root = props.root
   if (!root) return { label: 'No session selected', class: 'done', icon: 'i-lucide-circle' }
@@ -64,7 +67,7 @@ const kpis = computed(() => {
         </button>
         <span class="breadcrumb-root">
           <UIcon name="i-lucide-terminal-square" />
-          {{ root ? (root.source === 'claude' ? 'Claude' : 'Codex') : 'Local sessions' }}
+          {{ root ? sourceLabel : 'Local sessions' }}
         </span>
         <UIcon name="i-lucide-chevron-right" />
         <span>Sessions</span>
@@ -89,7 +92,7 @@ const kpis = computed(() => {
       <div class="session-heading">
         <div class="session-kicker">
           <UIcon :name="selected?.agentType ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
-          {{ selected?.agentType || (root?.source === 'codex' ? 'Codex session' : 'Claude session') }}
+          {{ selected?.agentType || `${sourceLabel} session` }}
         </div>
         <h1>{{ root?.label || 'Select a local session' }}</h1>
         <div class="status-line">

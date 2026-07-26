@@ -3,8 +3,9 @@
 Investigation date: 2026-07-26 (Europe/Berlin)
 
 This document records the read-only storage investigation performed before
-adding Codex support to `liveclaudecode`. The investigation was intentionally
-targeted at Claude, Codex, OpenAI, and ChatGPT locations. It inspected directory
+adding Codex and VS Code GitHub Copilot Chat support to `liveclaudecode`. The
+investigation was intentionally targeted at Claude, Codex, OpenAI, ChatGPT,
+VS Code, and GitHub Copilot locations. It inspected directory
 structures, filenames, file metadata, JSON key/type shapes, SQLite schemas, and
 process open-file information. It did not copy full prompts, responses,
 credentials, cookies, account records, or attachment contents.
@@ -24,9 +25,14 @@ applications continued appending records while the investigation ran.
 | Claude desktop Claude Code session metadata | `/Users/alexanderopalic/Library/Application Support/Claude/claude-code-sessions` | Not a transcript source | Small JSON files contain desktop/session settings and pointers such as `cliSessionId`; they do not contain complete conversation events and may describe the same Claude Code sessions. |
 | ChatGPT/Codex Chromium profile data | `/Users/alexanderopalic/Library/Application Support/Codex` | Not a conversation source | The profile contains browser history, cache, cookies, Local/Session Storage, and LevelDB data, but no complete, stable, conversation-specific local store was found. Reading it would also cross credential and cookie boundaries. |
 | Ordinary ChatGPT conversations | No complete local store found | Unsupported | The installed desktop bundle is `com.openai.codex` and its native Codex app server writes supported Codex tasks to `~/.codex`. Ordinary ChatGPT chats appear cloud-backed or opportunistically cached in browser storage, not completely and stably stored in a safe local format. |
+| VS Code-owned local chat session logs | `/Users/alexanderopalic/Library/Application Support/Code/User/{workspaceStorage,globalStorage}` and the corresponding `Code - Insiders` root | Supported only when Copilot metadata is explicit | VS Code writes complete version-3 chat snapshots plus append-only deltas to per-session JSONL. The installed VS Code source contains the replay algorithm. Session responder/participant metadata can identify GitHub Copilot without reading credentials. |
+| VS Code `state.vscdb` chat index | Per-workspace `state.vscdb` under Stable and Insiders `workspaceStorage` | Index only; not displayed separately | `chat.ChatSessionStore.index` indexes the same JSONL sessions. It is mutable SQLite state and would duplicate canonical JSONL. |
+| VS Code `chatEditingSessions` and extension resource folders | Per-workspace `chatEditingSessions` and `GitHub.copilot-chat` directories | Unsupported as conversation sources | These are derivative edit snapshots, working contents, or referenced resources. Reading them is unnecessary for the conversation and could expose unrelated file contents. |
+| GitHub Copilot extension global storage | Stable/Insiders `User/globalStorage/github.copilot-chat` | Unsupported as a conversation source | Observed files are embeddings, agent definitions, CLI shims/metadata, debug helpers, and diff indexes rather than canonical VS Code chat conversations. |
 
-The integration therefore treats Claude Code and Codex rollouts as the two
-provider sources. Codex CLI and desktop are producer variants of one source,
+The integration therefore treats Claude Code, Codex rollouts, and explicitly
+identified VS Code GitHub Copilot Chat logs as three provider sources. Codex CLI
+and desktop are producer variants of one source,
 not separate entries.
 
 ## Claude Code
@@ -273,6 +279,183 @@ evidence established that ordinary ChatGPT cloud conversations are completely
 stored locally. They are therefore explicitly excluded; the product must not
 claim ordinary ChatGPT history support.
 
+## VS Code GitHub Copilot Chat
+
+### Locations and application variants inspected
+
+The following absolute roots were inspected read-only:
+
+```text
+/Users/alexanderopalic/Library/Application Support/Code/User
+/Users/alexanderopalic/Library/Application Support/Code - Insiders/User
+/Users/alexanderopalic/.vscode/extensions
+/Users/alexanderopalic/.vscode-insiders/extensions
+/Applications/Visual Studio Code.app/Contents/Resources/app
+/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app
+```
+
+VS Code Stable and Insiders both store workspace sessions at:
+
+```text
+<User>/workspaceStorage/<workspace-id>/chatSessions/<session-uuid>.jsonl
+<User>/workspaceStorage/<workspace-id>/workspace.json
+```
+
+Empty-window sessions are stored at:
+
+```text
+<User>/globalStorage/emptyWindowChatSessions/<session-uuid>.jsonl
+```
+
+VS Code source also defines `globalStorage/transferredChatSessions` and a legacy
+`workspaceStorage/no-workspace/chatSessions` migration source. The adapter reads
+the former when present and naturally discovers the latter as a workspace entry.
+It deduplicates migrated or copied files only when the decoded stable session ID
+matches.
+
+Profile-aware empty-window and workspace locations are supported at:
+
+```text
+<User>/profiles/<profile-id>/globalStorage/emptyWindowChatSessions/*.jsonl
+<User>/profiles/<profile-id>/workspaceStorage/*/chatSessions/*.jsonl
+```
+
+On this device, Stable had no `profiles` directory. Insiders had a `profiles`
+directory but no stored profile data at discovery time. This absence is normal
+and does not degrade the source. Stable contained 24 workspace chat JSONL files
+and no empty-window JSONL files; Insiders contained 155 workspace chat JSONL
+files and 8 empty-window JSONL files. These are point-in-time counts, not
+completeness guarantees.
+
+`workspace.json` files used either `folder` (161 observed) or `workspace` (one
+observed) and contained file URIs in the inspected sample. The adapter accepts
+file URIs as local project paths and retains non-file remote or virtual URIs as
+workspace identities without connecting to them. Unreadable, deleted, empty,
+untitled, or unidentified workspaces are grouped as **Unassigned**. No remote
+system was contacted during discovery.
+
+### Ownership and canonical format
+
+The installed VS Code workbench source defines `ChatSessionStore` itself. It
+selects `workspaceStorage/<workspace-id>/chatSessions` for workspaces and
+`globalStorage/emptyWindowChatSessions` for empty windows. It writes a JSONL log
+using a `ChatModel` serializer and stores `chat.ChatSessionStore.index` in the
+workspace SQLite state database. This establishes VS Code, rather than the
+Copilot extension, as owner of the canonical local store.
+
+The first JSONL record is a full version-3 snapshot:
+
+```json
+{"kind":0,"v":{"version":3,"sessionId":"<uuid>","creationDate":0,"responderUsername":"GitHub Copilot","requests":[],"pendingRequests":[]}}
+```
+
+Later complete lines are deltas:
+
+```json
+{"kind":1,"k":["requests",0,"result"],"v":{"<field>":"<redacted>"}}
+{"kind":2,"k":["requests",0,"response"],"i":0,"v":[{"kind":"<part-kind>"}]}
+{"kind":3,"k":["optionalField"]}
+```
+
+VS Code's installed replay code defines kind `0` as snapshot replacement,
+kind `1` as path assignment, kind `2` as array truncate/append, and kind `3` as
+path deletion. It compacts a long log by replacing it with another kind-0
+snapshot. The adapter implements those exact operations, ignores an incomplete
+trailing line, and resets replay when a compacted file shrinks.
+
+Snapshot fields observed and supported include session ID, creation date,
+custom title, responder name, initial location, working directory, pending edit
+state, pending requests, and requests. Requests contain a stable request ID,
+timestamp, user message, participant/agent metadata, mode, model, model state,
+response parts, explicit result/error details, token metadata, elapsed time,
+and edited-file events.
+
+Supported response parts include Markdown, thinking, serialized tool
+invocations, and text edit groups. Other structurally valid future kinds are
+counted as unsupported events rather than malformed data. Tool records expose a
+stable call ID, tool ID, completion flag, invocation/result labels, optional
+result details, and tool-specific data. `run_in_terminal` records can contain
+the exact command and a terminal state with an explicit exit code. The adapter
+does not treat `isComplete` as success: command/tool success is derived only
+from explicit error, success, status, or exit-code fields.
+
+Text edit groups contain a file URI and explicit edit ranges/text. Those power
+the changed-file view. File references and edited-file events may also be
+present, but referenced attachment or resource contents are not opened. No
+separate Copilot subagent nodes are invented: a `runSubagent` tool call remains
+a tool event unless VS Code provides a distinct local conversation with stable
+parentage.
+
+### Copilot classification, activity, and duplicates
+
+The installed built-in extensions were:
+
+```text
+/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/copilot
+  GitHub.copilot-chat 0.53.1
+/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/extensions/copilot
+  GitHub.copilot-chat 0.55.2026062901
+```
+
+Their manifests register participant IDs including
+`github.copilot.default`, `github.copilot.editingSession`,
+`github.copilot.editsAgent`, notebook participants, VS Code, and terminal
+participants. Observed canonical snapshots used `responderUsername` equal to
+`GitHub Copilot` and Copilot agent IDs. A session is classified as Copilot only
+when the responder is exactly GitHub Copilot, an agent ID begins with
+`github.copilot.`, or GitHub publisher plus Copilot extension metadata is
+present. Generic VS Code chat sessions are explicitly excluded.
+
+`pendingRequests` and request `modelState` provide explicit activity state.
+State zero or a pending request is treated as active; explicitly sealed states
+remain completed even if the file is recent. File size and mtime detect writes,
+while the cached replay state ingests only new complete lines. Event polling
+uses the selected session's cached path and never performs full Stable,
+Insiders, profile, or workspace discovery.
+
+The stable decoded `sessionId` is the deduplication key across workspace
+transitions, indexes, profiles, and application variants. Similar titles,
+timestamps, or prompts are not sufficient evidence and are never deduplicated.
+
+### Indexed, derivative, and unsupported stores
+
+Stable had 29 and Insiders had 142 per-workspace `state.vscdb` SQLite files in
+the inspected snapshot. Each sampled database had only `ItemTable(key TEXT
+UNIQUE, value BLOB)`. Relevant keys included `chat.ChatSessionStore.index`,
+`GitHub.copilot-chat`, and chat UI mementos. Values were not needed or read for
+the integration. The database is an index and mutable UI/extension state, not a
+second transcript source.
+
+Stable contained 36 and Insiders 234 `chatEditingSessions/*/state.json`
+snapshots plus `contents/*` files. These overlap the canonical chat's edit state
+and can contain source-file snapshots. They are deliberately excluded: the
+canonical JSONL already records supported edit groups, and opening snapshot
+contents would expand the privacy boundary.
+
+The following extension-owned roots were also inspected by filenames and file
+metadata only:
+
+```text
+<User>/globalStorage/github.copilot-chat
+<User>/workspaceStorage/<workspace-id>/GitHub.copilot-chat
+```
+
+Observed global files included command/settings embeddings, agent Markdown,
+Copilot CLI shims and metadata, debug helpers, binary tool caches, and
+`vscode-sessions-<id>` diff/path indexes. They are caches, indexes, helpers, or
+separate CLI metadata rather than complete canonical VS Code chat logs. The
+workspace extension roots can hold referenced chat resources; the adapter does
+not read them. Cloud-only Copilot or remote-coding-agent conversations without a
+complete local VS Code JSONL are unsupported, and no undocumented API is
+queried.
+
+The supported JSONL is plain user-readable text, not compressed, encrypted, or
+credential-gated. No security bypass is required. The format is nevertheless
+an internal VS Code persistence contract: it may change with VS Code schema
+versions, extension participant metadata, or response-part additions. Strict
+Effect Schema decoding, unknown-kind tolerance, per-file isolation, and source
+health reporting limit the impact of that instability.
+
 ## Privacy and read-only operating rules
 
 - Open provider files only for read and stat operations; never lock, migrate,
@@ -291,12 +474,14 @@ claim ordinary ChatGPT history support.
 
 ## Supportability conclusion
 
-There is a safe, reliable path for the requested unified browser using two
+There is a safe, reliable path for the requested unified browser using three
 canonical adapters:
 
 1. Claude Code project JSONL, retaining the existing rich run model.
 2. Codex date-partitioned rollout JSONL, shared by CLI, desktop, exec,
    automations, and subagents.
+3. VS Code-owned local chat JSONL, restricted to sessions with explicit GitHub
+   Copilot responder or participant metadata.
 
 The adapters must deduplicate each logical session by provider plus session ID.
 Codex metadata mirrors and indexes may enrich or corroborate a rollout but must

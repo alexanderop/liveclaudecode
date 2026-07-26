@@ -1,11 +1,12 @@
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { Context, Effect, Layer, Schema } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import { NodeFileSystem } from '@effect/platform-node'
 import { TranscriptScan } from './transcript'
 import { CodexTranscriptScan } from './codex-transcript'
+import { CopilotTranscriptScan } from './copilot-transcript'
 import type { RunNode, SessionSource } from '#shared/types/run'
 
 /**
@@ -29,6 +30,19 @@ export const CodexSessionsDirectory = Context.Reference<string>(
   {
     defaultValue: () => process.env.LCC_CODEX_SESSIONS
       || join(homedir(), '.codex', 'sessions'),
+  },
+)
+
+/** VS Code user-data roots whose local chat session stores may be inspected. */
+export const VsCodeUserDataDirectories = Context.Reference<ReadonlyArray<string>>(
+  'lcc/VsCodeUserDataDirectories',
+  {
+    defaultValue: () => process.env.LCC_VSCODE_USER_DATA
+      ? process.env.LCC_VSCODE_USER_DATA.split(delimiter).filter(Boolean)
+      : [
+          join(homedir(), 'Library', 'Application Support', 'Code', 'User'),
+          join(homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User'),
+        ],
   },
 )
 
@@ -133,6 +147,38 @@ export class CodexScanCache extends Context.Service<CodexScanCache, {
   )
 }
 
+/** Incrementally replayed VS Code chat logs, keyed by the selected session path. */
+export class CopilotScanCache extends Context.Service<CopilotScanCache, {
+  readonly get: (location: {
+    path: string
+    application: string
+    workspace: string
+  }) => Effect.Effect<CopilotTranscriptScan, PlatformError.PlatformError, FileSystem.FileSystem>
+  readonly peek: (path: string) => Effect.Effect<CopilotTranscriptScan | undefined>
+}>()('lcc/CopilotScanCache') {
+  static readonly layer = Layer.effect(
+    CopilotScanCache,
+    Effect.sync(() => {
+      const scans = new Map<string, CopilotTranscriptScan>()
+      return CopilotScanCache.of({
+        get: Effect.fn('CopilotScanCache.get')(function*(location) {
+          let scan = scans.get(location.path)
+          if (!scan) {
+            scan = new CopilotTranscriptScan(
+              location.path,
+              location.application,
+              location.workspace,
+            )
+            scans.set(location.path, scan)
+          }
+          return yield* scan.refresh
+        }),
+        peek: path => Effect.sync(() => scans.get(path)),
+      })
+    }),
+  )
+}
+
 export interface SessionEventLocation {
   source: SessionSource
   projectId: string
@@ -205,6 +251,7 @@ export class PromptCache extends Context.Service<PromptCache, {
 export const AppLayer = Layer.mergeAll(
   ScanCache.layer,
   CodexScanCache.layer,
+  CopilotScanCache.layer,
   SessionLocatorCache.layer,
   PromptCache.layer,
 ).pipe(Layer.provideMerge(NodeFileSystem.layer))
