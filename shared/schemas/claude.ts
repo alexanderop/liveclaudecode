@@ -1,55 +1,97 @@
-import { z } from 'zod'
+import { Result, Schema } from 'effect'
 
-const looseObject = <Shape extends z.ZodRawShape>(shape: Shape) => z.object(shape).passthrough()
+/**
+ * Schemas for the JSONL records Claude Code appends to a transcript.
+ *
+ * Claude Code adds fields to the transcript format over time, and this tool
+ * must keep working when it does. `Schema.Struct` strips undeclared keys by
+ * default, so every decoder here is built with `PRESERVE` — the equivalent of
+ * the `.passthrough()` the zod schemas relied on. It applies recursively,
+ * through nested structs and union members alike.
+ */
+const PRESERVE = { onExcessProperty: 'preserve' } as const
 
-export const ClaudeUsageSchema = looseObject({
-  input_tokens: z.number().finite().optional(),
-  output_tokens: z.number().finite().optional(),
-  cache_read_input_tokens: z.number().finite().optional(),
-  cache_creation_input_tokens: z.number().finite().optional(),
+const MessageContent = Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])
+
+/** Fields shared by every record shape Claude Code writes. */
+const baseFields = {
+  timestamp: Schema.optionalKey(Schema.String),
+  cwd: Schema.optionalKey(Schema.String),
+  sessionId: Schema.optionalKey(Schema.String),
+  session_id: Schema.optionalKey(Schema.String),
+  uuid: Schema.optionalKey(Schema.String),
+  parentUuid: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  logicalParentUuid: Schema.optionalKey(Schema.String),
+  agentId: Schema.optionalKey(Schema.String),
+  isSidechain: Schema.optionalKey(Schema.Boolean),
+  entrypoint: Schema.optionalKey(Schema.String),
+  version: Schema.optionalKey(Schema.String),
+  gitBranch: Schema.optionalKey(Schema.String),
+  userType: Schema.optionalKey(Schema.String),
+}
+
+// -- Content blocks ---------------------------------------------------------
+
+export const ClaudeUsageSchema = Schema.Struct({
+  input_tokens: Schema.optionalKey(Schema.Finite),
+  output_tokens: Schema.optionalKey(Schema.Finite),
+  cache_read_input_tokens: Schema.optionalKey(Schema.Finite),
+  cache_creation_input_tokens: Schema.optionalKey(Schema.Finite),
 })
 
-export const ClaudeTextBlockSchema = looseObject({
-  type: z.literal('text'),
-  text: z.string(),
+export const ClaudeTextBlockSchema = Schema.Struct({
+  type: Schema.Literal('text'),
+  text: Schema.String,
 })
 
-export const ClaudeThinkingBlockSchema = looseObject({
-  type: z.literal('thinking'),
-  thinking: z.string(),
-  signature: z.string().optional(),
+export const ClaudeThinkingBlockSchema = Schema.Struct({
+  type: Schema.Literal('thinking'),
+  thinking: Schema.String,
+  signature: Schema.optionalKey(Schema.String),
 })
 
-export const ClaudeToolUseBlockSchema = looseObject({
-  type: z.literal('tool_use'),
-  id: z.string(),
-  name: z.string(),
-  input: z.record(z.string(), z.unknown()),
-  caller: looseObject({ type: z.string() }).optional(),
+export const ClaudeToolUseBlockSchema = Schema.Struct({
+  type: Schema.Literal('tool_use'),
+  id: Schema.String,
+  name: Schema.String,
+  input: Schema.Record(Schema.String, Schema.Unknown),
+  caller: Schema.optionalKey(Schema.Struct({ type: Schema.String })),
 })
 
-export const ClaudeToolResultBlockSchema = looseObject({
-  type: z.literal('tool_result'),
-  tool_use_id: z.string(),
-  content: z.unknown(),
-  is_error: z.boolean().optional(),
+export const ClaudeToolResultBlockSchema = Schema.Struct({
+  type: Schema.Literal('tool_result'),
+  tool_use_id: Schema.String,
+  content: Schema.optionalKey(Schema.Unknown),
+  is_error: Schema.optionalKey(Schema.Boolean),
 })
 
-export const ClaudeImageBlockSchema = looseObject({
-  type: z.literal('image'),
-  source: z.unknown().optional(),
+export const ClaudeImageBlockSchema = Schema.Struct({
+  type: Schema.Literal('image'),
+  source: Schema.optionalKey(Schema.Unknown),
 })
 
-export const ClaudeContentBlockEnvelopeSchema = looseObject({
-  type: z.string().min(1),
+export const ClaudeContentBlockEnvelopeSchema = Schema.Struct({
+  type: Schema.NonEmptyString,
 })
 
-export type ClaudeTextBlock = z.infer<typeof ClaudeTextBlockSchema>
-export type ClaudeThinkingBlock = z.infer<typeof ClaudeThinkingBlockSchema>
-export type ClaudeToolUseBlock = z.infer<typeof ClaudeToolUseBlockSchema>
-export type ClaudeToolResultBlock = z.infer<typeof ClaudeToolResultBlockSchema>
-export type ClaudeImageBlock = z.infer<typeof ClaudeImageBlockSchema>
-export type ClaudeContentBlockEnvelope = z.infer<typeof ClaudeContentBlockEnvelopeSchema>
+export const ClaudeAssistantBlockSchema = Schema.Union([
+  ClaudeTextBlockSchema,
+  ClaudeThinkingBlockSchema,
+  ClaudeToolUseBlockSchema,
+]).pipe(Schema.toTaggedUnion('type'))
+
+export const ClaudeUserBlockSchema = Schema.Union([
+  ClaudeTextBlockSchema,
+  ClaudeToolResultBlockSchema,
+  ClaudeImageBlockSchema,
+]).pipe(Schema.toTaggedUnion('type'))
+
+export type ClaudeTextBlock = typeof ClaudeTextBlockSchema.Type
+export type ClaudeThinkingBlock = typeof ClaudeThinkingBlockSchema.Type
+export type ClaudeToolUseBlock = typeof ClaudeToolUseBlockSchema.Type
+export type ClaudeToolResultBlock = typeof ClaudeToolResultBlockSchema.Type
+export type ClaudeImageBlock = typeof ClaudeImageBlockSchema.Type
+export type ClaudeContentBlockEnvelope = typeof ClaudeContentBlockEnvelopeSchema.Type
 
 export type ParsedClaudeAssistantBlock =
   | { kind: 'text', data: ClaudeTextBlock }
@@ -63,165 +105,211 @@ export type ParsedClaudeUserBlock =
   | { kind: 'image', data: ClaudeImageBlock }
   | { kind: 'unknown', data: ClaudeContentBlockEnvelope }
 
-export function parseClaudeAssistantBlock(value: unknown): ParsedClaudeAssistantBlock | null {
-  const envelope = ClaudeContentBlockEnvelopeSchema.safeParse(value)
-  if (!envelope.success) return null
+const decodeAssistantBlock = Schema.decodeUnknownResult(ClaudeAssistantBlockSchema, PRESERVE)
+const decodeUserBlock = Schema.decodeUnknownResult(ClaudeUserBlockSchema, PRESERVE)
+const decodeBlockEnvelope = Schema.decodeUnknownResult(ClaudeContentBlockEnvelopeSchema, PRESERVE)
 
-  if (envelope.data.type === 'text') {
-    const parsed = ClaudeTextBlockSchema.safeParse(value)
-    return parsed.success ? { kind: 'text', data: parsed.data } : null
+/**
+ * A block whose `type` we do not know yet is expected and is reported as
+ * `unknown`. A block whose `type` we *do* know but whose body is malformed is
+ * a genuine defect and returns `null`, so the caller skips it.
+ */
+function parseBlock<Parsed extends { kind: string, data: unknown }>(
+  cases: Record<string, unknown>,
+  decode: (value: unknown) => Result.Result<{ type: string }, Schema.SchemaError>,
+  value: unknown,
+): Parsed | null {
+  const envelope = decodeBlockEnvelope(value)
+  if (!Result.isSuccess(envelope)) return null
+  if (!Object.hasOwn(cases, envelope.success.type)) {
+    return { kind: 'unknown', data: envelope.success } as unknown as Parsed
   }
-  if (envelope.data.type === 'thinking') {
-    const parsed = ClaudeThinkingBlockSchema.safeParse(value)
-    return parsed.success ? { kind: 'thinking', data: parsed.data } : null
-  }
-  if (envelope.data.type === 'tool_use') {
-    const parsed = ClaudeToolUseBlockSchema.safeParse(value)
-    return parsed.success ? { kind: 'tool_use', data: parsed.data } : null
-  }
-  return { kind: 'unknown', data: envelope.data }
+  const block = decode(value)
+  return Result.isSuccess(block)
+    ? ({ kind: block.success.type, data: block.success } as unknown as Parsed)
+    : null
+}
+
+export function parseClaudeAssistantBlock(value: unknown): ParsedClaudeAssistantBlock | null {
+  return parseBlock(ClaudeAssistantBlockSchema.cases, decodeAssistantBlock, value)
 }
 
 export function parseClaudeUserBlock(value: unknown): ParsedClaudeUserBlock | null {
-  const envelope = ClaudeContentBlockEnvelopeSchema.safeParse(value)
-  if (!envelope.success) return null
-
-  if (envelope.data.type === 'text') {
-    const parsed = ClaudeTextBlockSchema.safeParse(value)
-    return parsed.success ? { kind: 'text', data: parsed.data } : null
-  }
-  if (envelope.data.type === 'tool_result') {
-    const parsed = ClaudeToolResultBlockSchema.safeParse(value)
-    return parsed.success ? { kind: 'tool_result', data: parsed.data } : null
-  }
-  if (envelope.data.type === 'image') {
-    const parsed = ClaudeImageBlockSchema.safeParse(value)
-    return parsed.success ? { kind: 'image', data: parsed.data } : null
-  }
-  return { kind: 'unknown', data: envelope.data }
+  return parseBlock(ClaudeUserBlockSchema.cases, decodeUserBlock, value)
 }
 
-const ClaudeBaseRecordSchema = looseObject({
-  type: z.string().min(1),
-  timestamp: z.string().optional(),
-  cwd: z.string().optional(),
-  sessionId: z.string().optional(),
-  session_id: z.string().optional(),
-  uuid: z.string().optional(),
-  parentUuid: z.string().nullable().optional(),
-  logicalParentUuid: z.string().optional(),
-  agentId: z.string().optional(),
-  isSidechain: z.boolean().optional(),
-  entrypoint: z.string().optional(),
-  version: z.string().optional(),
-  gitBranch: z.string().optional(),
-  userType: z.string().optional(),
+// -- Messages ---------------------------------------------------------------
+
+export const ClaudeAssistantMessageSchema = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  role: Schema.optionalKey(Schema.Literal('assistant')),
+  model: Schema.optionalKey(Schema.String),
+  content: MessageContent,
+  usage: Schema.optionalKey(ClaudeUsageSchema),
+  stop_reason: Schema.optionalKey(Schema.NullOr(Schema.String)),
 })
 
-export const ClaudeAssistantMessageSchema = looseObject({
-  id: z.string().optional(),
-  role: z.literal('assistant').optional(),
-  model: z.string().optional(),
-  content: z.union([z.string(), z.array(z.unknown())]),
-  usage: ClaudeUsageSchema.optional(),
-  stop_reason: z.string().nullable().optional(),
+export const ClaudeUserMessageSchema = Schema.Struct({
+  role: Schema.optionalKey(Schema.Literal('user')),
+  content: MessageContent,
 })
 
-export const ClaudeUserMessageSchema = looseObject({
-  role: z.literal('user').optional(),
-  content: z.union([z.string(), z.array(z.unknown())]),
+/**
+ * The set of messages kept across a compaction.
+ *
+ * Verified against 80k real transcript records: this is always an object, never
+ * a count. The reader currently pushes it through a number coercion, so
+ * `CompactionEvent.preservedMessages` is always 0 — see `uuids` for the real
+ * figure.
+ */
+export const ClaudePreservedMessagesSchema = Schema.Struct({
+  anchorUuid: Schema.optionalKey(Schema.String),
+  uuids: Schema.optionalKey(Schema.Array(Schema.String)),
+  allUuids: Schema.optionalKey(Schema.Array(Schema.String)),
 })
 
-export const ClaudeAssistantRecordSchema = ClaudeBaseRecordSchema.extend({
-  type: z.literal('assistant'),
+/**
+ * `compact_boundary` payload. Declared explicitly so the transcript reader can
+ * consume typed values instead of coercing an `unknown` record field by field.
+ */
+export const ClaudeCompactMetadataSchema = Schema.Struct({
+  durationMs: Schema.optionalKey(Schema.Finite),
+  preTokens: Schema.optionalKey(Schema.Finite),
+  postTokens: Schema.optionalKey(Schema.Finite),
+  cumulativeDroppedTokens: Schema.optionalKey(Schema.Finite),
+  // Unioned with a number so an older or future count-shaped payload still
+  // decodes rather than dropping the whole record.
+  preservedMessages: Schema.optionalKey(
+    Schema.Union([Schema.Finite, ClaudePreservedMessagesSchema]),
+  ),
+  trigger: Schema.optionalKey(Schema.String),
+})
+
+// -- Records ----------------------------------------------------------------
+
+export const ClaudeAssistantRecordSchema = Schema.Struct({
+  ...baseFields,
+  type: Schema.Literal('assistant'),
   message: ClaudeAssistantMessageSchema,
-  requestId: z.string().optional(),
-  attributionSkill: z.string().optional(),
-  attributionAgent: z.string().optional(),
-  attributionPlugin: z.string().optional(),
-  attributionMcpServer: z.string().optional(),
-  attributionMcpTool: z.string().optional(),
-  effort: z.string().optional(),
-  isApiErrorMessage: z.boolean().optional(),
-  error: z.string().optional(),
-  apiErrorStatus: z.number().finite().optional(),
+  requestId: Schema.optionalKey(Schema.String),
+  attributionSkill: Schema.optionalKey(Schema.String),
+  attributionAgent: Schema.optionalKey(Schema.String),
+  attributionPlugin: Schema.optionalKey(Schema.String),
+  attributionMcpServer: Schema.optionalKey(Schema.String),
+  attributionMcpTool: Schema.optionalKey(Schema.String),
+  effort: Schema.optionalKey(Schema.String),
+  isApiErrorMessage: Schema.optionalKey(Schema.Boolean),
+  error: Schema.optionalKey(Schema.String),
+  apiErrorStatus: Schema.optionalKey(Schema.Finite),
 })
 
-export const ClaudeUserRecordSchema = ClaudeBaseRecordSchema.extend({
-  type: z.literal('user'),
+export const ClaudeUserRecordSchema = Schema.Struct({
+  ...baseFields,
+  type: Schema.Literal('user'),
   message: ClaudeUserMessageSchema,
-  isMeta: z.boolean().optional(),
-  promptId: z.string().optional(),
-  sourceToolUseID: z.string().optional(),
-  sourceToolAssistantUUID: z.string().optional(),
-  toolUseResult: z.unknown().optional(),
-  promptSource: z.string().optional(),
-  toolDenialKind: z.string().optional(),
-  interruptedMessageId: z.string().optional(),
-  isCompactSummary: z.boolean().optional(),
-  permissionMode: z.string().optional(),
+  isMeta: Schema.optionalKey(Schema.Boolean),
+  promptId: Schema.optionalKey(Schema.String),
+  sourceToolUseID: Schema.optionalKey(Schema.String),
+  sourceToolAssistantUUID: Schema.optionalKey(Schema.String),
+  toolUseResult: Schema.optionalKey(Schema.Unknown),
+  promptSource: Schema.optionalKey(Schema.String),
+  toolDenialKind: Schema.optionalKey(Schema.String),
+  interruptedMessageId: Schema.optionalKey(Schema.String),
+  isCompactSummary: Schema.optionalKey(Schema.Boolean),
+  permissionMode: Schema.optionalKey(Schema.String),
 })
 
-export const ClaudeSystemRecordSchema = ClaudeBaseRecordSchema.extend({
-  type: z.literal('system'),
-  subtype: z.string().optional(),
-  content: z.string().optional(),
-  level: z.string().optional(),
-  isMeta: z.boolean().optional(),
-  durationMs: z.number().finite().optional(),
-  messageCount: z.number().finite().optional(),
-  pendingBackgroundAgentCount: z.number().finite().optional(),
-  pendingWorkflowCount: z.number().finite().optional(),
-  compactMetadata: z.unknown().optional(),
+export const ClaudeSystemRecordSchema = Schema.Struct({
+  ...baseFields,
+  type: Schema.Literal('system'),
+  subtype: Schema.optionalKey(Schema.String),
+  content: Schema.optionalKey(Schema.String),
+  level: Schema.optionalKey(Schema.String),
+  isMeta: Schema.optionalKey(Schema.Boolean),
+  durationMs: Schema.optionalKey(Schema.Finite),
+  messageCount: Schema.optionalKey(Schema.Finite),
+  pendingBackgroundAgentCount: Schema.optionalKey(Schema.Finite),
+  pendingWorkflowCount: Schema.optionalKey(Schema.Finite),
+  compactMetadata: Schema.optionalKey(ClaudeCompactMetadataSchema),
+  // `stop_hook_summary` fields. The zod schema relied on passthrough for these
+  // and the reader cast back to a raw record to read them.
+  //
+  // `hookErrors` is a list of errors, not a count — verified against real
+  // transcripts. The reader coerces it with `asNumber`, which yields 0 for an
+  // array, so its "N hook errors" branch never fires. Unioned with a number so
+  // a count-shaped payload would still decode.
+  hookErrors: Schema.optionalKey(Schema.Union([Schema.Finite, Schema.Array(Schema.Unknown)])),
+  preventedContinuation: Schema.optionalKey(Schema.Boolean),
+  toolUseID: Schema.optionalKey(Schema.String),
 })
 
-export const ClaudeAttachmentRecordSchema = ClaudeBaseRecordSchema.extend({
-  type: z.literal('attachment'),
-  attachment: looseObject({ type: z.string().min(1) }),
+export const ClaudeAttachmentRecordSchema = Schema.Struct({
+  ...baseFields,
+  type: Schema.Literal('attachment'),
+  attachment: Schema.Struct({ type: Schema.NonEmptyString }),
 })
 
-const ClaudeSessionStateSchemas = [
-  looseObject({ type: z.literal('last-prompt'), sessionId: z.string(), lastPrompt: z.string().optional(), leafUuid: z.string().optional() }),
-  looseObject({ type: z.literal('mode'), sessionId: z.string(), mode: z.string() }),
-  looseObject({ type: z.literal('permission-mode'), sessionId: z.string(), permissionMode: z.string() }),
-  looseObject({ type: z.literal('ai-title'), sessionId: z.string(), aiTitle: z.string() }),
-  looseObject({ type: z.literal('custom-title'), sessionId: z.string(), customTitle: z.string() }),
-  looseObject({ type: z.literal('agent-name'), sessionId: z.string(), agentName: z.string() }),
-  looseObject({ type: z.literal('bridge-session'), sessionId: z.string(), bridgeSessionId: z.string(), lastSequenceNum: z.number().finite() }),
-  looseObject({ type: z.literal('queue-operation'), sessionId: z.string(), operation: z.string(), content: z.unknown().optional(), timestamp: z.string().optional() }),
-  looseObject({ type: z.literal('file-history-snapshot'), messageId: z.string(), snapshot: z.unknown() }),
-  looseObject({ type: z.literal('file-history-delta'), messageId: z.string(), snapshotMessageId: z.string(), backup: z.unknown() }),
-  looseObject({ type: z.literal('pr-link'), sessionId: z.string(), prNumber: z.number().finite(), prRepository: z.string(), prUrl: z.string(), timestamp: z.string().optional() }),
-  looseObject({ type: z.literal('frame-link'), sessionId: z.string(), path: z.string(), frameUrl: z.string(), title: z.string().optional(), timestamp: z.string().optional() }),
+export const ClaudeWorkflowStartedRecordSchema = Schema.Struct({
+  type: Schema.Literal('started'),
+  agentId: Schema.String,
+  key: Schema.String,
+})
+
+export const ClaudeWorkflowResultRecordSchema = Schema.Struct({
+  type: Schema.Literal('result'),
+  agentId: Schema.String,
+  key: Schema.String,
+  result: Schema.optionalKey(Schema.Unknown),
+})
+
+const sessionStateMembers = [
+  Schema.Struct({ type: Schema.Literal('last-prompt'), sessionId: Schema.String, lastPrompt: Schema.optionalKey(Schema.String), leafUuid: Schema.optionalKey(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal('mode'), sessionId: Schema.String, mode: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('permission-mode'), sessionId: Schema.String, permissionMode: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('ai-title'), sessionId: Schema.String, aiTitle: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('custom-title'), sessionId: Schema.String, customTitle: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('agent-name'), sessionId: Schema.String, agentName: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('bridge-session'), sessionId: Schema.String, bridgeSessionId: Schema.String, lastSequenceNum: Schema.Finite }),
+  Schema.Struct({ type: Schema.Literal('queue-operation'), sessionId: Schema.String, operation: Schema.String, content: Schema.optionalKey(Schema.Unknown), timestamp: Schema.optionalKey(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal('file-history-snapshot'), messageId: Schema.String, snapshot: Schema.optionalKey(Schema.Unknown) }),
+  Schema.Struct({ type: Schema.Literal('file-history-delta'), messageId: Schema.String, snapshotMessageId: Schema.String, backup: Schema.optionalKey(Schema.Unknown) }),
+  Schema.Struct({ type: Schema.Literal('pr-link'), sessionId: Schema.String, prNumber: Schema.Finite, prRepository: Schema.String, prUrl: Schema.String, timestamp: Schema.optionalKey(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal('frame-link'), sessionId: Schema.String, path: Schema.String, frameUrl: Schema.String, title: Schema.optionalKey(Schema.String), timestamp: Schema.optionalKey(Schema.String) }),
 ] as const
 
-export const ClaudeSessionStateRecordSchema = z.union(ClaudeSessionStateSchemas)
+export const ClaudeSessionStateRecordSchema = Schema.Union(sessionStateMembers)
 
-export const ClaudeWorkflowStartedRecordSchema = looseObject({
-  type: z.literal('started'),
-  agentId: z.string(),
-  key: z.string(),
+export const ClaudeRecordEnvelopeSchema = Schema.Struct({
+  type: Schema.NonEmptyString,
 })
 
-export const ClaudeWorkflowResultRecordSchema = looseObject({
-  type: z.literal('result'),
-  agentId: z.string(),
-  key: z.string(),
-  result: z.unknown(),
-})
+/**
+ * Every known record shape as one discriminated union keyed on `type`.
+ *
+ * This replaces the hand-written `switch` that dispatched to a schema and then
+ * cast the result — the cast could not verify that the `kind` label actually
+ * matched the schema that produced the data.
+ */
+export const ClaudeRecordSchema = Schema.Union([
+  ClaudeAssistantRecordSchema,
+  ClaudeUserRecordSchema,
+  ClaudeSystemRecordSchema,
+  ClaudeAttachmentRecordSchema,
+  ClaudeWorkflowStartedRecordSchema,
+  ClaudeWorkflowResultRecordSchema,
+  ...sessionStateMembers,
+]).pipe(Schema.toTaggedUnion('type'))
 
-export const ClaudeRecordEnvelopeSchema = looseObject({
-  type: z.string().min(1),
-})
-
-export type ClaudeAssistantRecord = z.infer<typeof ClaudeAssistantRecordSchema>
-export type ClaudeUserRecord = z.infer<typeof ClaudeUserRecordSchema>
-export type ClaudeSystemRecord = z.infer<typeof ClaudeSystemRecordSchema>
-export type ClaudeAttachmentRecord = z.infer<typeof ClaudeAttachmentRecordSchema>
-export type ClaudeSessionStateRecord = z.infer<typeof ClaudeSessionStateRecordSchema>
-export type ClaudeWorkflowStartedRecord = z.infer<typeof ClaudeWorkflowStartedRecordSchema>
-export type ClaudeWorkflowResultRecord = z.infer<typeof ClaudeWorkflowResultRecordSchema>
-export type ClaudeRecordEnvelope = z.infer<typeof ClaudeRecordEnvelopeSchema>
+export type ClaudeAssistantRecord = typeof ClaudeAssistantRecordSchema.Type
+export type ClaudeUserRecord = typeof ClaudeUserRecordSchema.Type
+export type ClaudeSystemRecord = typeof ClaudeSystemRecordSchema.Type
+export type ClaudeAttachmentRecord = typeof ClaudeAttachmentRecordSchema.Type
+export type ClaudeSessionStateRecord = typeof ClaudeSessionStateRecordSchema.Type
+export type ClaudeWorkflowStartedRecord = typeof ClaudeWorkflowStartedRecordSchema.Type
+export type ClaudeWorkflowResultRecord = typeof ClaudeWorkflowResultRecordSchema.Type
+export type ClaudeRecordEnvelope = typeof ClaudeRecordEnvelopeSchema.Type
+export type ClaudeRecord = typeof ClaudeRecordSchema.Type
+export type ClaudeRecordType = ClaudeRecord['type']
 
 export type ParsedClaudeRecord =
   | { kind: 'assistant', data: ClaudeAssistantRecord }
@@ -233,62 +321,76 @@ export type ParsedClaudeRecord =
   | { kind: 'workflow_result', data: ClaudeWorkflowResultRecord }
   | { kind: 'unknown', data: ClaudeRecordEnvelope }
 
+/**
+ * `satisfies` makes this exhaustive: adding a member to `ClaudeRecordSchema`
+ * without giving it a kind here is a compile error.
+ */
+const KIND_BY_TYPE = {
+  'assistant': 'assistant',
+  'user': 'user',
+  'system': 'system',
+  'attachment': 'attachment',
+  'started': 'workflow_started',
+  'result': 'workflow_result',
+  'last-prompt': 'session_state',
+  'mode': 'session_state',
+  'permission-mode': 'session_state',
+  'ai-title': 'session_state',
+  'custom-title': 'session_state',
+  'agent-name': 'session_state',
+  'bridge-session': 'session_state',
+  'queue-operation': 'session_state',
+  'file-history-snapshot': 'session_state',
+  'file-history-delta': 'session_state',
+  'pr-link': 'session_state',
+  'frame-link': 'session_state',
+} as const satisfies Record<ClaudeRecordType, Exclude<ParsedClaudeRecord['kind'], 'unknown'>>
+
 export type ClaudeRecordParseResult =
   | { success: true, record: ParsedClaudeRecord }
-  | { success: false, error: z.ZodError }
+  | { success: false, error: Schema.SchemaError }
+
+const decodeRecord = Schema.decodeUnknownResult(ClaudeRecordSchema, PRESERVE)
+const decodeRecordEnvelope = Schema.decodeUnknownResult(ClaudeRecordEnvelopeSchema, PRESERVE)
 
 export function parseClaudeRecord(value: unknown): ClaudeRecordParseResult {
-  const envelope = ClaudeRecordEnvelopeSchema.safeParse(value)
-  if (!envelope.success) return { success: false, error: envelope.error }
+  const envelope = decodeRecordEnvelope(value)
+  if (!Result.isSuccess(envelope)) return { success: false, error: envelope.failure }
 
-  const known = <Kind extends ParsedClaudeRecord['kind'], Schema extends z.ZodType>(
-    kind: Kind,
-    schema: Schema,
-  ): ClaudeRecordParseResult => {
-    const parsed = schema.safeParse(value)
-    if (!parsed.success) return { success: false, error: parsed.error }
-    return { success: true, record: { kind, data: parsed.data } as ParsedClaudeRecord }
+  // An unrecognised `type` is expected — Claude Code adds record kinds over
+  // time, and those are surfaced as `unknown` rather than treated as errors.
+  const { type } = envelope.success
+  if (!Object.hasOwn(KIND_BY_TYPE, type)) {
+    return { success: true, record: { kind: 'unknown', data: envelope.success } }
   }
 
-  switch (envelope.data.type) {
-    case 'assistant': return known('assistant', ClaudeAssistantRecordSchema)
-    case 'user': return known('user', ClaudeUserRecordSchema)
-    case 'system': return known('system', ClaudeSystemRecordSchema)
-    case 'attachment': return known('attachment', ClaudeAttachmentRecordSchema)
-    case 'started': return known('workflow_started', ClaudeWorkflowStartedRecordSchema)
-    case 'result': return known('workflow_result', ClaudeWorkflowResultRecordSchema)
-    case 'last-prompt':
-    case 'mode':
-    case 'permission-mode':
-    case 'ai-title':
-    case 'custom-title':
-    case 'agent-name':
-    case 'bridge-session':
-    case 'queue-operation':
-    case 'file-history-snapshot':
-    case 'file-history-delta':
-    case 'pr-link':
-    case 'frame-link':
-      return known('session_state', ClaudeSessionStateRecordSchema)
-    default:
-      return { success: true, record: { kind: 'unknown', data: envelope.data } }
+  // A known `type` that fails to decode is a real defect, not a new field.
+  const record = decodeRecord(value)
+  if (!Result.isSuccess(record)) return { success: false, error: record.failure }
+  return {
+    success: true,
+    record: { kind: KIND_BY_TYPE[record.success.type], data: record.success } as ParsedClaudeRecord,
   }
 }
 
-export const ClaudeSubagentMetaSchema = looseObject({
-  agentType: z.string(),
-  description: z.string().optional(),
-  spawnDepth: z.number().int().nonnegative().optional(),
-  toolUseId: z.string().optional(),
-  parentAgentId: z.string().optional(),
-  model: z.string().optional(),
-  name: z.string().optional(),
-  stoppedByUser: z.boolean().optional(),
+// -- Subagent metadata ------------------------------------------------------
+
+export const ClaudeSubagentMetaSchema = Schema.Struct({
+  agentType: Schema.String,
+  description: Schema.optionalKey(Schema.String),
+  spawnDepth: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  toolUseId: Schema.optionalKey(Schema.String),
+  parentAgentId: Schema.optionalKey(Schema.String),
+  model: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  stoppedByUser: Schema.optionalKey(Schema.Boolean),
 })
 
-export type ClaudeSubagentMeta = z.infer<typeof ClaudeSubagentMetaSchema>
+export type ClaudeSubagentMeta = typeof ClaudeSubagentMetaSchema.Type
+
+const decodeSubagentMeta = Schema.decodeUnknownResult(ClaudeSubagentMetaSchema, PRESERVE)
 
 export function parseClaudeSubagentMeta(value: unknown): ClaudeSubagentMeta | null {
-  const parsed = ClaudeSubagentMetaSchema.safeParse(value)
-  return parsed.success ? parsed.data : null
+  const meta = decodeSubagentMeta(value)
+  return Result.isSuccess(meta) ? meta.success : null
 }

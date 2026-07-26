@@ -1,10 +1,12 @@
-import { readFile, readdir, stat } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
+import { Clock, Effect } from 'effect'
+import * as FileSystem from 'effect/FileSystem'
 import {
   parseClaudeRecord,
   parseClaudeSubagentMeta,
   type ClaudeSubagentMeta,
 } from '#shared/schemas/claude'
+import { InvalidRunKey, PromptCache, ScanCache } from './services'
 import type {
   AgentDiagnosticSummary,
   DiagnosticIncident,
@@ -16,7 +18,7 @@ import type {
   TimelineLane,
   Usage,
 } from '#shared/types/run'
-import { getScan, plainText, SCANS } from './transcript'
+import { plainText } from './transcript'
 
 interface CollectedItem {
   key: string
@@ -27,111 +29,123 @@ interface CollectedItem {
   meta: ClaudeSubagentMeta | null
 }
 
-const promptCache = new Map<string, string>()
-
-async function readSubagentMeta(path: string): Promise<ClaudeSubagentMeta | null> {
-  try {
-    const value: unknown = JSON.parse(await readFile(path, 'utf8'))
-    return parseClaudeSubagentMeta(value)
-  } catch {
-    return null
-  }
-}
-
-export async function firstPrompt(path: string): Promise<string> {
-  const cached = promptCache.get(path)
-  if (cached !== undefined) return cached
-
-  let text = ''
-  try {
-    const lines = (await readFile(path, 'utf8')).split('\n').slice(0, 61)
-    for (const line of lines) {
-      let value: unknown
+/**
+ * Subagent metadata is written separately from the transcript and may not exist
+ * yet, so a missing or unreadable file yields `null` rather than failing.
+ */
+const readSubagentMeta = Effect.fn('readSubagentMeta')(function*(path: string) {
+  const fs = yield* FileSystem.FileSystem
+  return yield* fs.readFileString(path).pipe(
+    Effect.map((raw): ClaudeSubagentMeta | null => {
       try {
-        value = JSON.parse(line)
+        return parseClaudeSubagentMeta(JSON.parse(raw) as unknown)
       } catch {
-        continue
+        return null
       }
-      const parsed = parseClaudeRecord(value)
-      if (!parsed.success || parsed.record.kind !== 'user') continue
-      const candidate = plainText(parsed.record.data.message.content)
-        .replace(/<command-(?:name|message|args)>/g, ' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-      if (candidate && !candidate.startsWith('Caveat:')) {
-        text = candidate.slice(0, 100)
-        break
-      }
-    }
-  } catch {
-    // Missing or changing transcripts are ignored until the next tree poll.
-  }
-  promptCache.set(path, text)
-  return text
-}
+    }),
+    Effect.catchTag('PlatformError', () => Effect.succeed(null)),
+  )
+})
 
-export async function collect(projectDirectory: string, maxAgeHours: number): Promise<CollectedItem[]> {
+const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
+  const fs = yield* FileSystem.FileSystem
+  const raw = yield* fs.readFileString(path).pipe(
+    Effect.catchTag('PlatformError', () => Effect.succeed('')),
+  )
+
+  for (const line of raw.split('\n').slice(0, 61)) {
+    let value: unknown
+    try {
+      value = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const parsed = parseClaudeRecord(value)
+    if (!parsed.success || parsed.record.kind !== 'user') continue
+    const candidate = plainText(parsed.record.data.message.content)
+      .replace(/<command-(?:name|message|args)>/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (candidate && !candidate.startsWith('Caveat:')) return candidate.slice(0, 100)
+  }
+  return ''
+})
+
+export const firstPrompt = Effect.fn('firstPrompt')(function*(path: string) {
+  const cache = yield* PromptCache
+  return yield* cache.get(path, readFirstPrompt(path))
+})
+
+export const collect = Effect.fn('collect')(function*(
+  projectDirectory: string,
+  maxAgeHours: number,
+) {
   if (maxAgeHours <= 0) return []
-  const cutoff = Date.now() - maxAgeHours * 3_600_000
-  const entries = await readdir(projectDirectory, { withFileTypes: true })
+  const fs = yield* FileSystem.FileSystem
+  const now = yield* Clock.currentTimeMillis
+  const cutoff = now - maxAgeHours * 3_600_000
+  const names = (yield* fs.readDirectory(projectDirectory)).sort((a, b) => a.localeCompare(b))
   const items: CollectedItem[] = []
 
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-    const path = join(projectDirectory, entry.name)
-    if ((await stat(path)).mtimeMs < cutoff) continue
-    const sid = entry.name.slice(0, -'.jsonl'.length)
+  const freshFile = Effect.fn('freshFile')(function*(path: string) {
+    const info = yield* fs.stat(path)
+    if (info.type !== 'File') return false
+    return info.mtime._tag === 'Some' ? info.mtime.value.getTime() >= cutoff : true
+  })
+
+  for (const name of names) {
+    if (!name.endsWith('.jsonl')) continue
+    const path = join(projectDirectory, name)
+    if (!(yield* freshFile(path))) continue
+    const sid = name.slice(0, -'.jsonl'.length)
     items.push({
       key: sid,
       path,
       kind: 'session',
       sid,
       meta: null,
-      label: (await firstPrompt(path)) || sid.slice(0, 8),
+      label: (yield* firstPrompt(path)) || sid.slice(0, 8),
     })
   }
 
-  for (const sessionEntry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!sessionEntry.isDirectory()) continue
-    const subagentsDirectory = join(projectDirectory, sessionEntry.name, 'subagents')
-    let subagentEntries
-    try {
-      subagentEntries = await readdir(subagentsDirectory, { withFileTypes: true })
-    } catch {
-      continue
-    }
-    for (const entry of subagentEntries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      const path = join(subagentsDirectory, entry.name)
-      if ((await stat(path)).mtimeMs < cutoff) continue
-      const agent = entry.name.slice(0, -'.jsonl'.length)
-      const meta = await readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`))
+  for (const sessionName of names) {
+    const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
+    const subagentNames = yield* fs.readDirectory(subagentsDirectory).pipe(
+      Effect.catchTag('PlatformError', () => Effect.succeed([] as Array<string>)),
+    )
+    for (const name of subagentNames.sort((a, b) => a.localeCompare(b))) {
+      if (!name.endsWith('.jsonl')) continue
+      const path = join(subagentsDirectory, name)
+      if (!(yield* freshFile(path))) continue
+      const agent = name.slice(0, -'.jsonl'.length)
+      const meta = yield* readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`))
       items.push({
-        key: `${sessionEntry.name}/${agent}`,
+        key: `${sessionName}/${agent}`,
         path,
         kind: 'subagent',
-        sid: sessionEntry.name,
+        sid: sessionName,
         meta,
         label: meta?.description || agent,
       })
     }
   }
   return items
-}
+})
 
-export async function buildTree(
+export const buildTree = Effect.fn('buildTree')(function*(
   projectDirectory: string,
   hours: number,
-): Promise<{ roots: RunNode[], byKey: Map<string, RunNode>, cwd: string }> {
-  const items = await collect(projectDirectory, hours)
-  const scans = await Promise.all(items.map(item => getScan(item.path)))
+) {
+  const cache = yield* ScanCache
+  const items = yield* collect(projectDirectory, hours)
+  const scans = yield* Effect.forEach(items, item => cache.get(item.path))
+  const stats = yield* Effect.forEach(scans, scan => scan.stats)
   const byKey = new Map<string, RunNode>()
 
   for (const [index, item] of items.entries()) {
-    const scan = scans[index]!
     const node: RunNode = {
-      ...scan.stats(),
+      ...stats[index]!,
       key: item.key,
       kind: item.kind,
       sid: item.sid,
@@ -159,9 +173,8 @@ export async function buildTree(
 
   const owner = new Map<string, string>()
   const spawnState = new Map<string, RunNode['spawnState']>()
-  for (const item of items) {
-    const scan = SCANS.get(item.path)
-    if (!scan) continue
+  for (const [index, item] of items.entries()) {
+    const scan = scans[index]!
     for (const id of scan.spawnIds) {
       owner.set(id, item.key)
       spawnState.set(id, scan.openTools.has(id) ? 'running' : 'returned')
@@ -181,7 +194,7 @@ export async function buildTree(
   for (const root of roots) rollup(root)
   roots.sort((a, b) => (b.subLast || '').localeCompare(a.subLast || ''))
   return { roots, byKey, cwd: scans.find(scan => scan.cwd)?.cwd || '' }
-}
+})
 
 export function rollup(node: RunNode): RunNode {
   let agents = 0
@@ -257,10 +270,11 @@ export function runPhases(root: RunNode, limit = 16): Milestone[] {
     .slice(-limit)
 }
 
-export async function runDiagnostics(
+export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
   projectDirectory: string,
   root: RunNode,
-): Promise<RunDiagnostics> {
+) {
+  const cache = yield* ScanCache
   const nodes: RunNode[] = []
   const gather = (node: RunNode): void => {
     nodes.push(node)
@@ -268,7 +282,8 @@ export async function runDiagnostics(
   }
   gather(root)
 
-  const scans = await Promise.all(nodes.map(node => getScan(pathFor(projectDirectory, node.key))))
+  const scans = yield* Effect.forEach(nodes, node =>
+    Effect.flatMap(pathFor(projectDirectory, node.key), path => cache.get(path)))
   const childByToolId = new Map<string, RunNode>()
   for (const node of nodes) {
     if (node.toolUseId) childByToolId.set(node.toolUseId, node)
@@ -366,27 +381,34 @@ export async function runDiagnostics(
     environment,
     causal,
     usage,
-  }
-}
+  } satisfies RunDiagnostics
+})
 
 export function stripNode(node: RunNode): PublicRunNode {
   const { children: _children, subFiles: _subFiles, ...publicNode } = node
   return publicNode
 }
 
-export function pathFor(projectDirectory: string, key: string): string {
+/**
+ * Map a run key to its transcript path.
+ *
+ * A run key arrives straight from a query parameter, so this is the boundary
+ * that keeps a request inside the project directory. The final `resolve` check
+ * is the backstop: whatever the segment rules let through, the result must
+ * still live under the project root.
+ */
+export function pathFor(
+  projectDirectory: string,
+  key: string,
+): Effect.Effect<string, InvalidRunKey> {
   const parts = key.split('/')
   if (parts.length > 2 || parts.some(part => !part || part === '..' || part.includes(sep))) {
-    throw new Error('Invalid run key')
+    return Effect.fail(new InvalidRunKey({ key }))
   }
   const path = parts.length === 2
     ? join(projectDirectory, parts[0]!, 'subagents', `${parts[1]}.jsonl`)
     : join(projectDirectory, `${parts[0]}.jsonl`)
   const root = `${resolve(projectDirectory)}${sep}`
-  if (!resolve(path).startsWith(root)) throw new Error('Invalid run key')
-  return path
-}
-
-export function resetRunCaches(): void {
-  promptCache.clear()
+  if (!resolve(path).startsWith(root)) return Effect.fail(new InvalidRunKey({ key }))
+  return Effect.succeed(path)
 }

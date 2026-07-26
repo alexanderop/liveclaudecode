@@ -1,4 +1,6 @@
-import { readFile, stat } from 'node:fs/promises'
+import { Clock, Effect, Option, Predicate } from 'effect'
+import * as FileSystem from 'effect/FileSystem'
+import type * as PlatformError from 'effect/PlatformError'
 import {
   parseClaudeAssistantBlock,
   parseClaudeRecord,
@@ -83,9 +85,11 @@ const PHASE_PATTERNS = [
 const FAIL_RE = /\b(\d+ failed|FAIL\b|failing|error TS\d+|Error:|✗|✘|command not found|exit code [1-9]|Test Files\s+\d+ failed)/i
 const PASS_RE = /\b(passed|✓|PASS\b|0 problems|no issues|success)/i
 
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+/**
+ * `Predicate.isObject` excludes arrays and null, matching what this module
+ * needs from a "plain JSON object" check.
+ */
+const isRecord = (value: unknown): value is JsonRecord => Predicate.isObject(value)
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -256,32 +260,53 @@ export class TranscriptScan {
     this.path = path.toString()
   }
 
-  async refresh(): Promise<this> {
-    let raw: Buffer
-    try {
-      const [contents, info] = await Promise.all([readFile(this.path), stat(this.path)])
-      raw = contents
-      this.mtime = info.mtimeMs / 1_000
-      this.size = info.size
-    } catch (error) {
-      if (isRecord(error) && error.code === 'ENOENT') return this
-      throw error
-    }
+  /**
+   * Re-read the transcript from the last line consumed.
+   *
+   * A missing transcript is not an error — the tree is polled while Claude Code
+   * is still creating files. Any other filesystem failure propagates.
+   */
+  get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
+    const self = this
+    return Effect.gen(function*() {
+      const fs = yield* FileSystem.FileSystem
 
-    const completeLines = raw.toString('utf8').split('\n').slice(0, -1)
-    for (let index = this.line; index < completeLines.length; index += 1) {
-      const line = completeLines[index]
-      if (!line?.trim()) continue
-      try {
-        const value: unknown = JSON.parse(line)
+      const contents = yield* Effect.all([
+        fs.readFileString(self.path),
+        fs.stat(self.path),
+      ]).pipe(
+        Effect.map(Option.some),
+        Effect.catchIf(
+          error => error.reason._tag === 'NotFound',
+          () => Effect.succeed(Option.none<[string, FileSystem.File.Info]>()),
+        ),
+      )
+      if (Option.isNone(contents)) return self
+
+      const [raw, info] = contents.value
+      self.mtime = Option.match(info.mtime, {
+        onNone: () => self.mtime,
+        onSome: date => date.getTime() / 1_000,
+      })
+      self.size = Number(info.size)
+
+      const completeLines = raw.split('\n').slice(0, -1)
+      for (let index = self.line; index < completeLines.length; index += 1) {
+        const line = completeLines[index]
+        if (!line?.trim()) continue
+        // Claude Code can leave a half-written line while appending; skip it.
+        let value: unknown
+        try {
+          value = JSON.parse(line)
+        } catch {
+          continue
+        }
         const parsed = parseClaudeRecord(value)
-        if (parsed.success) this.ingest(parsed.record, index)
-      } catch {
-        // Claude Code can leave malformed data while appending; skip that line.
+        if (parsed.success) self.ingest(parsed.record, index)
       }
-    }
-    this.line = completeLines.length
-    return this
+      self.line = completeLines.length
+      return self
+    })
   }
 
   private ingest(record: ParsedClaudeRecord, line: number): void {
@@ -818,7 +843,17 @@ export class TranscriptScan {
     }
   }
 
-  stats(now = Date.now() / 1_000): TranscriptStats {
+  /**
+   * Current time comes from the Clock, so `live` and `ago` are testable via
+   * `TestClock` instead of depending on wall-clock time.
+   */
+  get stats(): Effect.Effect<TranscriptStats> {
+    return Clock.currentTimeMillis.pipe(
+      Effect.map(millis => this.statsAt(millis / 1_000)),
+    )
+  }
+
+  statsAt(now: number): TranscriptStats {
     const files: FileChange[] = Array.from(this.files, ([path, value]) => ({ path, ...value }))
       .sort((a, b) => b.ops - a.ops)
 
@@ -848,17 +883,6 @@ export class TranscriptScan {
   }
 }
 
-export const SCANS = new Map<string, TranscriptScan>()
-
-export async function getScan(path: string): Promise<TranscriptScan> {
-  let scan = SCANS.get(path)
-  if (!scan) {
-    scan = new TranscriptScan(path)
-    SCANS.set(path, scan)
-  }
-  return scan.refresh()
-}
-
-export function resetScanCache(): void {
-  SCANS.clear()
-}
+// Scans are cached by the `ScanCache` service in ./services, not by a
+// module-level map — providing that layer per test replaces the old
+// `resetScanCache()` hook.

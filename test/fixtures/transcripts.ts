@@ -67,6 +67,18 @@ export function tool(name: string, id: string, input: RecordValue = {}): RecordV
   return { type: 'tool_use', id, name, input }
 }
 
+/**
+ * Serialise records as JSONL without touching the disk, for use with the
+ * in-memory FileSystem layer.
+ */
+export function transcript(
+  records: RecordValue[],
+  options: { trailingPartial?: boolean } = {},
+): string {
+  return records.map(value => `${JSON.stringify(value)}\n`).join('')
+    + (options.trailingPartial ? '{"type":"assistant","message":{"conte' : '')
+}
+
 export function writeTranscript(
   path: string,
   records: RecordValue[],

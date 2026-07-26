@@ -1,3 +1,6 @@
 allowBuilds:
   esbuild: true
+  # Native accelerator for msgpackr, pulled in by effect. We do not use
+  # effect's Msgpack module; msgpackr falls back to its pure-JS path.
+  msgpackr-extract: false
   vue-demi: true

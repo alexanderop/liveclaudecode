@@ -1,70 +1,98 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { assert, describe, it } from '@effect/vitest'
+import { Effect, Layer } from 'effect'
 import {
   listProjectDirectories,
   projectDirectoryFor,
   resolveProjectDirectories,
   resolveProjectDirectory,
 } from '#server/utils/project'
+import { ProjectsDirectory, WorkingDirectory } from '#server/utils/services'
+import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
+
+const PROJECTS = '/home/me/.claude/projects'
+const CWD = '/home/me/work'
+
+/**
+ * `ProjectsDirectory` and `WorkingDirectory` are references, so tests override
+ * them by providing a layer instead of threading them through every call as
+ * positional parameters.
+ */
+const withTree = (tree: FakeTree, options: { denied?: ReadonlyArray<string> } = {}) =>
+  Layer.mergeAll(
+    Layer.succeed(ProjectsDirectory)(PROJECTS),
+    Layer.succeed(WorkingDirectory)(CWD),
+    testFileSystem(tree, options),
+  )
 
 describe('project resolution', () => {
-  let directory: string
-  let projects: string
-
-  beforeEach(async () => {
-    directory = await mkdtemp(join(tmpdir(), 'liveclaudecode-project-'))
-    projects = join(directory, 'projects')
-    await mkdir(projects)
-  })
-
-  afterEach(async () => {
-    await rm(directory, { recursive: true, force: true })
-  })
-
   it('uses Claude Code slugification for a repository path', () => {
-    expect(projectDirectoryFor('/Users/me/code/app', projects)).toBe(join(projects, '-Users-me-code-app'))
+    assert.strictEqual(
+      projectDirectoryFor('/Users/me/code/app', PROJECTS),
+      `${PROJECTS}/-Users-me-code-app`,
+    )
   })
 
-  it('accepts a transcript directory directly', async () => {
-    const transcripts = join(directory, 'transcripts')
-    await mkdir(transcripts)
-    await writeFile(join(transcripts, 'run.jsonl'), '{}\n')
-    expect(await resolveProjectDirectory(transcripts, directory, projects)).toBe(transcripts)
-  })
+  it.effect('accepts a transcript directory directly', () =>
+    resolveProjectDirectory('/home/me/transcripts').pipe(
+      Effect.map(result => assert.strictEqual(result, '/home/me/transcripts')),
+      Effect.provide(withTree({ '/home/me/transcripts/run.jsonl': '{}\n' })),
+    ))
 
-  it('resolves a repository path through its transcript slug', async () => {
-    const repository = join(directory, 'repo')
-    await mkdir(repository)
-    const transcriptDirectory = projectDirectoryFor(repository, projects)
-    await mkdir(transcriptDirectory)
-    expect(await resolveProjectDirectory(repository, directory, projects)).toBe(transcriptDirectory)
-  })
+  it.effect('resolves a repository path through its transcript slug', () =>
+    Effect.gen(function*() {
+      const slug = projectDirectoryFor('/home/me/repo', PROJECTS)
+      const result = yield* resolveProjectDirectory('/home/me/repo')
+      assert.strictEqual(result, slug)
+    }).pipe(Effect.provide(withTree({
+      '/home/me/repo/README.md': '#',
+      [`${projectDirectoryFor('/home/me/repo', PROJECTS)}/run.jsonl`]: '{}\n',
+    }))))
 
-  it('resolves a slug under the projects directory', async () => {
-    const transcriptDirectory = join(projects, 'my-project')
-    await mkdir(transcriptDirectory)
-    expect(await resolveProjectDirectory('my-project', directory, projects)).toBe(transcriptDirectory)
-  })
+  it.effect('resolves a slug under the projects directory', () =>
+    resolveProjectDirectory('my-project').pipe(
+      Effect.map(result => assert.strictEqual(result, `${PROJECTS}/my-project`)),
+      Effect.provide(withTree({ [`${PROJECTS}/my-project/run.jsonl`]: '{}\n' })),
+    ))
 
-  it('discovers every project directory containing a JSONL transcript', async () => {
-    const first = join(projects, 'first')
-    const second = join(projects, 'second')
-    const empty = join(projects, 'empty')
-    await Promise.all([mkdir(first), mkdir(second), mkdir(empty)])
-    await Promise.all([
-      writeFile(join(first, 'one.jsonl'), '{}\n'),
-      writeFile(join(second, 'two.jsonl'), '{}\n'),
-    ])
+  it.effect('discovers every project directory containing a JSONL transcript', () =>
+    Effect.gen(function*() {
+      const expected = [
+        { id: 'first', directory: `${PROJECTS}/first` },
+        { id: 'second', directory: `${PROJECTS}/second` },
+      ]
+      assert.deepStrictEqual(yield* listProjectDirectories(), expected)
+      assert.deepStrictEqual(yield* resolveProjectDirectories(''), expected)
+    }).pipe(Effect.provide(withTree({
+      [`${PROJECTS}/first/one.jsonl`]: '{}\n',
+      [`${PROJECTS}/second/two.jsonl`]: '{}\n',
+      [`${PROJECTS}/empty/notes.md`]: '#',
+    }))))
 
-    expect(await listProjectDirectories(projects)).toEqual([
-      { id: 'first', directory: first },
-      { id: 'second', directory: second },
-    ])
-    expect(await resolveProjectDirectories('', directory, projects)).toEqual([
-      { id: 'first', directory: first },
-      { id: 'second', directory: second },
-    ])
-  })
+  it.effect('reports an unknown project as a typed failure', () =>
+    Effect.gen(function*() {
+      const error = yield* Effect.flip(resolveProjectDirectory('nope'))
+      assert.strictEqual(error._tag, 'UnknownProject')
+    }).pipe(Effect.provide(withTree({ [`${PROJECTS}/first/one.jsonl`]: '{}\n' }))))
+
+  it.effect('fails when the projects directory does not exist', () =>
+    Effect.gen(function*() {
+      const error = yield* Effect.flip(listProjectDirectories())
+      assert.strictEqual(error._tag, 'NoTranscriptsFound')
+    }).pipe(Effect.provide(withTree({}))))
+
+  /**
+   * The previous implementation collapsed every `stat` failure into `false`, so
+   * a permissions problem was indistinguishable from "not a directory" and no
+   * test could reach the branch. Now it propagates.
+   */
+  it.effect('surfaces a permission error instead of reporting no transcripts', () =>
+    Effect.gen(function*() {
+      const error = yield* Effect.flip(listProjectDirectories())
+      assert.strictEqual(error._tag, 'PlatformError')
+      if (error._tag !== 'PlatformError') return
+      assert.strictEqual(error.reason._tag, 'PermissionDenied')
+    }).pipe(Effect.provide(withTree(
+      { [`${PROJECTS}/locked/one.jsonl`]: '{}\n' },
+      { denied: [`${PROJECTS}/locked`] },
+    ))))
 })
