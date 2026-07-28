@@ -93,6 +93,7 @@ function turnWidth(turn: TurnTiming): string {
               class="incident-row"
               :class="[incident.severity, { selected: incident.key === selectedKey }]"
               :disabled="!incident.key"
+              :aria-current="incident.key && incident.key === selectedKey ? 'true' : undefined"
               @click="incident.key && emit('select', incident.key)"
             >
               <span class="incident-icon"><UIcon :name="incidentIcon(incident)" /></span>
@@ -122,6 +123,7 @@ function turnWidth(turn: TurnTiming): string {
               type="button"
               class="turn-row"
               :class="{ selected: turn.key === selectedKey }"
+              :aria-current="turn.key && turn.key === selectedKey ? 'true' : undefined"
               @click="turn.key && emit('select', turn.key)"
             >
               <span class="turn-copy">
@@ -155,6 +157,7 @@ function turnWidth(turn: TurnTiming): string {
             type="button"
             class="context-row"
             :class="{ selected: agent.key === selectedKey }"
+            :aria-current="agent.key === selectedKey ? 'true' : undefined"
             @click="emit('select', agent.key)"
           >
             <span class="context-agent">

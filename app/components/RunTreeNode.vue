@@ -38,6 +38,7 @@ function handleClick(): void {
       :class="{ selected: selectedKey === node.key }"
       type="button"
       :aria-expanded="hasChildren ? expanded : undefined"
+      :aria-current="selectedKey === node.key ? 'page' : undefined"
       @click="handleClick"
     >
       <span class="tree-status" :class="{ running: node.subLive, error: node.subErrors && !node.subLive }">

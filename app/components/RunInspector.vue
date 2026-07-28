@@ -72,6 +72,7 @@ const selectedOutcome = computed(() =>
             type="button"
             class="agent-row"
             :class="{ selected: lane.key === selectedKey }"
+            :aria-current="lane.key === selectedKey ? 'true' : undefined"
             @click="emit('select', lane.key)"
           >
             <span class="agent-avatar" :class="{ live: lane.live, error: lane.errors }">

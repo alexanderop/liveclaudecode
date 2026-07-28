@@ -94,12 +94,13 @@ onUnmounted(() => window.removeEventListener('keydown', handleShortcut))
             </nav>
 
             <template v-if="activeView === 'activity'">
-              <div class="segments" aria-label="Event detail">
+              <div class="segments" role="group" aria-label="Event detail">
                 <button
                   v-for="option in densities"
                   :key="option"
                   type="button"
                   :class="{ selected: live.density.value === option }"
+                  :aria-pressed="live.density.value === option"
                   @click="live.density.value = option"
                 >{{ option }}</button>
               </div>

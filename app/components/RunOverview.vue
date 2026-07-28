@@ -75,6 +75,7 @@ const currentPhase = computed(() => props.run?.phases.at(-1) || null)
             class="lane"
             :class="{ selected: lane.key === selectedKey }"
             type="button"
+            :aria-current="lane.key === selectedKey ? 'true' : undefined"
             @click="emit('select', lane.key)"
           >
             <span class="lane-identity" :style="{ paddingLeft: `${lane.depth * 18}px` }">

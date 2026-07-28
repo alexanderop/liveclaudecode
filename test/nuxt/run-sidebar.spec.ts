@@ -76,6 +76,11 @@ describe('RunSidebar', () => {
     expect(project.text()).toContain('workoutTracker')
     expect(project.attributes('aria-expanded')).toBe('true')
     expect(component.text()).toContain('Test server for bugs')
+    expect(component.findAll('.primary-nav-item').map(item => item.attributes('aria-pressed'))).toEqual([
+      'true',
+      'false',
+      'false',
+    ])
 
     await component.get('button[aria-label="Hide sidebar"]').trigger('click')
     expect(component.emitted('collapse')).toEqual([[]])
@@ -92,6 +97,9 @@ describe('RunSidebar', () => {
     expect(component.find('.project-row').exists()).toBe(false)
     expect(component.text()).toContain('Recent sessions')
     expect(component.text()).toContain('Test server for bugs')
+
+    await component.findAll('.primary-nav-item')[1]!.trigger('click')
+    expect(component.emitted('update:liveOnly')).toContainEqual([true])
   })
 
   it('renders every discovered project and selects a run with its project id', async () => {

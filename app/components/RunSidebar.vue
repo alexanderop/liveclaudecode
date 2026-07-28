@@ -101,17 +101,35 @@ function organizeBy(value: 'project' | 'list'): void {
     </header>
 
     <nav class="primary-nav" aria-label="Workspace">
-      <button type="button" class="primary-nav-item" :class="{ selected: !liveOnly && !attentionOnly }" @click="showAllSessions">
+      <button
+        type="button"
+        class="primary-nav-item"
+        :class="{ selected: !liveOnly && !attentionOnly }"
+        :aria-pressed="!liveOnly && !attentionOnly"
+        @click="showAllSessions"
+      >
         <UIcon name="i-lucide-panels-top-left" />
         <span>Sessions</span>
         <kbd>G S</kbd>
       </button>
-      <button type="button" class="primary-nav-item" :class="{ selected: liveOnly }" @click="showRunning">
+      <button
+        type="button"
+        class="primary-nav-item"
+        :class="{ selected: liveOnly }"
+        :aria-pressed="liveOnly"
+        @click="showRunning"
+      >
         <UIcon name="i-lucide-radio" />
         <span>Running</span>
         <span class="nav-count">{{ liveCount }}</span>
       </button>
-      <button type="button" class="primary-nav-item" :class="{ selected: attentionOnly }" @click="showAttention">
+      <button
+        type="button"
+        class="primary-nav-item"
+        :class="{ selected: attentionOnly }"
+        :aria-pressed="attentionOnly"
+        @click="showAttention"
+      >
         <UIcon name="i-lucide-circle-alert" />
         <span>Needs attention</span>
         <span class="nav-count" :class="{ warning: attentionCount }">{{ attentionCount }}</span>

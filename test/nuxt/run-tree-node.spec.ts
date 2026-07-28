@@ -58,6 +58,7 @@ describe('RunTreeNode', () => {
     expect(component.text()).toContain('Claude')
     expect(component.text()).toContain('2 tools')
     expect(component.get('button').classes()).toContain('selected')
+    expect(component.get('button').attributes('aria-current')).toBe('page')
     await component.get('button').trigger('click')
     expect(component.emitted('select')).toEqual([['session']])
   })

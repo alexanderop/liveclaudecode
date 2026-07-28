@@ -66,5 +66,10 @@ describe('RunDiagnostics', () => {
 
     await component.get('.incident-row').trigger('click')
     expect(component.emitted('select')).toContainEqual(['session/worker'])
+
+    await component.setProps({ selectedKey: 'session/worker' })
+    expect(component.get('.incident-row').attributes('aria-current')).toBe('true')
+    expect(component.get('.turn-row').attributes('aria-current')).toBe('true')
+    expect(component.get('.context-row').attributes('aria-current')).toBe('true')
   })
 })
