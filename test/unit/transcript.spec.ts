@@ -213,9 +213,16 @@ describe('TranscriptScan', () => {
             preTokens: 100_000,
             postTokens: 20_000,
             cumulativeDroppedTokens: 80_000,
-            preservedMessages: 6,
+            preservedMessages: {
+              anchorUuid: 'message-1',
+              uuids: ['message-1', 'message-2', 'message-3'],
+              allUuids: ['message-1', 'message-2', 'message-3', 'dropped-1'],
+            },
             trigger: 'manual',
           },
+        }),
+        fixture.system('compact_boundary', {
+          compactMetadata: { preservedMessages: 6, trigger: 'legacy' },
         }),
       ])
 
@@ -226,6 +233,28 @@ describe('TranscriptScan', () => {
       assert.strictEqual(diagnostics.turns[0]?.pendingAgents, 1)
       assert.deepStrictEqual(diagnostics.context[0]?.usage, { in: 10, out: 5, cr: 100, cw: 20 })
       assert.strictEqual(diagnostics.compactions[0]?.trigger, 'manual')
+      assert.deepStrictEqual(
+        diagnostics.compactions.map(compaction => compaction.preservedMessages),
+        [3, 6],
+      )
+    }))
+
+  it.effect('counts array-shaped stop-hook errors', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.system('stop_hook_summary', {
+          hookErrors: [{ hookName: 'lint' }, { hookName: 'format' }],
+          preventedContinuation: true,
+          toolUseID: 'tool-1',
+        }),
+      ])
+
+      const incident = result.diagnostics().incidents[0]
+      assert.strictEqual(incident?.severity, 'error')
+      assert.strictEqual(incident?.category, 'hook')
+      assert.strictEqual(incident?.title, 'Stop hook prevented continuation')
+      assert.strictEqual(incident?.detail, '2 hook errors')
+      assert.strictEqual(incident?.toolUseId, 'tool-1')
     }))
 
   it.effect('captures explicit tool metadata, patches, git operations, and agent receipts', () =>

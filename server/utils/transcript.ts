@@ -363,18 +363,20 @@ export class TranscriptScan {
 
     if (record.subtype === 'compact_boundary' && Predicate.isObject(record.compactMetadata)) {
       const metadata = record.compactMetadata
+      const preservedMessages = metadata.preservedMessages
       this.compactions.push({
         ts: timestamp,
         durationMs: asNumber(metadata.durationMs),
         preTokens: asNumber(metadata.preTokens),
         postTokens: asNumber(metadata.postTokens),
         droppedTokens: asNumber(metadata.cumulativeDroppedTokens),
-        preservedMessages: asNumber(metadata.preservedMessages),
+        preservedMessages: typeof preservedMessages === 'number'
+          ? preservedMessages
+          : preservedMessages?.uuids?.length ?? preservedMessages?.allUuids?.length ?? 0,
         trigger: asString(metadata.trigger),
       })
     }
 
-    const raw = record as JsonRecord
     if (record.subtype === 'agents_killed') {
       this.addIncident({
         severity: 'warning',
@@ -385,16 +387,19 @@ export class TranscriptScan {
         line,
       })
     }
+    const hookErrors = Array.isArray(record.hookErrors)
+      ? record.hookErrors.length
+      : asNumber(record.hookErrors)
     if (record.subtype === 'stop_hook_summary'
-      && (asNumber(raw.hookErrors) > 0 || raw.preventedContinuation === true)) {
+      && (hookErrors > 0 || record.preventedContinuation === true)) {
       this.addIncident({
-        severity: raw.preventedContinuation === true ? 'error' : 'warning',
+        severity: record.preventedContinuation === true ? 'error' : 'warning',
         category: 'hook',
-        title: raw.preventedContinuation === true ? 'Stop hook prevented continuation' : 'Stop hook reported errors',
-        detail: `${asNumber(raw.hookErrors)} hook errors`,
+        title: record.preventedContinuation === true ? 'Stop hook prevented continuation' : 'Stop hook reported errors',
+        detail: `${hookErrors} hook errors`,
         ts: timestamp,
         line,
-        toolUseId: asString(raw.toolUseID) || undefined,
+        toolUseId: record.toolUseID || undefined,
       })
     }
 

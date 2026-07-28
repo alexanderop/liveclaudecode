@@ -157,10 +157,9 @@ export const ClaudeUserMessageSchema = Schema.Struct({
 /**
  * The set of messages kept across a compaction.
  *
- * Verified against 80k real transcript records: this is always an object, never
- * a count. The reader currently pushes it through a number coercion, so
- * `CompactionEvent.preservedMessages` is always 0 — see `uuids` for the real
- * figure.
+ * Verified against real transcript records: this is currently an object, never
+ * a count. The numeric union preserves compatibility with older or future
+ * count-shaped payloads.
  */
 export const ClaudePreservedMessagesSchema = Schema.Struct({
   anchorUuid: Schema.optionalKey(Schema.String),
@@ -177,8 +176,6 @@ export const ClaudeCompactMetadataSchema = Schema.Struct({
   preTokens: Schema.optionalKey(Schema.Finite),
   postTokens: Schema.optionalKey(Schema.Finite),
   cumulativeDroppedTokens: Schema.optionalKey(Schema.Finite),
-  // Unioned with a number so an older or future count-shaped payload still
-  // decodes rather than dropping the whole record.
   preservedMessages: Schema.optionalKey(
     Schema.Union([Schema.Finite, ClaudePreservedMessagesSchema]),
   ),
@@ -231,13 +228,8 @@ export const ClaudeSystemRecordSchema = Schema.Struct({
   pendingBackgroundAgentCount: Schema.optionalKey(Schema.Finite),
   pendingWorkflowCount: Schema.optionalKey(Schema.Finite),
   compactMetadata: Schema.optionalKey(ClaudeCompactMetadataSchema),
-  // `stop_hook_summary` fields. The zod schema relied on passthrough for these
-  // and the reader cast back to a raw record to read them.
-  //
-  // `hookErrors` is a list of errors, not a count — verified against real
-  // transcripts. The reader coerces it with `asNumber`, which yields 0 for an
-  // array, so its "N hook errors" branch never fires. Unioned with a number so
-  // a count-shaped payload would still decode.
+  // `hookErrors` is currently a list, while the numeric union preserves
+  // compatibility with a count-shaped payload.
   hookErrors: Schema.optionalKey(Schema.Union([Schema.Finite, Schema.Array(Schema.Unknown)])),
   preventedContinuation: Schema.optionalKey(Schema.Boolean),
   toolUseID: Schema.optionalKey(Schema.String),
