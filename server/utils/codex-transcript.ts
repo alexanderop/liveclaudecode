@@ -28,7 +28,15 @@ import type {
   TranscriptStats,
   Usage,
 } from '#shared/types/run'
-import { clip, findMilestones, resultText, shortPath, toolSummary } from './transcript'
+import {
+  clip,
+  findMilestones,
+  readCompleteLines,
+  resultText,
+  shortPath,
+  toolSummary,
+  type AppendedLines,
+} from './transcript'
 
 interface CodexToolRecord {
   name: string
@@ -175,6 +183,7 @@ export class CodexTranscriptScan {
   taskActive = false
   private mtime = 0
   private size = 0
+  private bytesConsumed = 0
   private lastLoadedMtime = 0
   private lastLoadedSize = -1
 
@@ -205,11 +214,22 @@ export class CodexTranscriptScan {
       self.size = size
       if (size === self.lastLoadedSize && mtime === self.lastLoadedMtime) return self
 
-      const raw = yield* fs.readFileString(self.path)
-      const completeLines = raw.split('\n').slice(0, -1)
-      for (let index = self.line; index < completeLines.length; index += 1) {
-        const line = completeLines[index]
-        if (!line?.trim()) continue
+      // A shrunken file was rewritten, not appended; the byte offset no longer
+      // points into it, so re-read from the start and skip consumed lines.
+      const fromByte = size < self.bytesConsumed ? 0 : self.bytesConsumed
+      const read = yield* readCompleteLines(self.path, fromByte).pipe(
+        Effect.map(Option.some),
+        Effect.catchIf(
+          error => error.reason._tag === 'NotFound',
+          () => Effect.succeed(Option.none<AppendedLines>()),
+        ),
+      )
+      if (Option.isNone(read)) return self
+
+      const baseLine = fromByte === 0 ? 0 : self.line
+      for (const [offset, line] of read.value.lines.entries()) {
+        const index = baseLine + offset
+        if (index < self.line || !line.trim()) continue
         let value: unknown
         try {
           value = JSON.parse(line) as unknown
@@ -225,7 +245,8 @@ export class CodexTranscriptScan {
         if (parsed.record.kind === 'unknown') self.unknown += 1
         self.ingest(parsed.record, index)
       }
-      self.line = completeLines.length
+      self.line = baseLine + read.value.lines.length
+      self.bytesConsumed = read.value.nextByte
       self.lastLoadedMtime = mtime
       self.lastLoadedSize = size
       return self

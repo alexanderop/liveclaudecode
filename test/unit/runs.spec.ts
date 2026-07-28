@@ -69,6 +69,22 @@ describe('run hierarchy', () => {
       assert.deepStrictEqual(roots[0]?.children.map(child => child.label).sort(), ['slice A', 'slice B'])
     }))
 
+  it.effect('labels a session from the first user prompt', () =>
+    withTree(({ roots }) => {
+      assert.strictEqual(roots[0]?.label, '/ship @plan.md')
+    }))
+
+  it.effect('falls back to the session id when no prompt fits the label scan window', () =>
+    Effect.gen(function*() {
+      const giant = `{"pad":"${'x'.repeat(300_000)}"}\n`
+        + fixture.transcript([fixture.userText('real prompt')])
+      const built = yield* buildTree('/q', 99_999).pipe(Effect.provide(
+        Layer.mergeAll(ScanCache.layer, PromptCache.layer)
+          .pipe(Layer.provideMerge(testFileSystem({ '/q/big-session.jsonl': giant }))),
+      ))
+      assert.strictEqual(built.roots[0]?.label, 'big-sess')
+    }))
+
   it.effect('distinguishes returned and running agents', () =>
     withTree(({ roots }) => {
       const children = roots[0]!.children

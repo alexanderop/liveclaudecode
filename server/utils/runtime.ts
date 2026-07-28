@@ -1,4 +1,4 @@
-import { Effect, type Layer, ManagedRuntime, Result } from 'effect'
+import { Effect, Layer, ManagedRuntime, Result } from 'effect'
 import type * as PlatformError from 'effect/PlatformError'
 import { createError } from 'h3'
 import {
@@ -8,11 +8,14 @@ import {
   type UnknownProject,
   type UnknownRun,
 } from './services'
+import { SessionCatalogCache } from './session-browser'
 
-type AppServices = Layer.Success<typeof AppLayer>
+const ServerLayer = Layer.mergeAll(AppLayer, SessionCatalogCache.layer)
+
+type AppServices = Layer.Success<typeof ServerLayer>
 
 /**
- * One runtime for the whole server process, built from `AppLayer`.
+ * One runtime for the whole server process, built from `ServerLayer`.
  *
  * Nitro route handlers cannot themselves be Effects, so this is the single
  * bridge between the h3 world and the Effect world. Domain code stays in
@@ -21,7 +24,7 @@ type AppServices = Layer.Success<typeof AppLayer>
 let runtime: ManagedRuntime.ManagedRuntime<AppServices, never> | undefined
 
 function getRuntime() {
-  runtime ??= ManagedRuntime.make(AppLayer)
+  runtime ??= ManagedRuntime.make(ServerLayer)
   return runtime
 }
 

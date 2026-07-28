@@ -125,6 +125,62 @@ describe('TranscriptScan', () => {
       assert.strictEqual(result.line, 0)
     }))
 
+  it.effect('does not read at all when size and mtime are unchanged', () =>
+    Effect.gen(function*() {
+      const reads: string[] = []
+      const entry = { content: fixture.transcript([fixture.assistant([fixture.text('one')])]), mtime: 100 }
+      const layer = testFileSystem({ [PATH]: entry }, { onRead: path => reads.push(path) })
+
+      const scan = new TranscriptScan(PATH)
+      yield* scan.refresh.pipe(Effect.provide(layer))
+      assert.strictEqual(reads.length, 1)
+
+      yield* scan.refresh.pipe(Effect.provide(layer))
+      yield* scan.refresh.pipe(Effect.provide(layer))
+      assert.strictEqual(reads.length, 1)
+      assert.strictEqual(scan.events.length, 1)
+    }))
+
+  it.effect('reads only the appended bytes when the transcript grows', () =>
+    Effect.gen(function*() {
+      const one = fixture.transcript([fixture.assistant([fixture.text('one')])])
+      const two = fixture.transcript([fixture.assistant([fixture.text('two')])])
+      const entry = { content: one, mtime: 100 }
+      const layer = testFileSystem({ [PATH]: entry })
+
+      const scan = new TranscriptScan(PATH)
+      yield* scan.refresh.pipe(Effect.provide(layer))
+
+      // Replace the consumed prefix with same-length noise: only the appended
+      // record is parseable, so seeing both events proves the refresh never
+      // went back over the already-consumed bytes.
+      entry.content = 'x'.repeat(one.length) + two
+      entry.mtime = 200
+      yield* scan.refresh.pipe(Effect.provide(layer))
+      assert.deepStrictEqual(scan.events.map(event => event.body), ['one', 'two'])
+      assert.strictEqual(scan.malformed, 0)
+    }))
+
+  it.effect('recovers when the transcript is rewritten shorter', () =>
+    Effect.gen(function*() {
+      const long = fixture.transcript([
+        fixture.assistant([fixture.text('one')]),
+        fixture.assistant([fixture.text('two')]),
+      ])
+      const entry = { content: long, mtime: 100 }
+      const layer = testFileSystem({ [PATH]: entry })
+
+      const scan = new TranscriptScan(PATH)
+      yield* scan.refresh.pipe(Effect.provide(layer))
+      assert.strictEqual(scan.line, 2)
+
+      entry.content = fixture.transcript([fixture.assistant([fixture.text('one')])])
+      entry.mtime = 200
+      yield* scan.refresh.pipe(Effect.provide(layer))
+      assert.strictEqual(scan.line, 1)
+      assert.strictEqual(scan.events.length, 2)
+    }))
+
   it.effect('fails loudly when the transcript cannot be read', () =>
     Effect.gen(function*() {
       const error = yield* new TranscriptScan(PATH).refresh.pipe(

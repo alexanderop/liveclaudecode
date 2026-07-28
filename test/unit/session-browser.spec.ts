@@ -1,6 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 import { Effect, Layer } from 'effect'
-import { loadSessionCatalog } from '#server/utils/session-browser'
+import { loadSessionCatalog, SessionCatalogCache } from '#server/utils/session-browser'
 import {
   CodexScanCache,
   CodexSessionsDirectory,
@@ -23,6 +23,7 @@ const VSCODE = '/Library/Application Support/Code/User'
 
 function layer(tree: FakeTree, denied: ReadonlyArray<string> = []) {
   return Layer.mergeAll(
+    SessionCatalogCache.layer,
     ScanCache.layer,
     CodexScanCache.layer,
     CopilotScanCache.layer,
@@ -79,6 +80,27 @@ describe('unified session catalog', () => {
         })),
       ]),
     }))))
+
+  it.effect('never serves a stale catalog to a later load', () => {
+    const entry = {
+      content: claude.transcript([
+        claude.userText('Claude session', { ts: '2026-07-26T08:00:01.000Z' }),
+      ]),
+      mtime: 100,
+    }
+    return Effect.gen(function*() {
+      const first = yield* loadSessionCatalog('', 999_999)
+      assert.strictEqual(first.projects[0]?.roots[0]?.records, 1)
+
+      entry.content += claude.transcript([
+        claude.assistant([claude.text('Done')], { ts: '2026-07-26T08:00:02.000Z' }),
+      ])
+      entry.mtime = 160
+
+      const rebuilt = yield* loadSessionCatalog('', 999_999)
+      assert.strictEqual(rebuilt.projects[0]?.roots[0]?.records, 2)
+    }).pipe(Effect.provide(layer({ [`${CLAUDE}/repo/claude-1.jsonl`]: entry })))
+  })
 
   it.effect('returns source availability as data when one storage root is missing', () =>
     Effect.gen(function*() {

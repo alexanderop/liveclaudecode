@@ -1,4 +1,4 @@
-import { Clock, Effect, Option, Predicate } from 'effect'
+import { Clock, Effect, Option, Predicate, Stream } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import {
@@ -84,6 +84,51 @@ const PHASE_PATTERNS = [
 
 const FAIL_RE = /\b([1-9]\d* failed|FAIL\b(?!\s+0\b)|failing|error TS\d+|Error:|✗|✘|command not found|exit code [1-9]|Test Files\s+[1-9]\d* failed)/i
 const PASS_RE = /\b(passed|✓|PASS\b|0 problems|no issues|success)/i
+
+const utf8 = new TextDecoder()
+
+function concatChunks(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
+  let total = 0
+  for (const chunk of chunks) total += chunk.length
+  const bytes = new Uint8Array(total)
+  let position = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, position)
+    position += chunk.length
+  }
+  return bytes
+}
+
+export interface AppendedLines {
+  lines: string[]
+  nextByte: number
+}
+
+/**
+ * Read the complete lines that start at byte `fromByte`, leaving a trailing
+ * partial line for a later read. `nextByte` is the offset just past the last
+ * newline consumed, so the next call picks up exactly where this one stopped.
+ */
+export const readCompleteLines = Effect.fn('readCompleteLines')(function*(
+  path: string,
+  fromByte: number,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const bytes = concatChunks(yield* Stream.runCollect(fs.stream(path, { offset: fromByte })))
+  const lastNewline = bytes.lastIndexOf(0x0A)
+  if (lastNewline < 0) return { lines: [], nextByte: fromByte } satisfies AppendedLines
+  return {
+    lines: utf8.decode(bytes.subarray(0, lastNewline)).split('\n'),
+    nextByte: fromByte + lastNewline + 1,
+  } satisfies AppendedLines
+})
+
+/** Read at most the first `maxBytes` of a file as text. */
+export const readHead = Effect.fn('readHead')(function*(path: string, maxBytes: number) {
+  const fs = yield* FileSystem.FileSystem
+  const chunks = yield* Stream.runCollect(fs.stream(path, { bytesToRead: maxBytes }))
+  return utf8.decode(concatChunks(chunks))
+})
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -251,6 +296,9 @@ export class TranscriptScan {
   private turnComplete = false
   private mtime = 0
   private size = 0
+  private bytesConsumed = 0
+  private lastLoadedMtime = 0
+  private lastLoadedSize = -1
 
   constructor(path: string | URL) {
     this.path = path.toString()
@@ -261,35 +309,48 @@ export class TranscriptScan {
    *
    * A missing transcript is not an error — the tree is polled while Claude Code
    * is still creating files. Any other filesystem failure propagates.
+   *
+   * The file is stat'd first so an unchanged transcript costs no read at all,
+   * and an appended one is read only from the last consumed byte onward.
    */
   get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
     const self = this
     return Effect.gen(function*() {
       const fs = yield* FileSystem.FileSystem
 
-      const contents = yield* Effect.all([
-        fs.readFileString(self.path),
-        fs.stat(self.path),
-      ]).pipe(
+      const infoOption = yield* fs.stat(self.path).pipe(
         Effect.map(Option.some),
         Effect.catchIf(
           error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<[string, FileSystem.File.Info]>()),
+          () => Effect.succeed(Option.none<FileSystem.File.Info>()),
         ),
       )
-      if (Option.isNone(contents)) return self
+      if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return self
 
-      const [raw, info] = contents.value
+      const info = infoOption.value
       self.mtime = Option.match(info.mtime, {
         onNone: () => self.mtime,
         onSome: date => date.getTime() / 1_000,
       })
       self.size = Number(info.size)
+      if (self.size === self.lastLoadedSize && self.mtime === self.lastLoadedMtime) return self
 
-      const completeLines = raw.split('\n').slice(0, -1)
-      for (let index = self.line; index < completeLines.length; index += 1) {
-        const line = completeLines[index]
-        if (!line?.trim()) continue
+      // A shrunken file was rewritten, not appended; the byte offset no longer
+      // points into it, so re-read from the start and skip consumed lines.
+      const fromByte = self.size < self.bytesConsumed ? 0 : self.bytesConsumed
+      const read = yield* readCompleteLines(self.path, fromByte).pipe(
+        Effect.map(Option.some),
+        Effect.catchIf(
+          error => error.reason._tag === 'NotFound',
+          () => Effect.succeed(Option.none<AppendedLines>()),
+        ),
+      )
+      if (Option.isNone(read)) return self
+
+      const baseLine = fromByte === 0 ? 0 : self.line
+      for (const [offset, line] of read.value.lines.entries()) {
+        const index = baseLine + offset
+        if (index < self.line || !line.trim()) continue
         // Claude Code can leave a half-written line while appending; skip it.
         let value: unknown
         try {
@@ -302,7 +363,10 @@ export class TranscriptScan {
         if (parsed.success) self.ingest(parsed.record, index)
         else self.malformed += 1
       }
-      self.line = completeLines.length
+      self.line = baseLine + read.value.lines.length
+      self.bytesConsumed = read.value.nextByte
+      self.lastLoadedMtime = self.mtime
+      self.lastLoadedSize = self.size
       return self
     })
   }
