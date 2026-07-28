@@ -37,7 +37,7 @@ const containsTranscript = Effect.fn('containsTranscript')(function*(path: strin
 })
 
 export function projectDirectoryFor(cwd: string, projectsDirectory: string): string {
-  return join(projectsDirectory, cwd.replaceAll('/', '-'))
+  return join(projectsDirectory, cwd.replaceAll(/[^a-zA-Z0-9_-]/g, '-'))
 }
 
 export const newestProjectDirectory = Effect.fn('newestProjectDirectory')(function*() {

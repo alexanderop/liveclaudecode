@@ -30,6 +30,10 @@ describe('project resolution', () => {
       projectDirectoryFor('/Users/me/code/app', PROJECTS),
       `${PROJECTS}/-Users-me-code-app`,
     )
+    assert.strictEqual(
+      projectDirectoryFor('/private/tmp/live.probe with spaces', PROJECTS),
+      `${PROJECTS}/-private-tmp-live-probe-with-spaces`,
+    )
   })
 
   it.effect('accepts a transcript directory directly', () =>
