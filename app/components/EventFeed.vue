@@ -21,6 +21,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{ select: [key: string] }>()
 const feed = useTemplateRef('feed')
+const pinnedToBottom = ref(true)
+const BOTTOM_THRESHOLD = 32
 
 const visibleEvents = computed(() => props.events.filter((event) => {
   if (props.errorsOnly) return Boolean(event.error)
@@ -130,7 +132,9 @@ function resultSummary(event: TranscriptEvent): string {
 async function scrollToBottom(): Promise<void> {
   await nextTick()
   const stick = (): void => {
-    if (props.followOutput && feed.value) feed.value.scrollTop = feed.value.scrollHeight
+    if (props.followOutput && pinnedToBottom.value && feed.value) {
+      feed.value.scrollTop = feed.value.scrollHeight
+    }
   }
   stick()
   if (typeof requestAnimationFrame !== 'undefined') {
@@ -138,24 +142,33 @@ async function scrollToBottom(): Promise<void> {
   }
 }
 
+function updatePinnedState(): void {
+  const element = feed.value
+  if (!element) return
+  pinnedToBottom.value = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD
+}
+
 watch(
   () => visibleEvents.value.length,
   () => {
-    if (props.followOutput) void scrollToBottom()
+    if (props.followOutput && pinnedToBottom.value) void scrollToBottom()
   },
 )
 
 watch(
   () => props.followOutput,
   (enabled) => {
-    if (enabled) void scrollToBottom()
+    if (enabled) {
+      pinnedToBottom.value = true
+      void scrollToBottom()
+    }
   },
   { immediate: true },
 )
 </script>
 
 <template>
-  <div ref="feed" class="feed" aria-live="polite">
+  <div ref="feed" class="feed" aria-live="polite" @scroll.passive="updatePinnedState">
     <div v-if="!visibleEvents.length" class="empty-state feed-empty">
       <span class="empty-state-icon"><UIcon name="i-lucide-activity" /></span>
       <h2>{{ emptyState.title }}</h2>

@@ -85,7 +85,7 @@ describe('EventFeed', () => {
     expect(component.find('.event').exists()).toBe(false)
   })
 
-  it('jumps to and follows the newest activity when following is enabled', async () => {
+  it('jumps to the newest activity when following is enabled', async () => {
     const component = await mountSuspended(EventFeed, {
       props: {
         events: [textEvent('First event')],
@@ -101,10 +101,57 @@ describe('EventFeed', () => {
     await component.setProps({ followOutput: true })
     await flushPromises()
     expect(feed.scrollTop).toBe(1_000)
+  })
 
-    feed.scrollTop = 200
+  it('pauses following while the reader is scrolled up and resumes at the bottom', async () => {
+    const component = await mountSuspended(EventFeed, {
+      props: {
+        events: [textEvent('First event')],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: true,
+      },
+    })
+    const feed = component.get('.feed')
+    const feedElement = feed.element as HTMLElement
+    let scrollHeight = 1_000
+    Object.defineProperty(feedElement, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(feedElement, 'clientHeight', { configurable: true, value: 300 })
+
+    feedElement.scrollTop = 200
+    await feed.trigger('scroll')
+    await component.setProps({ events: [textEvent('First event'), textEvent('Second event')] })
+    await flushPromises()
+    expect(feedElement.scrollTop).toBe(200)
+
+    feedElement.scrollTop = 700
+    await feed.trigger('scroll')
+    scrollHeight = 1_200
+    await component.setProps({
+      events: [textEvent('First event'), textEvent('Second event'), textEvent('Newest event')],
+    })
+    await flushPromises()
+    expect(feedElement.scrollTop).toBe(1_200)
+  })
+
+  it('treats a small gap from the bottom as still following', async () => {
+    const component = await mountSuspended(EventFeed, {
+      props: {
+        events: [textEvent('First event')],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: true,
+      },
+    })
+    const feed = component.get('.feed')
+    const feedElement = feed.element as HTMLElement
+    Object.defineProperty(feedElement, 'scrollHeight', { configurable: true, value: 1_000 })
+    Object.defineProperty(feedElement, 'clientHeight', { configurable: true, value: 300 })
+
+    feedElement.scrollTop = 680
+    await feed.trigger('scroll')
     await component.setProps({ events: [textEvent('First event'), textEvent('Newest event')] })
     await flushPromises()
-    expect(feed.scrollTop).toBe(1_000)
+    expect(feedElement.scrollTop).toBe(1_000)
   })
 })
