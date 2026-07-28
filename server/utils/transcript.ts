@@ -85,12 +85,6 @@ const PHASE_PATTERNS = [
 const FAIL_RE = /\b([1-9]\d* failed|FAIL\b(?!\s+0\b)|failing|error TS\d+|Error:|✗|✘|command not found|exit code [1-9]|Test Files\s+[1-9]\d* failed)/i
 const PASS_RE = /\b(passed|✓|PASS\b|0 problems|no issues|success)/i
 
-/**
- * `Predicate.isObject` excludes arrays and null, matching what this module
- * needs from a "plain JSON object" check.
- */
-const isRecord = (value: unknown): value is JsonRecord => Predicate.isObject(value)
-
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
@@ -105,7 +99,7 @@ function asNumber(value: unknown): number {
 
 function compactText(value: unknown, limit = 240): string {
   if (typeof value === 'string') return value.trim().replace(/\s+/g, ' ').slice(0, limit)
-  if (!isRecord(value)) return ''
+  if (!Predicate.isObject(value)) return ''
   try {
     return JSON.stringify(value).replace(/\s+/g, ' ').slice(0, limit)
   } catch {
@@ -114,7 +108,7 @@ function compactText(value: unknown, limit = 240): string {
 }
 
 function toolStats(value: unknown): ToolStats {
-  const stats = isRecord(value) ? value : {}
+  const stats = Predicate.isObject(value) ? value : {}
   return {
     reads: asNumber(stats.readCount),
     searches: asNumber(stats.searchCount),
@@ -133,14 +127,14 @@ export function plainText(content: unknown): string {
   return content
     .flatMap((block) => {
       if (typeof block === 'string') return [block]
-      if (isRecord(block) && block.type === 'text') return [asString(block.text)]
+      if (Predicate.isObject(block) && block.type === 'text') return [asString(block.text)]
       return []
     })
     .join('\n')
 }
 
 export function toolSummary(input: unknown): string {
-  if (!isRecord(input)) return ''
+  if (!Predicate.isObject(input)) return ''
 
   for (const key of TOOL_SUMMARY_KEYS) {
     const value = input[key]
@@ -162,14 +156,14 @@ export function resultText(result: unknown): string {
     return result
       .flatMap((block) => {
         if (typeof block === 'string') return [block]
-        if (!isRecord(block)) return []
+        if (!Predicate.isObject(block)) return []
         if (block.type === 'text') return [asString(block.text)]
         if (block.type === 'image') return ['[image]']
         return []
       })
       .join('\n')
   }
-  if (isRecord(result)) {
+  if (Predicate.isObject(result)) {
     try {
       return JSON.stringify(result, null, 2)
     } catch {
@@ -366,7 +360,7 @@ export class TranscriptScan {
       })
     }
 
-    if (record.subtype === 'compact_boundary' && isRecord(record.compactMetadata)) {
+    if (record.subtype === 'compact_boundary' && Predicate.isObject(record.compactMetadata)) {
       const metadata = record.compactMetadata
       this.compactions.push({
         ts: timestamp,
@@ -508,7 +502,7 @@ export class TranscriptScan {
     }
     if (SPAWN_TOOLS.has(name)) this.spawnIds.add(id)
     if (name === 'TodoWrite' && Array.isArray(input.todos)) {
-      this.todos = input.todos.filter(isRecord).map((todo) => {
+      this.todos = input.todos.filter(Predicate.isObject).map((todo) => {
         const result: Todo = { status: asString(todo.status) }
         if (typeof todo.content === 'string') result.content = todo.content
         if (typeof todo.activeForm === 'string') result.activeForm = todo.activeForm
@@ -653,7 +647,7 @@ export class TranscriptScan {
     line: number,
     ts: Timestamp,
   ): void {
-    if (!isRecord(value) || !source) return
+    if (!Predicate.isObject(value) || !source) return
 
     if (typeof value.timedOutAfterMs === 'number') {
       this.addIncident({
@@ -673,7 +667,7 @@ export class TranscriptScan {
       let linesRemoved = 0
       if (Array.isArray(value.structuredPatch)) {
         for (const hunk of value.structuredPatch) {
-          if (!isRecord(hunk) || !Array.isArray(hunk.lines)) continue
+          if (!Predicate.isObject(hunk) || !Array.isArray(hunk.lines)) continue
           for (const patchLine of hunk.lines) {
             if (typeof patchLine !== 'string') continue
             if (patchLine.startsWith('+') && !patchLine.startsWith('+++')) linesAdded += 1
@@ -724,12 +718,12 @@ export class TranscriptScan {
       })
     }
 
-    if (isRecord(value.gitOperation)) {
+    if (Predicate.isObject(value.gitOperation)) {
       const operation = value.gitOperation
-      const commit = isRecord(operation.commit) ? operation.commit : null
-      const push = isRecord(operation.push) ? operation.push : null
-      const pr = isRecord(operation.pr) ? operation.pr : null
-      const branch = isRecord(operation.branch) ? operation.branch : null
+      const commit = Predicate.isObject(operation.commit) ? operation.commit : null
+      const push = Predicate.isObject(operation.push) ? operation.push : null
+      const pr = Predicate.isObject(operation.pr) ? operation.pr : null
+      const branch = Predicate.isObject(operation.branch) ? operation.branch : null
       if (commit) {
         this.gitEvents.push({
           toolUseId,
@@ -767,7 +761,7 @@ export class TranscriptScan {
   }
 
   private ingestAttachment(value: unknown, line: number, ts: Timestamp): void {
-    if (!isRecord(value)) return
+    if (!Predicate.isObject(value)) return
     const type = asString(value.type)
     if (type === 'hook_non_blocking_error' || type === 'hook_cancelled') {
       const cancelled = type === 'hook_cancelled'
@@ -806,7 +800,7 @@ export class TranscriptScan {
   }
 
   private ingestSessionState(value: unknown, line: number, ts: Timestamp): void {
-    if (!isRecord(value)) return
+    if (!Predicate.isObject(value)) return
     if (value.type === 'permission-mode') {
       this.environment.permissionMode = asString(value.permissionMode)
     }
