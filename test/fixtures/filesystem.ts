@@ -23,7 +23,8 @@ const notFound = (method: string, path: string) =>
  *
  * Unit tests use this instead of `mkdtemp`, which keeps them off the disk and —
  * more importantly — lets them control `mtime` and inject failures that a real
- * temp directory cannot produce.
+ * temp directory cannot produce. Mutating operations die loudly so a regression
+ * cannot silently write through Effect's otherwise permissive no-op test layer.
  */
 export function testFileSystem(tree: FakeTree, options: {
   /** Paths that fail with PermissionDenied instead of being read. */
@@ -53,7 +54,24 @@ export function testFileSystem(tree: FakeTree, options: {
         }))
       : Option.none<PlatformError.PlatformError>()
 
+  const rejectMutation = (method: string, path: string) =>
+    Effect.die(new Error(`test filesystem is read-only: ${method}(${path})`))
+
   return FileSystem.layerNoop({
+    chmod: path => rejectMutation('chmod', path),
+    chown: path => rejectMutation('chown', path),
+    copy: fromPath => rejectMutation('copy', fromPath),
+    copyFile: fromPath => rejectMutation('copyFile', fromPath),
+    link: fromPath => rejectMutation('link', fromPath),
+    makeDirectory: path => rejectMutation('makeDirectory', path),
+    remove: path => rejectMutation('remove', path),
+    rename: oldPath => rejectMutation('rename', oldPath),
+    symlink: fromPath => rejectMutation('symlink', fromPath),
+    truncate: path => rejectMutation('truncate', path),
+    utimes: path => rejectMutation('utimes', path),
+    writeFile: path => rejectMutation('writeFile', path),
+    writeFileString: path => rejectMutation('writeFileString', path),
+
     readFileString: (path: string) => {
       const denial = guard('readFileString', path)
       if (Option.isSome(denial)) return Effect.fail(denial.value)

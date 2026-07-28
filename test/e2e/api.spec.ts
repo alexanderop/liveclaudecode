@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -113,6 +113,26 @@ vi.stubEnv('LCC_CODEX_SESSIONS', codexDirectory)
 vi.stubEnv('LCC_VSCODE_USER_DATA', vscodeDirectory)
 vi.stubEnv('LCC_HOURS', '99999')
 
+function sourceSnapshot(root: string) {
+  return Object.fromEntries(
+    readdirSync(root, { recursive: true })
+      .map(String)
+      .sort()
+      .flatMap((relative) => {
+        const path = join(root, relative)
+        const stat = statSync(path)
+        return stat.isFile()
+          ? [[relative, {
+              content: readFileSync(path).toString('base64'),
+              mode: stat.mode,
+              mtimeMs: stat.mtimeMs,
+              size: stat.size,
+            }] as const]
+          : []
+      }),
+  )
+}
+
 describe('read-only API', async () => {
   await setup({
     rootDir: fileURLToPath(new URL('../..', import.meta.url)),
@@ -124,6 +144,15 @@ describe('read-only API', async () => {
     rmSync(directory, { recursive: true, force: true })
     rmSync(codexDirectory, { recursive: true, force: true })
     rmSync(vscodeDirectory, { recursive: true, force: true })
+  })
+
+  it('serves the dashboard shell with its document language and primary navigation', async () => {
+    const html = await $fetch<string>('/')
+
+    expect(html).toMatch(/<html\s+lang="en"/)
+    expect(html).toContain('<title>Claude + Codex Sessions — Live</title>')
+    expect(html).toContain('<main class="main-content">')
+    expect(html).toContain('aria-label="Supporting session views"')
   })
 
   it('returns a combined, provider-tagged run hierarchy and source health', async () => {
@@ -285,5 +314,26 @@ describe('read-only API', async () => {
 
   it('returns 404 for an unknown key', async () => {
     await expect($fetch('/api/run?key=nope')).rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  it('does not mutate transcript sources while serving repeated reads', async () => {
+    const before = {
+      claude: sourceSnapshot(directory),
+      codex: sourceSnapshot(codexDirectory),
+      copilot: sourceSnapshot(vscodeDirectory),
+    }
+
+    await $fetch('/api/tree')
+    await $fetch(`/api/run?key=${SESSION}`)
+    await $fetch(`/api/events?key=${SESSION}&since=0`)
+    await $fetch(`/api/run?key=codex:${CODEX_SESSION}`)
+    await $fetch(`/api/run?key=copilot:${COPILOT_SESSION}`)
+    await $fetch('/api/tree')
+
+    expect({
+      claude: sourceSnapshot(directory),
+      codex: sourceSnapshot(codexDirectory),
+      copilot: sourceSnapshot(vscodeDirectory),
+    }).toEqual(before)
   })
 })

@@ -41,6 +41,7 @@
     "@nuxt/test-utils": "4.0.3",
     "@types/node": "24.13.2",
     "@vue/test-utils": "2.4.11",
+    "axe-core": "4.11.1",
     "fast-check": "^4.9.0",
     "happy-dom": "^20.11.1",
     "typescript": "6.0.3",
