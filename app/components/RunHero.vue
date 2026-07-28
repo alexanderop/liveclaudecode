@@ -19,9 +19,10 @@ function flatten(node: RunNode, output: RunNode[] = []): RunNode[] {
 
 const busy = computed(() => props.root ? flatten(props.root).filter(node => node.live) : [])
 const lead = computed(() => busy.value.filter(node => node.current).at(-1) || null)
-const sourceLabel = computed(() =>
-  props.root?.source === 'claude' ? 'Claude' : props.root?.source === 'codex' ? 'Codex' : 'Copilot',
-)
+const sourceLabel = computed(() => {
+  const source = props.root?.source
+  return source === 'claude' ? 'Claude' : source === 'codex' ? 'Codex' : source === 'copilot' ? 'Copilot' : 'Local'
+})
 const status = computed(() => {
   const root = props.root
   if (!root) return { label: 'No session selected', class: 'done', icon: 'i-lucide-circle' }

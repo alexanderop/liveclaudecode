@@ -981,6 +981,7 @@ kbd {
 @media (max-width: 880px) {
   .session-workspace { display: flex; flex-direction: column; }
   .session-primary { flex: 1; }
+  .view-bar { overflow-x: auto; }
   .inspector { display: none; }
   .guide-columns { grid-template-columns: 1fr; }
   .canvas-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
@@ -993,13 +994,13 @@ kbd {
 @media (max-width: 680px) {
   body { overflow: auto; }
   .shell { min-height: 100%; height: auto; flex-direction: column; }
-  .sidebar { width: 100%; max-height: 38vh; flex-basis: auto; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+  .sidebar { width: 100%; max-height: 48vh; flex-basis: auto; border-right: 0; border-bottom: 1px solid var(--line-soft); }
   .primary-nav { grid-template-columns: repeat(3, 1fr); }
   .primary-nav-item { justify-content: center; }
   .primary-nav-item kbd, .primary-nav-item .nav-count { display: none; }
   .session-browser { min-height: 180px; }
   .sidebar-footer { display: none; }
-  .main-content { min-height: 62vh; }
+  .main-content { min-height: 52vh; }
   .location-bar { padding: 0 12px; }
   .breadcrumbs span:not(.breadcrumb-root), .breadcrumbs > svg { display: none; }
   .hero-body { min-height: 100px; padding: 18px; }

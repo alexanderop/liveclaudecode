@@ -16,6 +16,8 @@ describe('RunHero', () => {
     const showSidebar = component.get('button[aria-label="Show sidebar"]')
 
     expect(showSidebar.attributes('aria-keyshortcuts')).toBe('Meta+B Control+B')
+    expect(component.get('.session-kicker').text()).toBe('Local session')
+    expect(component.text()).not.toContain('Copilot session')
     await showSidebar.trigger('click')
     expect(component.emitted('showSidebar')).toEqual([[]])
   })
