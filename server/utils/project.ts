@@ -98,6 +98,7 @@ export const resolveProjectDirectory = Effect.fn('resolveProjectDirectory')(
         if (yield* containsTranscript(candidate)) return candidate
         const guessed = projectDirectoryFor(candidate, projectsDirectory)
         if (yield* isDirectory(guessed)) return guessed
+        return guessed
       }
 
       const slug = join(projectsDirectory, input)

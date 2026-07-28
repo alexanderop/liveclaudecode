@@ -52,6 +52,14 @@ describe('project resolution', () => {
       [`${projectDirectoryFor('/home/me/repo', PROJECTS)}/run.jsonl`]: '{}\n',
     }))))
 
+  it.effect('accepts a repository before its transcript directory exists', () =>
+    Effect.gen(function*() {
+      const result = yield* resolveProjectDirectory('/home/me/new-repo')
+      assert.strictEqual(result, projectDirectoryFor('/home/me/new-repo', PROJECTS))
+    }).pipe(Effect.provide(withTree({
+      '/home/me/new-repo/README.md': '#',
+    }))))
+
   it.effect('resolves a slug under the projects directory', () =>
     resolveProjectDirectory('my-project').pipe(
       Effect.map(result => assert.strictEqual(result, `${PROJECTS}/my-project`)),

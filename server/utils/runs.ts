@@ -85,7 +85,12 @@ export const collect = Effect.fn('collect')(function*(
   const fs = yield* FileSystem.FileSystem
   const now = yield* Clock.currentTimeMillis
   const cutoff = now - maxAgeHours * 3_600_000
-  const names = (yield* fs.readDirectory(projectDirectory)).sort((a, b) => a.localeCompare(b))
+  const names = (yield* fs.readDirectory(projectDirectory).pipe(
+    Effect.catchIf(
+      error => error.reason._tag === 'NotFound',
+      () => Effect.succeed([] as Array<string>),
+    ),
+  )).sort((a, b) => a.localeCompare(b))
   const items: CollectedItem[] = []
 
   const freshFile = Effect.fn('freshFile')(function*(path: string) {

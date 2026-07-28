@@ -115,6 +115,12 @@ describe('run hierarchy', () => {
       Effect.provide(TestLayer),
     ))
 
+  it.effect('treats a not-yet-created transcript directory as an empty tree', () =>
+    buildTree('/new-project', 99_999).pipe(
+      Effect.map(built => assert.deepStrictEqual(built.roots, [])),
+      Effect.provide(TestLayer),
+    ))
+
   it.effect('caches scans within a layer but not across them', () =>
     Effect.gen(function*() {
       const first = yield* buildTree(ROOT, 99_999)

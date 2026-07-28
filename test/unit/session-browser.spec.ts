@@ -108,6 +108,15 @@ describe('unified session catalog', () => {
       ]),
     }))))
 
+  it.effect('reports Claude ready before a configured repository has its first transcript', () =>
+    Effect.gen(function*() {
+      const catalog = yield* loadSessionCatalog('/work/new-repo', 999_999)
+      assert.strictEqual(catalog.sources[0]?.state, 'ready')
+      assert.strictEqual(catalog.sources[0]?.sessions, 0)
+    }).pipe(Effect.provide(layer({
+      '/work/new-repo/README.md': '#',
+    }))))
+
   it.effect('keeps readable Codex sessions when another rollout is unreadable', () => {
     const unreadable = `${CODEX}/2026/07/26/rollout-unreadable.jsonl`
     return Effect.gen(function*() {
