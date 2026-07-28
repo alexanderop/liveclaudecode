@@ -38,7 +38,7 @@ export function useLiveRuns() {
   const liveOnly = ref(false)
   const attentionOnly = ref(false)
   const hideIdle = ref(true)
-  const followActive = ref(true)
+  const followActive = ref(false)
   const followOutput = ref(true)
   const errorsOnly = ref(false)
   const density = ref<FeedDensity>('normal')

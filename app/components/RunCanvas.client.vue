@@ -26,11 +26,15 @@ const props = defineProps<{
   selectedKey: string | null
 }>()
 
-const emit = defineEmits<{ select: [key: string] }>()
+const emit = defineEmits<{
+  select: [key: string]
+  deselect: []
+}>()
 const nodes = shallowRef<Array<Node<ExecutionNodeData>>>([])
 const edges = shallowRef<Edge[]>([])
 const layoutDirection = ref<ExecutionDirection>('left-to-right')
 const displayMode = ref<ExecutionDetail>('overview')
+const pendingFit = ref(false)
 const { fitView, onNodesInitialized } = useVueFlow('execution-canvas')
 
 function refreshGraph(preservePositions = true): void {
@@ -66,11 +70,29 @@ function handleNodeClick({ node }: NodeMouseEvent): void {
   emit('select', node.id)
 }
 
+function handleNodeKeydown(event: KeyboardEvent, key: string): void {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault()
+  emit('select', key)
+}
+
 function miniMapColor(node: GraphNode<ExecutionNodeData>): string {
-  if (node.data.state === 'live') return '#63bd88'
-  if (node.data.state === 'error') return '#bd666d'
+  if (node.data.state === 'active') return '#63bd88'
+  if (node.data.state === 'blocked') return '#d7aa68'
+  if (node.data.state === 'failed') return '#bd666d'
+  if (node.data.state === 'inactive') return '#555159'
   if (node.data.root) return '#9384d8'
   return '#77717f'
+}
+
+function stateLabel(state: ExecutionNodeData['state']): string {
+  return {
+    active: 'Active',
+    blocked: 'Blocked',
+    completed: 'Completed',
+    failed: 'Failed',
+    inactive: 'Inactive',
+  }[state]
 }
 
 async function refit(): Promise<void> {
@@ -105,19 +127,36 @@ async function refit(): Promise<void> {
 }
 
 watch(
-  () => props.run?.lanes,
-  () => refreshGraph(),
+  () => props.run,
+  (run, previous) => {
+    const sessionChanged = run?.key !== previous?.key
+    pendingFit.value = Boolean(run && sessionChanged)
+    refreshGraph(!sessionChanged)
+  },
   { immediate: true, deep: true },
 )
 
 watch(
   () => props.selectedKey,
-  selectedKey => nodes.value.forEach((node) => {
-    if (node.data) node.data.selected = node.id === selectedKey
-  }),
+  selectedKey => {
+    nodes.value = nodes.value.map((node) => {
+      if (!node.data) return node
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          selected: selectedKey !== null && node.data.memberKeys.includes(selectedKey),
+        },
+      } as Node<ExecutionNodeData>
+    })
+  },
 )
 
-onNodesInitialized(() => void refit())
+onNodesInitialized(() => {
+  if (!pendingFit.value) return
+  pendingFit.value = false
+  void refit()
+})
 </script>
 
 <template>
@@ -137,6 +176,13 @@ onNodesInitialized(() => void refit())
             {{ Math.max(nodes.length - 1, 0) }} workstreams · {{ run.lanes.length }} agents
           </span>
           <span v-else>{{ nodes.length }} {{ nodes.length === 1 ? 'agent' : 'agents' }}</span>
+        </div>
+        <div class="canvas-legend" aria-label="Node status legend">
+          <span class="active"><i />Active</span>
+          <span class="completed"><i />Complete</span>
+          <span class="failed"><i />Failed</span>
+          <span class="blocked"><i />Blocked</span>
+          <span class="inactive"><i />Inactive</span>
         </div>
         <div class="canvas-toolbar">
           <div class="canvas-layout" aria-label="Graph detail">
@@ -196,8 +242,9 @@ onNodesInitialized(() => void refit())
         :nodes-connectable="false"
         :edges-updatable="false"
         :zoom-on-double-click="false"
-        fit-view-on-init
+        aria-label="Session execution canvas"
         @node-click="handleNodeClick"
+        @pane-click="emit('deselect')"
       >
         <Background
           :variant="BackgroundVariant.Dots"
@@ -206,10 +253,15 @@ onNodesInitialized(() => void refit())
           :size="1.15"
         />
 
-        <template #node-agent="{ data }">
+        <template #node-agent="{ id, data }">
           <div
             class="sketch-node"
             :class="[data.state, { root: data.root, selected: data.selected, overview: data.overview }]"
+            role="button"
+            tabindex="0"
+            :aria-pressed="data.selected"
+            :aria-label="`${data.label}, ${stateLabel(data.state)}. Open details.`"
+            @keydown="handleNodeKeydown($event, id)"
           >
             <Handle
               type="target"
@@ -225,8 +277,8 @@ onNodesInitialized(() => void refit())
               </span>
               <span class="sketch-agent-type">{{ data.agentType }}</span>
               <span class="sketch-state">
-                <span class="status-dot" :class="{ running: data.state === 'live' }" />
-                {{ data.state === 'live' ? 'Running' : data.state === 'error' ? 'Error' : 'Done' }}
+                <span class="status-dot" :class="data.state" />
+                {{ stateLabel(data.state) }}
               </span>
             </div>
             <strong :title="data.label">{{ data.label }}</strong>
@@ -249,7 +301,7 @@ onNodesInitialized(() => void refit())
         </template>
 
         <MiniMap
-          v-if="nodes.length > 4 && displayMode === 'all-agents'"
+          v-if="nodes.length > 3"
           position="bottom-right"
           :node-color="miniMapColor"
           :pannable="true"

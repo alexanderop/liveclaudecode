@@ -8,17 +8,24 @@ const props = defineProps<{
   selectedKey: string | null
 }>()
 
-const emit = defineEmits<{ select: [key: string] }>()
+const emit = defineEmits<{
+  select: [key: string]
+  close: []
+}>()
 
 const status = computed(() => {
-  if (!props.root) return { label: '—', class: '' }
-  if (props.root.subLive) return { label: 'Running', class: 'running' }
-  if (props.root.subErrors) return { label: 'Needs attention', class: 'failed' }
-  return { label: 'Complete', class: 'complete' }
+  if (!props.selected) return { label: 'Inactive', class: 'inactive' }
+  if (props.selected.live) return { label: 'Active', class: 'active' }
+  if (props.selected.spawnState === 'running') return { label: 'Blocked', class: 'blocked' }
+  if (props.selected.errors) return { label: 'Failed', class: 'failed' }
+  if (!props.selected.firstTs && !props.selected.lastTs && !props.selected.tools) {
+    return { label: 'Inactive', class: 'inactive' }
+  }
+  return { label: 'Completed', class: 'completed' }
 })
 
 const toolMix = computed(() =>
-  Object.entries(props.run?.node.toolCounts || {})
+  Object.entries(props.selected?.toolCounts || {})
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6),
 )
@@ -33,9 +40,15 @@ const selectedOutcome = computed(() =>
 </script>
 
 <template>
-  <aside class="inspector">
+  <aside class="inspector" aria-label="Selected node details">
     <div class="inspector-title">
-      <span>Properties</span>
+      <span>
+        <small>Selected node</small>
+        <strong>{{ selected?.label || 'Details' }}</strong>
+      </span>
+      <button type="button" class="inspector-close" aria-label="Close details" @click="emit('close')">
+        <UIcon name="i-lucide-x" />
+      </button>
     </div>
 
     <template v-if="run && root && selected">
@@ -47,16 +60,20 @@ const selectedOutcome = computed(() =>
           </strong>
         </div>
         <div class="property-row">
-          <span>Viewing</span>
+          <span>Role</span>
           <strong class="property-value"><UIcon name="i-lucide-bot" />{{ selected.agentType || 'Main session' }}</strong>
         </div>
         <div class="property-row">
+          <span>Provider</span>
+          <strong class="property-value">{{ selected.source ? selected.source[0]?.toUpperCase() + selected.source.slice(1) : 'Not recorded' }}</strong>
+        </div>
+        <div class="property-row">
           <span>Duration</span>
-          <strong class="property-value">{{ formatDuration(root.firstTs, root.subLast) }}</strong>
+          <strong class="property-value">{{ formatDuration(selected.firstTs, selected.lastTs) }}</strong>
         </div>
         <div class="property-row">
           <span>Output</span>
-          <strong class="property-value">{{ formatCount(root.tokensOut) }} tokens</strong>
+          <strong class="property-value">{{ selected.tokensOut ? `${formatCount(selected.tokensOut)} tokens` : 'Not recorded' }}</strong>
         </div>
       </section>
 
@@ -80,7 +97,7 @@ const selectedOutcome = computed(() =>
             </span>
             <span class="agent-copy">
               <strong>{{ lane.label }}</strong>
-              <small>{{ lane.live ? 'Working now' : lane.errors ? `${lane.errors} errors` : `${lane.tools} tools` }}</small>
+              <small>{{ lane.live ? 'Active now' : lane.spawnState === 'running' ? 'Blocked or waiting' : lane.errors ? `${lane.errors} errors` : `${lane.tools} tools` }}</small>
             </span>
             <span v-if="lane.live" class="status-dot running" />
           </button>
@@ -124,7 +141,7 @@ const selectedOutcome = computed(() =>
         <div class="inspector-section-title"><span>Artifacts</span></div>
         <div class="property-row compact">
           <span><UIcon name="i-lucide-files" /> Files changed</span>
-          <strong>{{ run.files.length }}</strong>
+          <strong>{{ selected.files.length }}</strong>
         </div>
         <div class="property-row compact">
           <span><UIcon name="i-lucide-square-terminal" /> Commands</span>

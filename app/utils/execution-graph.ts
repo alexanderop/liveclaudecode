@@ -1,7 +1,7 @@
 import { MarkerType, type Edge, type Node, type XYPosition } from '@vue-flow/core'
 import type { TimelineLane } from '#shared/types/run'
 
-export type ExecutionNodeState = 'complete' | 'error' | 'live'
+export type ExecutionNodeState = 'active' | 'blocked' | 'completed' | 'failed' | 'inactive'
 export type ExecutionDirection = 'left-to-right' | 'top-to-bottom'
 export type ExecutionDetail = 'overview' | 'all-agents'
 
@@ -20,6 +20,7 @@ export interface ExecutionNodeData {
   agents: number
   errors: number
   workstream: number
+  memberKeys: string[]
 }
 
 export interface ExecutionGraph {
@@ -40,18 +41,23 @@ const TOP_DOWN_BRANCH_GAP = 270
 
 interface AggregateStats {
   agents: number
+  blocked: boolean
+  completed: boolean
   errors: number
   files: number
   firstTs: TimelineLane['firstTs']
   lastTs: TimelineLane['lastTs']
   live: boolean
+  memberKeys: string[]
   tools: number
 }
 
 function stateFor(lane: TimelineLane): ExecutionNodeState {
-  if (lane.live || lane.spawnState === 'running') return 'live'
-  if (lane.errors) return 'error'
-  return 'complete'
+  if (lane.live) return 'active'
+  if (lane.spawnState === 'running') return 'blocked'
+  if (lane.errors) return 'failed'
+  if (!lane.firstTs && !lane.lastTs && !lane.tools) return 'inactive'
+  return 'completed'
 }
 
 function buildTree(lanes: TimelineLane[]): LayoutEntry[] {
@@ -83,13 +89,32 @@ function aggregate(entry: LayoutEntry): AggregateStats {
   const ends = entries.map(item => item.lane.lastTs).filter(value => value !== null).sort()
   return {
     agents: entries.length,
+    blocked: entries.some(item => stateFor(item.lane) === 'blocked'),
+    completed: entries.some(item => stateFor(item.lane) === 'completed'),
     errors: entries.reduce((total, item) => total + item.lane.errors, 0),
     files: entries.reduce((total, item) => total + item.lane.files, 0),
     firstTs: starts[0] || null,
     lastTs: ends.at(-1) || null,
-    live: entries.some(item => item.lane.live || item.lane.spawnState === 'running'),
+    live: entries.some(item => item.lane.live),
+    memberKeys: entries.map(item => item.lane.key),
     tools: entries.reduce((total, item) => total + item.lane.tools, 0),
   }
+}
+
+function aggregateState(stats: AggregateStats): ExecutionNodeState {
+  if (stats.live) return 'active'
+  if (stats.blocked) return 'blocked'
+  if (stats.errors) return 'failed'
+  if (stats.completed) return 'completed'
+  return 'inactive'
+}
+
+function edgeColor(state: ExecutionNodeState): string {
+  if (state === 'active') return '#73c995'
+  if (state === 'blocked') return '#d7aa68'
+  if (state === 'failed') return '#d6797f'
+  if (state === 'inactive') return '#555159'
+  return '#77717f'
 }
 
 export function buildExecutionGraph(
@@ -148,14 +173,18 @@ export function buildExecutionGraph(
     const lane = entry.lane
     const stats = overview ? aggregate(entry) : {
       agents: 1,
+      blocked: stateFor(lane) === 'blocked',
+      completed: stateFor(lane) === 'completed',
       errors: lane.errors,
       files: lane.files,
       firstTs: lane.firstTs,
       lastTs: lane.lastTs,
-      live: lane.live || lane.spawnState === 'running',
+      live: lane.live,
+      memberKeys: [lane.key],
       tools: lane.tools,
     }
-    const state: ExecutionNodeState = stats.live ? 'live' : stats.errors ? 'error' : stateFor(lane)
+    const state = aggregateState(stats)
+    const selectableMemberKeys = overview && lane.depth === 0 ? [lane.key] : stats.memberKeys
     nodes.push({
       id: lane.key,
       type: 'agent',
@@ -177,34 +206,31 @@ export function buildExecutionGraph(
         lastTs: stats.lastTs,
         depth: lane.depth,
         root: lane.depth === 0,
-        selected: lane.key === selectedKey,
+        selected: selectedKey !== null && selectableMemberKeys.includes(selectedKey),
         state,
         overview,
         agents: stats.agents,
         errors: stats.errors,
         workstream: workstreamByKey.get(lane.key) || 0,
+        memberKeys: selectableMemberKeys,
       },
     })
 
     for (const child of children) {
-      const childStats = overview ? aggregate(child) : null
-      const childState: ExecutionNodeState = childStats?.live
-        ? 'live'
-        : childStats?.errors
-          ? 'error'
-          : stateFor(child.lane)
+      const childState = overview ? aggregateState(aggregate(child)) : stateFor(child.lane)
+      const color = edgeColor(childState)
       edges.push({
         id: `${lane.key}->${child.lane.key}`,
         source: lane.key,
         target: child.lane.key,
         type: 'smoothstep',
-        animated: childState === 'live',
+        animated: childState === 'active',
         selectable: false,
         focusable: false,
         class: `execution-edge ${childState}`,
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: childState === 'live' ? '#73c995' : childState === 'error' ? '#d6797f' : '#77717f',
+          color,
           width: 16,
           height: 16,
         },

@@ -41,15 +41,21 @@ describe('execution graph layout', () => {
     expect(graph.nodes.find(node => node.id === 'source-check')?.position.x).toBe(600)
   })
 
-  it('surfaces live, error, and selected states', () => {
+  it('surfaces active, blocked, failed, completed, inactive, and selected states', () => {
     const graph = buildExecutionGraph([
       lane('root', 0),
       lane('live', 1, { live: true }),
+      lane('blocked', 1, { spawnState: 'running' }),
       lane('failed', 1, { errors: 2 }),
+      lane('completed', 1, { firstTs: '2026-07-28T10:00:00.000Z' }),
+      lane('inactive', 1),
     ], 'failed')
 
-    expect(graph.nodes.find(node => node.id === 'live')?.data?.state).toBe('live')
-    expect(graph.nodes.find(node => node.id === 'failed')?.data?.state).toBe('error')
+    expect(graph.nodes.find(node => node.id === 'live')?.data?.state).toBe('active')
+    expect(graph.nodes.find(node => node.id === 'blocked')?.data?.state).toBe('blocked')
+    expect(graph.nodes.find(node => node.id === 'failed')?.data?.state).toBe('failed')
+    expect(graph.nodes.find(node => node.id === 'completed')?.data?.state).toBe('completed')
+    expect(graph.nodes.find(node => node.id === 'inactive')?.data?.state).toBe('inactive')
     expect(graph.nodes.find(node => node.id === 'failed')?.data?.selected).toBe(true)
     expect(graph.edges.find(edge => edge.target === 'live')?.animated).toBe(true)
   })
@@ -62,6 +68,26 @@ describe('execution graph layout', () => {
     )
 
     expect(graph.nodes.find(node => node.id === 'worker')?.position).toEqual({ x: 42, y: 84 })
+  })
+
+  it('preserves existing positions and selection when live activity adds a lane', () => {
+    const updated = buildExecutionGraph(
+      [
+        lane('root', 0, { live: true }),
+        lane('worker', 1, { live: true, tools: 4 }),
+        lane('new-reviewer', 1, { spawnState: 'running' }),
+      ],
+      'worker',
+      new Map([
+        ['root', { x: 18, y: 28 }],
+        ['worker', { x: 412, y: 96 }],
+      ]),
+    )
+
+    expect(updated.nodes.find(node => node.id === 'root')?.position).toEqual({ x: 18, y: 28 })
+    expect(updated.nodes.find(node => node.id === 'worker')?.position).toEqual({ x: 412, y: 96 })
+    expect(updated.nodes.find(node => node.id === 'worker')?.data?.selected).toBe(true)
+    expect(updated.nodes.find(node => node.id === 'new-reviewer')?.data?.state).toBe('blocked')
   })
 
   it('can arrange the graph from top to bottom', () => {
@@ -103,12 +129,35 @@ describe('execution graph layout', () => {
       agents: 2,
       errors: 1,
       overview: true,
-      state: 'error',
+      state: 'failed',
       tools: 17,
       workstream: 1,
     })
     expect(graph.nodes.find(node => node.id === 'qa')?.position.x).toBeGreaterThan(
       graph.nodes.find(node => node.id === 'implementation')?.position.x || 0,
     )
+  })
+
+  it('keeps a nested selection visible on its collapsed overview workstream', () => {
+    const graph = buildExecutionGraph(
+      [
+        lane('root', 0),
+        lane('implementation', 1, { tools: 3 }),
+        lane('review', 2, { tools: 2 }),
+      ],
+      'review',
+      new Map(),
+      'left-to-right',
+      'overview',
+    )
+
+    expect(graph.nodes.find(node => node.id === 'implementation')?.data).toMatchObject({
+      selected: true,
+      memberKeys: ['implementation', 'review'],
+    })
+    expect(graph.nodes.find(node => node.id === 'root')?.data).toMatchObject({
+      selected: false,
+      memberKeys: ['root'],
+    })
   })
 })
