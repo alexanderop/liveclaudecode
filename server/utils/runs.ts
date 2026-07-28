@@ -186,6 +186,7 @@ export const buildTree = Effect.fn('buildTree')(function*(
   const roots: RunNode[] = []
   for (const node of byKey.values()) {
     node.spawnState = node.toolUseId ? spawnState.get(node.toolUseId) || '' : ''
+    settleReturnedAgent(node)
     const parentKey = node.toolUseId ? owner.get(node.toolUseId) : undefined
     const parent = parentKey ? byKey.get(parentKey) : undefined
     if (parent && parent.key !== node.key) parent.children.push(node)
@@ -202,6 +203,19 @@ export const buildTree = Effect.fn('buildTree')(function*(
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
   }
 })
+
+/**
+ * A completed Agent tool result is stronger evidence than a recently touched
+ * subagent transcript. Without this override, returned workers appear active
+ * for the entire mtime-based liveness window.
+ */
+export function settleReturnedAgent(node: RunNode): RunNode {
+  if (node.kind === 'subagent' && node.spawnState === 'returned') {
+    node.live = false
+    node.current = null
+  }
+  return node
+}
 
 export function rollup(node: RunNode): RunNode {
   let agents = 0

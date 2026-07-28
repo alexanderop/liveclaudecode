@@ -10,7 +10,16 @@ import {
   copilotRunDiagnostics,
   type CopilotTree,
 } from './copilot-runs'
-import { buildTree, flatten, pathFor, rootOf, runDiagnostics, runPhases, stripNode } from './runs'
+import {
+  buildTree,
+  flatten,
+  pathFor,
+  rootOf,
+  runDiagnostics,
+  runPhases,
+  settleReturnedAgent,
+  stripNode,
+} from './runs'
 import { projectName, resolveProjectDirectories } from './project'
 import {
   CodexScanCache,
@@ -384,7 +393,7 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
 
   const cache = yield* ScanCache
   const scan = yield* cache.get(yield* pathFor(location.projectDirectory, key))
-  const node = { ...location.node, ...(yield* scan.stats) }
+  const node = settleReturnedAgent({ ...location.node, ...(yield* scan.stats) })
   const childByToolId = new Map(
     location.node.children
       .filter(child => child.toolUseId)

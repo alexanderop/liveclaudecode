@@ -71,14 +71,18 @@ describe('run hierarchy', () => {
 
   it.effect('distinguishes returned and running agents', () =>
     withTree(({ roots }) => {
-      const states = Object.fromEntries(roots[0]!.children.map(child => [child.label, child.spawnState]))
+      const children = roots[0]!.children
+      const states = Object.fromEntries(children.map(child => [child.label, child.spawnState]))
       assert.deepStrictEqual(states, { 'slice A': 'returned', 'slice B': 'running' })
+      assert.isFalse(children.find(child => child.label === 'slice A')!.live)
+      assert.isTrue(children.find(child => child.label === 'slice B')!.live)
     }))
 
   it.effect('rolls up totals for the whole subtree', () =>
     withTree(({ roots }) => {
       const root = roots[0]!
       assert.strictEqual(root.subAgents, 2)
+      assert.strictEqual(root.subRunning, 1)
       assert.strictEqual(root.subTools, 4)
       assert.deepStrictEqual(root.subFiles, { 'src/a.ts': 1 })
     }))
