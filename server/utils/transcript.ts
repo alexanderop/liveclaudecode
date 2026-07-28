@@ -248,6 +248,7 @@ export class TranscriptScan {
   tokensOut = 0
   finalText = ''
   cwd = ''
+  private turnComplete = false
   private mtime = 0
   private size = 0
 
@@ -414,6 +415,7 @@ export class TranscriptScan {
 
   private ingestAssistant(record: ClaudeAssistantRecord, line: number, ts: Timestamp): void {
     const message = record.message
+    if (message.stop_reason === 'end_turn') this.turnComplete = true
     const rawContent = message.content
     const blocks = Array.isArray(rawContent)
       ? rawContent
@@ -584,6 +586,7 @@ export class TranscriptScan {
       const block = parseClaudeUserBlock(rawBlock)
       if (!block) continue
       if (block.kind === 'tool_result') {
+        this.turnComplete = false
         const id = block.data.tool_use_id
         this.openTools.delete(id)
         const text = resultText(block.data.content)
@@ -625,6 +628,7 @@ export class TranscriptScan {
         const text = block.data.text
         if (!text.trim()) continue
         const meta = Boolean(record.isMeta) || text.trimStart().startsWith('<system-reminder')
+        if (!meta) this.turnComplete = false
         const [body, full] = clip(text)
         this.events.push({
           role: 'user',
@@ -867,7 +871,7 @@ export class TranscriptScan {
       lastTs: this.lastTs,
       mtime: this.mtime,
       ago: Math.trunc(now - this.mtime),
-      live: now - this.mtime < LIVE_WINDOW,
+      live: !this.turnComplete && now - this.mtime < LIVE_WINDOW,
       size: this.size,
       todos: this.todos,
       skills: this.skills.slice(-6),

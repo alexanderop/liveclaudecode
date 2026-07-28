@@ -313,6 +313,39 @@ describe('TranscriptScan.stats liveness', () => {
       assert.strictEqual(stats.ago, 5)
     }))
 
+  it.effect('settles immediately when Claude records a completed turn', () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime((MTIME + 5) * 1_000)
+      const scan = yield* scanOf([
+        fixture.assistant([fixture.text('done')], { stopReason: 'end_turn' }),
+      ], { mtime: MTIME })
+      const stats = yield* scan.stats
+
+      assert.isFalse(stats.live)
+      assert.strictEqual(stats.ago, 5)
+    }))
+
+  it.effect('becomes live again when a completed session receives a new prompt', () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime((MTIME + 5) * 1_000)
+      const scan = yield* scanOf([
+        fixture.assistant([fixture.text('done')], { stopReason: 'end_turn' }),
+        fixture.userText('one more task', { ts: fixture.T0(2) }),
+      ], { mtime: MTIME })
+
+      assert.isTrue((yield* scan.stats).live)
+    }))
+
+  it.effect('does not keep an abandoned open tool live beyond the freshness window', () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime((MTIME + 60) * 1_000)
+      const scan = yield* scanOf([
+        fixture.assistant([fixture.tool('Bash', 't1', { command: 'pnpm test' })]),
+      ], { mtime: MTIME })
+
+      assert.isFalse((yield* scan.stats).live)
+    }))
+
   it.effect('is live on the last second inside the window', () =>
     Effect.gen(function*() {
       const stats = yield* statsAtClock(MTIME + 44)

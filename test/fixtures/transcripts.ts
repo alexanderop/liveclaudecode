@@ -11,13 +11,20 @@ function record(value: RecordValue): RecordValue {
 
 export function assistant(
   blocks: RecordValue[],
-  options: { ts?: string, usage?: RecordValue, model?: string, extra?: RecordValue } = {},
+  options: {
+    ts?: string
+    usage?: RecordValue
+    model?: string
+    stopReason?: string | null
+    extra?: RecordValue
+  } = {},
 ): RecordValue {
   const message: RecordValue = {
     content: blocks,
     model: options.model || 'claude-opus-5',
   }
   if (options.usage) message.usage = options.usage
+  if (options.stopReason !== undefined) message.stop_reason = options.stopReason
   return record({ type: 'assistant', timestamp: options.ts || T0(), message, ...options.extra })
 }
 
