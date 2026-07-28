@@ -87,19 +87,11 @@ const PASS_RE = /\b(passed|✓|PASS\b|0 problems|no issues|success)/i
 
 const utf8 = new TextDecoder()
 
-function concatChunks(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
-  let total = 0
-  for (const chunk of chunks) total += chunk.length
-  const bytes = new Uint8Array(total)
-  let position = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, position)
-    position += chunk.length
-  }
-  return bytes
+function bytesOf(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
+  return chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks)
 }
 
-export interface AppendedLines {
+interface AppendedLines {
   lines: string[]
   nextByte: number
 }
@@ -109,12 +101,12 @@ export interface AppendedLines {
  * partial line for a later read. `nextByte` is the offset just past the last
  * newline consumed, so the next call picks up exactly where this one stopped.
  */
-export const readCompleteLines = Effect.fn('readCompleteLines')(function*(
+const readCompleteLines = Effect.fn('readCompleteLines')(function*(
   path: string,
   fromByte: number,
 ) {
   const fs = yield* FileSystem.FileSystem
-  const bytes = concatChunks(yield* Stream.runCollect(fs.stream(path, { offset: fromByte })))
+  const bytes = bytesOf(yield* Stream.runCollect(fs.stream(path, { offset: fromByte })))
   const lastNewline = bytes.lastIndexOf(0x0A)
   if (lastNewline < 0) return { lines: [], nextByte: fromByte } satisfies AppendedLines
   return {
@@ -126,8 +118,82 @@ export const readCompleteLines = Effect.fn('readCompleteLines')(function*(
 /** Read at most the first `maxBytes` of a file as text. */
 export const readHead = Effect.fn('readHead')(function*(path: string, maxBytes: number) {
   const fs = yield* FileSystem.FileSystem
-  const chunks = yield* Stream.runCollect(fs.stream(path, { bytesToRead: maxBytes }))
-  return utf8.decode(concatChunks(chunks))
+  return utf8.decode(bytesOf(yield* Stream.runCollect(fs.stream(path, { bytesToRead: maxBytes }))))
+})
+
+/** The bookkeeping an incremental JSONL scan carries between refreshes. */
+export interface IncrementalScanState {
+  line: number
+  malformed: number
+  mtime: number
+  size: number
+  bytesConsumed: number
+  lastLoadedMtime: number
+  lastLoadedSize: number
+}
+
+/**
+ * Advance an incremental JSONL scan and return the newly complete records as
+ * `[absolute line index, parsed JSON]` pairs.
+ *
+ * A missing file is not an error — scans are polled while the writer is still
+ * creating files. The file is stat'd first so an unchanged one costs no read,
+ * and an appended one is read only from the last consumed byte onward. Lines
+ * that fail to parse as JSON count toward `state.malformed`.
+ */
+export const consumeNewRecords = Effect.fn('consumeNewRecords')(function*(
+  path: string,
+  state: IncrementalScanState,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const records: Array<[index: number, value: unknown]> = []
+
+  const infoOption = yield* fs.stat(path).pipe(
+    Effect.map(Option.some),
+    Effect.catchIf(
+      error => error.reason._tag === 'NotFound',
+      () => Effect.succeed(Option.none<FileSystem.File.Info>()),
+    ),
+  )
+  if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return records
+
+  const info = infoOption.value
+  state.mtime = Option.match(info.mtime, {
+    onNone: () => state.mtime,
+    onSome: date => date.getTime() / 1_000,
+  })
+  state.size = Number(info.size)
+  if (state.size === state.lastLoadedSize && state.mtime === state.lastLoadedMtime) return records
+
+  // A shrunken file was rewritten, not appended; the byte offset no longer
+  // points into it, so re-read from the start and skip consumed lines.
+  const fromByte = state.size < state.bytesConsumed ? 0 : state.bytesConsumed
+  const read = yield* readCompleteLines(path, fromByte).pipe(
+    Effect.map(Option.some),
+    Effect.catchIf(
+      error => error.reason._tag === 'NotFound',
+      () => Effect.succeed(Option.none<AppendedLines>()),
+    ),
+  )
+  if (Option.isNone(read)) return records
+
+  const { lines, nextByte } = read.value
+  const baseLine = fromByte === 0 ? 0 : state.line
+  for (let offset = fromByte === 0 ? state.line : 0; offset < lines.length; offset += 1) {
+    const line = lines[offset]!
+    if (!line.trim()) continue
+    // A writer can leave a half-written line while appending; skip it.
+    try {
+      records.push([baseLine + offset, JSON.parse(line)])
+    } catch {
+      state.malformed += 1
+    }
+  }
+  state.line = baseLine + lines.length
+  state.bytesConsumed = nextByte
+  state.lastLoadedMtime = state.mtime
+  state.lastLoadedSize = state.size
+  return records
 })
 
 function asString(value: unknown): string {
@@ -294,79 +360,25 @@ export class TranscriptScan {
   finalText = ''
   cwd = ''
   private turnComplete = false
-  private mtime = 0
-  private size = 0
-  private bytesConsumed = 0
-  private lastLoadedMtime = 0
-  private lastLoadedSize = -1
+  mtime = 0
+  size = 0
+  bytesConsumed = 0
+  lastLoadedMtime = 0
+  lastLoadedSize = -1
 
   constructor(path: string | URL) {
     this.path = path.toString()
   }
 
-  /**
-   * Re-read the transcript from the last line consumed.
-   *
-   * A missing transcript is not an error — the tree is polled while Claude Code
-   * is still creating files. Any other filesystem failure propagates.
-   *
-   * The file is stat'd first so an unchanged transcript costs no read at all,
-   * and an appended one is read only from the last consumed byte onward.
-   */
+  /** Parse the records appended since the last refresh; see consumeNewRecords. */
   get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
     const self = this
     return Effect.gen(function*() {
-      const fs = yield* FileSystem.FileSystem
-
-      const infoOption = yield* fs.stat(self.path).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<FileSystem.File.Info>()),
-        ),
-      )
-      if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return self
-
-      const info = infoOption.value
-      self.mtime = Option.match(info.mtime, {
-        onNone: () => self.mtime,
-        onSome: date => date.getTime() / 1_000,
-      })
-      self.size = Number(info.size)
-      if (self.size === self.lastLoadedSize && self.mtime === self.lastLoadedMtime) return self
-
-      // A shrunken file was rewritten, not appended; the byte offset no longer
-      // points into it, so re-read from the start and skip consumed lines.
-      const fromByte = self.size < self.bytesConsumed ? 0 : self.bytesConsumed
-      const read = yield* readCompleteLines(self.path, fromByte).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<AppendedLines>()),
-        ),
-      )
-      if (Option.isNone(read)) return self
-
-      const baseLine = fromByte === 0 ? 0 : self.line
-      for (const [offset, line] of read.value.lines.entries()) {
-        const index = baseLine + offset
-        if (index < self.line || !line.trim()) continue
-        // Claude Code can leave a half-written line while appending; skip it.
-        let value: unknown
-        try {
-          value = JSON.parse(line)
-        } catch {
-          self.malformed += 1
-          continue
-        }
+      for (const [index, value] of yield* consumeNewRecords(self.path, self)) {
         const parsed = parseClaudeRecord(value)
         if (parsed.success) self.ingest(parsed.record, index)
         else self.malformed += 1
       }
-      self.line = baseLine + read.value.lines.length
-      self.bytesConsumed = read.value.nextByte
-      self.lastLoadedMtime = self.mtime
-      self.lastLoadedSize = self.size
       return self
     })
   }

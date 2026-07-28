@@ -63,11 +63,7 @@ export function testFileSystem(tree: FakeTree, options: {
       return Effect.succeed(file.content)
     },
 
-    stream: (path: string, streamOptions?: {
-      readonly bytesToRead?: FileSystem.SizeInput | undefined
-      readonly chunkSize?: FileSystem.SizeInput | undefined
-      readonly offset?: FileSystem.SizeInput | undefined
-    }) => {
+    stream: (path, streamOptions) => {
       const denial = guard('stream', path)
       if (Option.isSome(denial)) return Stream.fail(denial.value)
       const file = files.get(path)
@@ -103,7 +99,7 @@ export function testFileSystem(tree: FakeTree, options: {
         return Effect.succeed({
           type: 'File',
           mtime: file.mtime === undefined ? Option.none() : Option.some(new Date(file.mtime * 1_000)),
-          size: FileSystem.Size(encoder.encode(file.content).length),
+          size: FileSystem.Size(Buffer.byteLength(file.content)),
         } as FileSystem.File.Info)
       }
       if (directories.has(path)) {

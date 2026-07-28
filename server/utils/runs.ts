@@ -1,5 +1,5 @@
 import { join, resolve, sep } from 'node:path'
-import { Clock, Effect } from 'effect'
+import { Clock, Effect, Predicate } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import {
   parseClaudeRecord,
@@ -21,10 +21,12 @@ import type {
 import { plainText, readHead } from './transcript'
 
 /**
- * How many transcript files are read at once. Bounded rather than unbounded so
- * a large history cannot exhaust file descriptors.
+ * How many transcript files one scan fan-out reads at once. Bounded rather
+ * than unbounded so a large history cannot exhaust file descriptors; nested
+ * fan-outs (directories × files) multiply it, which keeps the worst case in
+ * the low hundreds of open files.
  */
-const FILE_CONCURRENCY = 16
+export const FILE_CONCURRENCY = 16
 
 /**
  * The first prompt appears within the first records of a transcript, so only
@@ -64,7 +66,7 @@ const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
     Effect.catchTag('PlatformError', () => Effect.succeed('')),
   )
 
-  for (const line of raw.split('\n').slice(0, 61)) {
+  for (const line of raw.split('\n', 61)) {
     let value: unknown
     try {
       value = JSON.parse(line)
@@ -109,48 +111,53 @@ export const collect = Effect.fn('collect')(function*(
     return info.mtime._tag === 'Some' ? info.mtime.value.getTime() >= cutoff : true
   })
 
-  const sessions = yield* Effect.forEach(names, name => Effect.gen(function*() {
-    if (!name.endsWith('.jsonl')) return []
-    const path = join(projectDirectory, name)
-    if (!(yield* freshFile(path))) return []
-    const sid = name.slice(0, -'.jsonl'.length)
-    return [{
-      key: sid,
-      path,
-      kind: 'session',
-      sid,
-      meta: null,
-      label: (yield* firstPrompt(path)) || sid.slice(0, 8),
-    } satisfies CollectedItem]
-  }), { concurrency: FILE_CONCURRENCY })
+  const sessions = yield* Effect.forEach(
+    names.filter(name => name.endsWith('.jsonl')),
+    name => Effect.gen(function*() {
+      const path = join(projectDirectory, name)
+      if (!(yield* freshFile(path))) return null
+      const sid = name.slice(0, -'.jsonl'.length)
+      return {
+        key: sid,
+        path,
+        kind: 'session',
+        sid,
+        meta: null,
+        label: (yield* firstPrompt(path)) || sid.slice(0, 8),
+      } satisfies CollectedItem
+    }),
+    { concurrency: FILE_CONCURRENCY },
+  )
 
-  const subagents = yield* Effect.forEach(names, sessionName => Effect.gen(function*() {
-    const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
-    const subagentNames = yield* fs.readDirectory(subagentsDirectory).pipe(
-      Effect.catchTag('PlatformError', () => Effect.succeed([] as Array<string>)),
-    )
-    return yield* Effect.forEach(
-      subagentNames.sort((a, b) => a.localeCompare(b)),
-      name => Effect.gen(function*() {
-        if (!name.endsWith('.jsonl')) return []
-        const path = join(subagentsDirectory, name)
-        if (!(yield* freshFile(path))) return []
-        const agent = name.slice(0, -'.jsonl'.length)
-        const meta = yield* readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`))
-        return [{
-          key: `${sessionName}/${agent}`,
-          path,
-          kind: 'subagent',
-          sid: sessionName,
-          meta,
-          label: meta?.description || agent,
-        } satisfies CollectedItem]
-      }),
-      { concurrency: FILE_CONCURRENCY },
-    )
-  }), { concurrency: FILE_CONCURRENCY })
+  const subagents = yield* Effect.forEach(
+    names.filter(name => !name.endsWith('.jsonl')),
+    sessionName => Effect.gen(function*() {
+      const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
+      const subagentNames = yield* fs.readDirectory(subagentsDirectory).pipe(
+        Effect.catchTag('PlatformError', () => Effect.succeed([] as Array<string>)),
+      )
+      return yield* Effect.forEach(
+        subagentNames.filter(name => name.endsWith('.jsonl')).sort((a, b) => a.localeCompare(b)),
+        name => Effect.gen(function*() {
+          const path = join(subagentsDirectory, name)
+          if (!(yield* freshFile(path))) return null
+          const agent = name.slice(0, -'.jsonl'.length)
+          const meta = yield* readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`))
+          return {
+            key: `${sessionName}/${agent}`,
+            path,
+            kind: 'subagent',
+            sid: sessionName,
+            meta,
+            label: meta?.description || agent,
+          } satisfies CollectedItem
+        }),
+      )
+    }),
+    { concurrency: FILE_CONCURRENCY },
+  )
 
-  return [...sessions.flat(), ...subagents.flat(2)]
+  return [...sessions, ...subagents.flat()].filter(Predicate.isNotNull)
 })
 
 export const buildTree = Effect.fn('buildTree')(function*(

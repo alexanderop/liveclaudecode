@@ -1,6 +1,5 @@
 import { basename } from 'node:path'
 import { Cache, Clock, Context, Effect, Layer, Result } from 'effect'
-import type * as FileSystem from 'effect/FileSystem'
 import {
   buildCodexTree,
   codexRunDiagnostics,
@@ -13,6 +12,7 @@ import {
 } from './copilot-runs'
 import {
   buildTree,
+  FILE_CONCURRENCY,
   flatten,
   pathFor,
   rootOf,
@@ -25,7 +25,6 @@ import { projectName, resolveProjectDirectories } from './project'
 import {
   CodexScanCache,
   CopilotScanCache,
-  PromptCache,
   ScanCache,
   SessionLocatorCache,
   UnknownRun,
@@ -168,13 +167,18 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   const locators = new Map<string, SessionLocator>()
   const statuses: SessionSourceStatus[] = []
 
-  const claudeResult = yield* Effect.result(Effect.gen(function*() {
-    const directories = yield* resolveProjectDirectories(projectInput)
-    return yield* Effect.forEach(directories, directory => Effect.gen(function*() {
-      const tree = yield* buildTree(directory.directory, hours)
-      return { directory: directory.directory, tree }
-    }), { concurrency: 'unbounded' })
-  }))
+  // The three sources read disjoint storage roots, so their scans overlap.
+  const [claudeResult, codexResult, copilotResult] = yield* Effect.all([
+    Effect.result(Effect.gen(function*() {
+      const directories = yield* resolveProjectDirectories(projectInput)
+      return yield* Effect.forEach(directories, directory => Effect.gen(function*() {
+        const tree = yield* buildTree(directory.directory, hours)
+        return { directory: directory.directory, tree }
+      }), { concurrency: FILE_CONCURRENCY })
+    })),
+    Effect.result(buildCodexTree(hours)),
+    Effect.result(buildCopilotTree(hours)),
+  ], { concurrency: 3 })
 
   if (Result.isSuccess(claudeResult)) {
     let malformed = 0
@@ -200,7 +204,6 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     statuses.push(sourceStatus('claude', 0, 0, failureMessage(claudeResult.failure)))
   }
 
-  const codexResult = yield* Effect.result(buildCodexTree(hours))
   if (Result.isSuccess(codexResult)) {
     const tree = codexResult.success
     for (const root of tree.roots) {
@@ -221,7 +224,6 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     statuses.push(sourceStatus('codex', 0, 0, failureMessage(codexResult.failure)))
   }
 
-  const copilotResult = yield* Effect.result(buildCopilotTree(hours))
   if (Result.isSuccess(copilotResult)) {
     const tree = copilotResult.success
     for (const root of tree.roots) {
@@ -297,14 +299,10 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   } satisfies SessionCatalog
 })
 
-/** Services the catalog build reaches for when a cache lookup misses. */
-type CatalogServices =
-  | FileSystem.FileSystem
-  | ScanCache
-  | CodexScanCache
-  | CopilotScanCache
-  | PromptCache
-  | SessionLocatorCache
+interface CatalogKey {
+  readonly projectInput: string
+  readonly hours: number
+}
 
 /**
  * Deduplicates catalog builds without ever serving a stale one.
@@ -313,28 +311,26 @@ type CatalogServices =
  * several requests routinely ask for the same catalog at once. A zero
  * time-to-live makes every completed build expire immediately while concurrent
  * callers still share the single in-flight build, so responses always reflect
- * the transcripts as they are on disk.
+ * the transcripts as they are on disk. Only in-flight builds ever occupy an
+ * entry, so the capacity is a formality.
  */
 export class SessionCatalogCache extends Context.Service<SessionCatalogCache, {
   readonly get: (
     projectInput: string,
     hours: number,
-  ) => Effect.Effect<SessionCatalog, never, CatalogServices>
+  ) => ReturnType<typeof buildSessionCatalog>
 }>()('lcc/SessionCatalogCache') {
   static readonly layer = Layer.effect(
     SessionCatalogCache,
     Effect.gen(function*() {
       const cache = yield* Cache.makeWith(
-        (key: string) => {
-          const separator = key.lastIndexOf('\0')
-          return buildSessionCatalog(key.slice(0, separator), Number(key.slice(separator + 1)))
-        },
+        (key: CatalogKey) => buildSessionCatalog(key.projectInput, key.hours),
         // `Cache.make` treats a literal 0 time-to-live as "not set" and would
         // cache forever, so the duration is provided as a function instead.
-        { capacity: 64, timeToLive: () => 0, requireServicesAt: 'lookup' },
+        { capacity: 8, timeToLive: () => 0, requireServicesAt: 'lookup' },
       )
       return SessionCatalogCache.of({
-        get: (projectInput, hours) => Cache.get(cache, `${projectInput}\0${hours}`),
+        get: (projectInput, hours) => Cache.get(cache, { projectInput, hours }),
       })
     }),
   )

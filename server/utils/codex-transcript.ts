@@ -1,5 +1,5 @@
-import { Clock, Effect, Option, Predicate } from 'effect'
-import * as FileSystem from 'effect/FileSystem'
+import { Clock, Effect, Predicate } from 'effect'
+import type * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import {
   parseCodexPlanInput,
@@ -30,12 +30,11 @@ import type {
 } from '#shared/types/run'
 import {
   clip,
+  consumeNewRecords,
   findMilestones,
-  readCompleteLines,
   resultText,
   shortPath,
   toolSummary,
-  type AppendedLines,
 } from './transcript'
 
 interface CodexToolRecord {
@@ -181,62 +180,21 @@ export class CodexTranscriptScan {
   lastTs: Timestamp = null
   usage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
   taskActive = false
-  private mtime = 0
-  private size = 0
-  private bytesConsumed = 0
-  private lastLoadedMtime = 0
-  private lastLoadedSize = -1
+  mtime = 0
+  size = 0
+  bytesConsumed = 0
+  lastLoadedMtime = 0
+  lastLoadedSize = -1
 
   constructor(path: string | URL) {
     this.path = path.toString()
   }
 
+  /** Parse the records appended since the last refresh; see consumeNewRecords. */
   get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
     const self = this
     return Effect.gen(function*() {
-      const fs = yield* FileSystem.FileSystem
-      const infoOption = yield* fs.stat(self.path).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<FileSystem.File.Info>()),
-        ),
-      )
-      if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return self
-
-      const info = infoOption.value
-      const mtime = Option.match(info.mtime, {
-        onNone: () => self.mtime,
-        onSome: date => date.getTime() / 1_000,
-      })
-      const size = Number(info.size)
-      self.mtime = mtime
-      self.size = size
-      if (size === self.lastLoadedSize && mtime === self.lastLoadedMtime) return self
-
-      // A shrunken file was rewritten, not appended; the byte offset no longer
-      // points into it, so re-read from the start and skip consumed lines.
-      const fromByte = size < self.bytesConsumed ? 0 : self.bytesConsumed
-      const read = yield* readCompleteLines(self.path, fromByte).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<AppendedLines>()),
-        ),
-      )
-      if (Option.isNone(read)) return self
-
-      const baseLine = fromByte === 0 ? 0 : self.line
-      for (const [offset, line] of read.value.lines.entries()) {
-        const index = baseLine + offset
-        if (index < self.line || !line.trim()) continue
-        let value: unknown
-        try {
-          value = JSON.parse(line) as unknown
-        } catch {
-          self.malformed += 1
-          continue
-        }
+      for (const [index, value] of yield* consumeNewRecords(self.path, self)) {
         const parsed = parseCodexRecord(value)
         if (!parsed.success) {
           self.malformed += 1
@@ -245,10 +203,6 @@ export class CodexTranscriptScan {
         if (parsed.record.kind === 'unknown') self.unknown += 1
         self.ingest(parsed.record, index)
       }
-      self.line = baseLine + read.value.lines.length
-      self.bytesConsumed = read.value.nextByte
-      self.lastLoadedMtime = mtime
-      self.lastLoadedSize = size
       return self
     })
   }

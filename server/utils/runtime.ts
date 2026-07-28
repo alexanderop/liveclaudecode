@@ -1,16 +1,29 @@
 import { Effect, Layer, ManagedRuntime, Result } from 'effect'
 import type * as PlatformError from 'effect/PlatformError'
+import { NodeFileSystem } from '@effect/platform-node'
 import { createError } from 'h3'
 import {
-  AppLayer,
+  CodexScanCache,
+  CopilotScanCache,
   type InvalidRunKey,
   type NoTranscriptsFound,
+  PromptCache,
+  ScanCache,
+  SessionLocatorCache,
   type UnknownProject,
   type UnknownRun,
 } from './services'
 import { SessionCatalogCache } from './session-browser'
 
-const ServerLayer = Layer.mergeAll(AppLayer, SessionCatalogCache.layer)
+/** Everything the server needs, backed by the real filesystem. */
+const ServerLayer = Layer.mergeAll(
+  ScanCache.layer,
+  CodexScanCache.layer,
+  CopilotScanCache.layer,
+  SessionLocatorCache.layer,
+  PromptCache.layer,
+  SessionCatalogCache.layer,
+).pipe(Layer.provideMerge(NodeFileSystem.layer))
 
 type AppServices = Layer.Success<typeof ServerLayer>
 

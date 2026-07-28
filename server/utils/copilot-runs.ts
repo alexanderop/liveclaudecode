@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { Clock, Effect, Option, Result } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type { CopilotTranscriptScan } from './copilot-transcript'
+import { FILE_CONCURRENCY } from './runs'
 import { CopilotScanCache, VsCodeUserDataDirectories } from './services'
 import { parseCopilotWorkspace } from '#shared/schemas/copilot'
 import type { RunNode, TranscriptStats } from '#shared/types/run'
@@ -214,7 +215,7 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
   const results = yield* Effect.forEach(
     discovery.locations,
     location => Effect.result(cache.get(location)),
-    { concurrency: 'unbounded' },
+    { concurrency: FILE_CONCURRENCY },
   )
   const readable = results.flatMap((result, index) => Result.isSuccess(result)
     ? [{ location: discovery.locations[index]!, scan: result.success }]
