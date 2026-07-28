@@ -2,6 +2,7 @@
 import security from '@comark/nuxt/plugins/security'
 import type { TranscriptEvent } from '#shared/types/run'
 import type { FeedDensity } from '~/composables/useLiveRuns'
+import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
 
 const markdownPlugins = [
   security({
@@ -9,6 +10,7 @@ const markdownPlugins = [
     allowedProtocols: ['http', 'https', 'mailto'],
   }),
 ]
+const markdownComponents = { a: TranscriptMarkdownLink }
 
 const props = defineProps<{
   events: TranscriptEvent[]
@@ -213,6 +215,7 @@ watch(
             class="markdown-body"
             :markdown="event.body || ''"
             :plugins="markdownPlugins"
+            :components="markdownComponents"
           />
           <pre v-else>{{ event.body || '' }}</pre>
           <div v-if="(event.full || 0) > 8_000" class="truncated">Truncated · {{ formatCount(event.full || 0) }} characters total</div>

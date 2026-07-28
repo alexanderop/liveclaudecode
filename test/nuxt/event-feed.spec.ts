@@ -46,6 +46,30 @@ describe('EventFeed', () => {
     expect(component.get('.markdown-body').text()).toContain('[unsafe]')
   })
 
+  it('does not route transcript file references through the dashboard', async () => {
+    const component = await mountSuspended(EventFeed, {
+      props: {
+        events: [textEvent(
+          '[local file](src/components/Panel.vue) [web page](https://example.com/docs) [section](#result)',
+        )],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+    await flushPromises()
+
+    const links = component.findAll('.markdown-body a')
+    expect(links.map(link => link.text())).toEqual(['web page', 'section'])
+    expect(links[0]?.attributes()).toMatchObject({
+      href: 'https://example.com/docs',
+      target: '_blank',
+      rel: 'noopener noreferrer',
+    })
+    expect(links[1]?.attributes('href')).toBe('#result')
+    expect(component.get('.markdown-inert-link').text()).toBe('local file')
+  })
+
   it('explains when the error filter has no matching events', async () => {
     const component = await mountSuspended(EventFeed, {
       props: {
