@@ -99,10 +99,15 @@ const CanvasStub = defineComponent({
 })
 
 const InspectorStub = defineComponent({
-  props: ['selected', 'selectedKey'],
+  props: ['selected', 'selectedKey', 'events', 'eventsLoading'],
   emits: ['select', 'close'],
   template: `
-    <aside class="inspector-stub" :data-selected="selectedKey">
+    <aside
+      class="inspector-stub"
+      :data-selected="selectedKey"
+      :data-event-count="events.length"
+      :data-events-loading="String(eventsLoading)"
+    >
       {{ selected?.label }}
       <button class="close-inspector" type="button" @click="$emit('close')">Close</button>
     </aside>
@@ -111,7 +116,7 @@ const InspectorStub = defineComponent({
 
 describe('persistent session canvas', () => {
   it('keeps the canvas mounted while node details open and empty space closes them', async () => {
-    vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
+    const fetch = vi.fn(async (url: string) => {
       if (url === '/api/tree') {
         return {
           projects: [{ id: '/workspace', name: 'workspace', roots: [root] }],
@@ -120,6 +125,22 @@ describe('persistent session canvas', () => {
         }
       }
       if (url.startsWith('/api/run')) return run
+      if (url.includes('key=review')) {
+        return {
+          key: child.key,
+          events: [{
+            role: 'assistant',
+            kind: 'text',
+            ts: '2026-07-28T10:01:00.000Z',
+            line: 1,
+            body: 'Reviewing the requested flow.',
+          }],
+          next: 1,
+          revision: 1,
+          reset: false,
+          node: child,
+        }
+      }
       return {
         key: root.key,
         events: [],
@@ -128,7 +149,8 @@ describe('persistent session canvas', () => {
         reset: false,
         node: root,
       }
-    }))
+    })
+    vi.stubGlobal('$fetch', fetch)
 
     const component = await mountSuspended(IndexPage, {
       global: {
@@ -151,6 +173,9 @@ describe('persistent session canvas', () => {
 
     expect(component.get('.inspector-stub').attributes('data-selected')).toBe('review')
     expect(component.get('.inspector-stub').text()).toContain('Review agent')
+    expect(component.get('.inspector-stub').attributes('data-event-count')).toBe('1')
+    expect(component.get('.inspector-stub').attributes('data-events-loading')).toBe('false')
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('key=review'))
     expect(component.get('.canvas-stub').element).toBe(originalCanvas)
 
     await component.get('.canvas-empty').trigger('click')

@@ -31,11 +31,13 @@ const inspectedNode = computed(() => {
 function closePanel(): void {
   activePanel.value = null
   inspectedKey.value = null
+  live.clearInspection()
 }
 
 function inspectCanvasNode(key: string): void {
   inspectedKey.value = key
   activePanel.value = 'inspector'
+  void live.inspect(key)
 }
 
 function openSessionPanel(panel: SessionPanel): void {
@@ -170,8 +172,15 @@ onUnmounted(() => window.removeEventListener('keydown', handleShortcut))
           :root="live.selectedRoot.value"
           :selected="inspectedNode"
           :selected-key="inspectedKey"
+          :events="live.inspectedEvents.value"
+          :events-loading="live.inspectedEventsLoading.value"
+          :density="live.density.value"
+          :errors-only="live.errorsOnly.value"
+          :follow-output="live.followOutput.value"
           @select="inspectCanvasNode"
           @close="closePanel"
+          @update:density="live.density.value = $event"
+          @update:errors-only="live.errorsOnly.value = $event"
         />
 
         <aside v-else-if="activePanel" class="session-panel" :aria-label="`${views.find(view => view.id === activePanel)?.label} panel`">

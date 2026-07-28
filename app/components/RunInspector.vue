@@ -1,17 +1,26 @@
 <script setup lang="ts">
-import type { RunNode, RunResponse } from '#shared/types/run'
+import type { RunNode, RunResponse, TranscriptEvent } from '#shared/types/run'
+import type { FeedDensity } from '~/composables/useLiveRuns'
 
 const props = defineProps<{
   run: RunResponse | null
   root: RunNode | null
   selected: RunNode | null
   selectedKey: string | null
+  events: TranscriptEvent[]
+  eventsLoading: boolean
+  density: FeedDensity
+  errorsOnly: boolean
+  followOutput: boolean
 }>()
 
 const emit = defineEmits<{
   select: [key: string]
   close: []
+  'update:density': [density: FeedDensity]
+  'update:errorsOnly': [errorsOnly: boolean]
 }>()
+const activeTab = ref<'activity' | 'details'>('activity')
 
 const status = computed(() => {
   if (!props.selected) return { label: 'Inactive', class: 'inactive' }
@@ -37,6 +46,10 @@ const selectedDiagnostics = computed(() =>
 const selectedOutcome = computed(() =>
   props.run?.diagnostics.outcomes.find(outcome => outcome.childKey === props.selectedKey) || null,
 )
+
+watch(() => props.selectedKey, () => {
+  activeTab.value = 'activity'
+})
 </script>
 
 <template>
@@ -51,7 +64,66 @@ const selectedOutcome = computed(() =>
       </button>
     </div>
 
-    <template v-if="run && root && selected">
+    <div v-if="run && root && selected" class="inspector-tabs" role="tablist" aria-label="Selected agent view">
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="activeTab === 'activity'"
+        :class="{ selected: activeTab === 'activity' }"
+        @click="activeTab = 'activity'"
+      >
+        <UIcon name="i-lucide-activity" />
+        Activity
+      </button>
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="activeTab === 'details'"
+        :class="{ selected: activeTab === 'details' }"
+        @click="activeTab = 'details'"
+      >
+        <UIcon name="i-lucide-list-tree" />
+        Details
+      </button>
+    </div>
+
+    <div v-if="run && root && selected && activeTab === 'activity'" class="inspector-activity">
+      <div class="session-panel-controls">
+        <div class="segments" role="group" aria-label="Agent event detail">
+          <button
+            v-for="option in (['compact', 'normal', 'raw'] as const)"
+            :key="option"
+            type="button"
+            :class="{ selected: density === option }"
+            :aria-pressed="density === option"
+            @click="emit('update:density', option)"
+          >{{ option }}</button>
+        </div>
+        <button
+          type="button"
+          class="quiet-action"
+          :class="{ active: errorsOnly }"
+          :aria-pressed="errorsOnly"
+          @click="emit('update:errorsOnly', !errorsOnly)"
+        >
+          <UIcon name="i-lucide-circle-alert" />Errors
+        </button>
+      </div>
+      <div v-if="eventsLoading" class="inspector-activity-loading" aria-live="polite">
+        <UIcon name="i-lucide-loader-circle" />
+        Loading agent activity…
+      </div>
+      <EventFeed
+        v-else
+        :events="events"
+        :density="density"
+        :errors-only="errorsOnly"
+        :follow-output="followOutput"
+        @select="emit('select', $event)"
+      />
+    </div>
+
+    <div v-else-if="run && root && selected" class="inspector-details">
       <section class="property-group">
         <div class="property-row">
           <span>Status</span>
@@ -156,7 +228,7 @@ const selectedOutcome = computed(() =>
           <strong>{{ selected.errors }}</strong>
         </div>
       </section>
-    </template>
+    </div>
 
     <div v-else class="inspector-empty">
       <UIcon name="i-lucide-panel-right" />

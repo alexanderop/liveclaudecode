@@ -495,8 +495,11 @@ kbd {
 .inspector {
   position: relative;
   z-index: 8;
+  display: flex;
   min-width: 0;
-  overflow-y: auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   border-left: 1px solid var(--line-soft);
   background: #101011;
   box-shadow: -16px 0 40px rgb(0 0 0 / 12%);
@@ -535,6 +538,57 @@ kbd {
 .inspector-close:focus-visible,
 .session-panel-title button:focus-visible { outline: 2px solid #7d6fc2; outline-offset: 1px; }
 .inspector-close svg, .session-panel-title button svg { width: 13px; height: 13px; }
+.inspector-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  padding: 0 9px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.inspector-tabs button {
+  position: relative;
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: #66636b;
+  cursor: pointer;
+  font-size: 10px;
+}
+.inspector-tabs button:hover { color: #aaa6ae; }
+.inspector-tabs button.selected { color: #d0ccd5; }
+.inspector-tabs button.selected::after {
+  position: absolute;
+  right: 12px;
+  bottom: -1px;
+  left: 12px;
+  height: 1px;
+  background: #aaa3d6;
+  content: "";
+}
+.inspector-tabs svg { width: 12px; height: 12px; }
+.inspector-details { min-height: 0; overflow-y: auto; }
+.inspector-activity { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+.inspector-activity .session-panel-controls .quiet-action { margin-left: auto; }
+.inspector-activity > .feed { min-height: 0; padding: 14px 10px 32px; }
+.inspector-activity .feed-empty { min-height: 100%; padding: 24px 12px; }
+.inspector-activity .event { grid-template-columns: 25px minmax(0, 1fr); gap: 7px; }
+.inspector-activity .event-icon { width: 22px; height: 22px; flex-basis: 22px; }
+.inspector-activity .event-content { padding-bottom: 16px; }
+.inspector-activity .event-content > header { flex-wrap: wrap; gap: 4px 7px; }
+.inspector-activity .markdown-body { font-size: 11px; }
+.inspector-activity-loading {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #66636b;
+  font-size: 10px;
+}
+.inspector-activity-loading svg { width: 13px; height: 13px; animation: spin 1.2s linear infinite; }
 .property-group { padding: 10px 9px; border-bottom: 1px solid var(--line-soft); }
 .property-row { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 7px; color: #68686e; font-size: 10.5px; }
 .property-value { display: inline-flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; color: #b3b3b8; font-weight: 480; text-overflow: ellipsis; white-space: nowrap; }

@@ -29,8 +29,13 @@ export function useLiveRuns() {
   const selectedKey = ref<string | null>(null)
   const run = ref<RunResponse | null>(null)
   const events = ref<TranscriptEvent[]>([])
+  const inspectedKey = ref<string | null>(null)
+  const inspectedEvents = ref<TranscriptEvent[]>([])
+  const inspectedEventsLoading = ref(false)
   const since = ref(0)
   const eventRevision = ref(0)
+  const inspectedSince = ref(0)
+  const inspectedEventRevision = ref(0)
   const offline = ref(false)
   const query = ref('')
   const sourceFilter = ref<'all' | 'claude' | 'codex' | 'copilot'>('all')
@@ -47,6 +52,7 @@ export function useLiveRuns() {
   let runTimer: ReturnType<typeof setInterval> | undefined
   let treePending = false
   let eventPending = false
+  let inspectedEventPending = false
   let runPending = false
 
   const nodeIndex = computed(() => {
@@ -165,9 +171,51 @@ export function useLiveRuns() {
     }
   }
 
+  async function pollInspectedEvents(): Promise<void> {
+    const key = inspectedKey.value
+    const project = selectedProject.value
+    if (!key || !project || inspectedEventPending) return
+    inspectedEventPending = true
+    try {
+      const response = await request<EventsResponse>(
+        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${inspectedSince.value}&revision=${inspectedEventRevision.value}`,
+      )
+      if (!response || inspectedKey.value !== key || selectedProject.value !== project) return
+      inspectedSince.value = response.next
+      inspectedEventRevision.value = response.revision
+      if (response.reset) inspectedEvents.value = [...response.events]
+      else inspectedEvents.value.push(...response.events)
+    } finally {
+      inspectedEventPending = false
+      if (inspectedKey.value === key) inspectedEventsLoading.value = false
+      else if (inspectedKey.value) void pollInspectedEvents()
+    }
+  }
+
+  async function inspect(key: string): Promise<void> {
+    if (!selectedProject.value) return
+    if (inspectedKey.value !== key) {
+      inspectedKey.value = key
+      inspectedSince.value = 0
+      inspectedEventRevision.value = 0
+      inspectedEvents.value = []
+      inspectedEventsLoading.value = true
+    }
+    await pollInspectedEvents()
+  }
+
+  function clearInspection(): void {
+    inspectedKey.value = null
+    inspectedSince.value = 0
+    inspectedEventRevision.value = 0
+    inspectedEvents.value = []
+    inspectedEventsLoading.value = false
+  }
+
   async function select(key: string, project = selectedProject.value): Promise<void> {
     if (!project) return
     if (key === selectedKey.value && project === selectedProject.value && run.value) return
+    clearInspection()
     selectedProject.value = project
     selectedKey.value = key
     since.value = 0
@@ -180,7 +228,10 @@ export function useLiveRuns() {
   onMounted(() => {
     void loadTree()
     treeTimer = setInterval(loadTree, 4_000)
-    eventTimer = setInterval(pollEvents, 2_000)
+    eventTimer = setInterval(() => {
+      void pollEvents()
+      void pollInspectedEvents()
+    }, 2_000)
     runTimer = setInterval(loadRun, 6_000)
   })
 
@@ -202,6 +253,8 @@ export function useLiveRuns() {
     selectedRoot,
     run,
     events,
+    inspectedEvents,
+    inspectedEventsLoading,
     offline,
     query,
     sourceFilter,
@@ -214,5 +267,7 @@ export function useLiveRuns() {
     errorsOnly,
     density,
     select,
+    inspect,
+    clearInspection,
   }
 }

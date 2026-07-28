@@ -38,7 +38,7 @@ const emptyState = computed(() => {
   if (!props.events.length) {
     return {
       title: 'No activity yet',
-      description: 'Select a session from the sidebar to follow its activity.',
+      description: 'No transcript activity has been recorded for this selection.',
     }
   }
   if (props.errorsOnly) {
