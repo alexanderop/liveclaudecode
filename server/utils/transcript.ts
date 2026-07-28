@@ -1,4 +1,4 @@
-import { Clock, Effect, Option, Predicate } from 'effect'
+import { Clock, Effect, Option, Predicate, Stream } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import {
@@ -84,6 +84,117 @@ const PHASE_PATTERNS = [
 
 const FAIL_RE = /\b([1-9]\d* failed|FAIL\b(?!\s+0\b)|failing|error TS\d+|Error:|✗|✘|command not found|exit code [1-9]|Test Files\s+[1-9]\d* failed)/i
 const PASS_RE = /\b(passed|✓|PASS\b|0 problems|no issues|success)/i
+
+const utf8 = new TextDecoder()
+
+function bytesOf(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
+  return chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks)
+}
+
+interface AppendedLines {
+  lines: string[]
+  nextByte: number
+}
+
+/**
+ * Read the complete lines that start at byte `fromByte`, leaving a trailing
+ * partial line for a later read. `nextByte` is the offset just past the last
+ * newline consumed, so the next call picks up exactly where this one stopped.
+ */
+const readCompleteLines = Effect.fn('readCompleteLines')(function*(
+  path: string,
+  fromByte: number,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const bytes = bytesOf(yield* Stream.runCollect(fs.stream(path, { offset: fromByte })))
+  const lastNewline = bytes.lastIndexOf(0x0A)
+  if (lastNewline < 0) return { lines: [], nextByte: fromByte } satisfies AppendedLines
+  return {
+    lines: utf8.decode(bytes.subarray(0, lastNewline)).split('\n'),
+    nextByte: fromByte + lastNewline + 1,
+  } satisfies AppendedLines
+})
+
+/** Read at most the first `maxBytes` of a file as text. */
+export const readHead = Effect.fn('readHead')(function*(path: string, maxBytes: number) {
+  const fs = yield* FileSystem.FileSystem
+  return utf8.decode(bytesOf(yield* Stream.runCollect(fs.stream(path, { bytesToRead: maxBytes }))))
+})
+
+/** The bookkeeping an incremental JSONL scan carries between refreshes. */
+export interface IncrementalScanState {
+  line: number
+  malformed: number
+  mtime: number
+  size: number
+  bytesConsumed: number
+  lastLoadedMtime: number
+  lastLoadedSize: number
+}
+
+/**
+ * Advance an incremental JSONL scan and return the newly complete records as
+ * `[absolute line index, parsed JSON]` pairs.
+ *
+ * A missing file is not an error — scans are polled while the writer is still
+ * creating files. The file is stat'd first so an unchanged one costs no read,
+ * and an appended one is read only from the last consumed byte onward. Lines
+ * that fail to parse as JSON count toward `state.malformed`.
+ */
+export const consumeNewRecords = Effect.fn('consumeNewRecords')(function*(
+  path: string,
+  state: IncrementalScanState,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const records: Array<[index: number, value: unknown]> = []
+
+  const infoOption = yield* fs.stat(path).pipe(
+    Effect.map(Option.some),
+    Effect.catchIf(
+      error => error.reason._tag === 'NotFound',
+      () => Effect.succeed(Option.none<FileSystem.File.Info>()),
+    ),
+  )
+  if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return records
+
+  const info = infoOption.value
+  state.mtime = Option.match(info.mtime, {
+    onNone: () => state.mtime,
+    onSome: date => date.getTime() / 1_000,
+  })
+  state.size = Number(info.size)
+  if (state.size === state.lastLoadedSize && state.mtime === state.lastLoadedMtime) return records
+
+  // A shrunken file was rewritten, not appended; the byte offset no longer
+  // points into it, so re-read from the start and skip consumed lines.
+  const fromByte = state.size < state.bytesConsumed ? 0 : state.bytesConsumed
+  const read = yield* readCompleteLines(path, fromByte).pipe(
+    Effect.map(Option.some),
+    Effect.catchIf(
+      error => error.reason._tag === 'NotFound',
+      () => Effect.succeed(Option.none<AppendedLines>()),
+    ),
+  )
+  if (Option.isNone(read)) return records
+
+  const { lines, nextByte } = read.value
+  const baseLine = fromByte === 0 ? 0 : state.line
+  for (let offset = fromByte === 0 ? state.line : 0; offset < lines.length; offset += 1) {
+    const line = lines[offset]!
+    if (!line.trim()) continue
+    // A writer can leave a half-written line while appending; skip it.
+    try {
+      records.push([baseLine + offset, JSON.parse(line)])
+    } catch {
+      state.malformed += 1
+    }
+  }
+  state.line = baseLine + lines.length
+  state.bytesConsumed = nextByte
+  state.lastLoadedMtime = state.mtime
+  state.lastLoadedSize = state.size
+  return records
+})
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -249,60 +360,25 @@ export class TranscriptScan {
   finalText = ''
   cwd = ''
   private turnComplete = false
-  private mtime = 0
-  private size = 0
+  mtime = 0
+  size = 0
+  bytesConsumed = 0
+  lastLoadedMtime = 0
+  lastLoadedSize = -1
 
   constructor(path: string | URL) {
     this.path = path.toString()
   }
 
-  /**
-   * Re-read the transcript from the last line consumed.
-   *
-   * A missing transcript is not an error — the tree is polled while Claude Code
-   * is still creating files. Any other filesystem failure propagates.
-   */
+  /** Parse the records appended since the last refresh; see consumeNewRecords. */
   get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
     const self = this
     return Effect.gen(function*() {
-      const fs = yield* FileSystem.FileSystem
-
-      const contents = yield* Effect.all([
-        fs.readFileString(self.path),
-        fs.stat(self.path),
-      ]).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<[string, FileSystem.File.Info]>()),
-        ),
-      )
-      if (Option.isNone(contents)) return self
-
-      const [raw, info] = contents.value
-      self.mtime = Option.match(info.mtime, {
-        onNone: () => self.mtime,
-        onSome: date => date.getTime() / 1_000,
-      })
-      self.size = Number(info.size)
-
-      const completeLines = raw.split('\n').slice(0, -1)
-      for (let index = self.line; index < completeLines.length; index += 1) {
-        const line = completeLines[index]
-        if (!line?.trim()) continue
-        // Claude Code can leave a half-written line while appending; skip it.
-        let value: unknown
-        try {
-          value = JSON.parse(line)
-        } catch {
-          self.malformed += 1
-          continue
-        }
+      for (const [index, value] of yield* consumeNewRecords(self.path, self)) {
         const parsed = parseClaudeRecord(value)
         if (parsed.success) self.ingest(parsed.record, index)
         else self.malformed += 1
       }
-      self.line = completeLines.length
       return self
     })
   }

@@ -1,5 +1,5 @@
 import { basename } from 'node:path'
-import { Clock, Effect, Result } from 'effect'
+import { Cache, Clock, Context, Effect, Layer, Result } from 'effect'
 import {
   buildCodexTree,
   codexRunDiagnostics,
@@ -12,6 +12,7 @@ import {
 } from './copilot-runs'
 import {
   buildTree,
+  FILE_CONCURRENCY,
   flatten,
   pathFor,
   rootOf,
@@ -157,7 +158,7 @@ function visit(node: RunNode, use: (node: RunNode) => void): void {
   node.children.forEach(child => visit(child, use))
 }
 
-export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
+const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   projectInput: string,
   hours: number,
 ) {
@@ -166,13 +167,18 @@ export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
   const locators = new Map<string, SessionLocator>()
   const statuses: SessionSourceStatus[] = []
 
-  const claudeResult = yield* Effect.result(Effect.gen(function*() {
-    const directories = yield* resolveProjectDirectories(projectInput)
-    return yield* Effect.forEach(directories, directory => Effect.gen(function*() {
-      const tree = yield* buildTree(directory.directory, hours)
-      return { directory: directory.directory, tree }
-    }), { concurrency: 'unbounded' })
-  }))
+  // The three sources read disjoint storage roots, so their scans overlap.
+  const [claudeResult, codexResult, copilotResult] = yield* Effect.all([
+    Effect.result(Effect.gen(function*() {
+      const directories = yield* resolveProjectDirectories(projectInput)
+      return yield* Effect.forEach(directories, directory => Effect.gen(function*() {
+        const tree = yield* buildTree(directory.directory, hours)
+        return { directory: directory.directory, tree }
+      }), { concurrency: FILE_CONCURRENCY })
+    })),
+    Effect.result(buildCodexTree(hours)),
+    Effect.result(buildCopilotTree(hours)),
+  ], { concurrency: 3 })
 
   if (Result.isSuccess(claudeResult)) {
     let malformed = 0
@@ -198,7 +204,6 @@ export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
     statuses.push(sourceStatus('claude', 0, 0, failureMessage(claudeResult.failure)))
   }
 
-  const codexResult = yield* Effect.result(buildCodexTree(hours))
   if (Result.isSuccess(codexResult)) {
     const tree = codexResult.success
     for (const root of tree.roots) {
@@ -219,7 +224,6 @@ export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
     statuses.push(sourceStatus('codex', 0, 0, failureMessage(codexResult.failure)))
   }
 
-  const copilotResult = yield* Effect.result(buildCopilotTree(hours))
   if (Result.isSuccess(copilotResult)) {
     const tree = copilotResult.success
     for (const root of tree.roots) {
@@ -293,6 +297,51 @@ export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
     sources: statuses,
     locators,
   } satisfies SessionCatalog
+})
+
+interface CatalogKey {
+  readonly projectInput: string
+  readonly hours: number
+}
+
+/**
+ * Deduplicates catalog builds without ever serving a stale one.
+ *
+ * The UI polls the tree, run, and event endpoints on overlapping timers, so
+ * several requests routinely ask for the same catalog at once. A zero
+ * time-to-live makes every completed build expire immediately while concurrent
+ * callers still share the single in-flight build, so responses always reflect
+ * the transcripts as they are on disk. Only in-flight builds ever occupy an
+ * entry, so the capacity is a formality.
+ */
+export class SessionCatalogCache extends Context.Service<SessionCatalogCache, {
+  readonly get: (
+    projectInput: string,
+    hours: number,
+  ) => ReturnType<typeof buildSessionCatalog>
+}>()('lcc/SessionCatalogCache') {
+  static readonly layer = Layer.effect(
+    SessionCatalogCache,
+    Effect.gen(function*() {
+      const cache = yield* Cache.makeWith(
+        (key: CatalogKey) => buildSessionCatalog(key.projectInput, key.hours),
+        // `Cache.make` treats a literal 0 time-to-live as "not set" and would
+        // cache forever, so the duration is provided as a function instead.
+        { capacity: 8, timeToLive: () => 0, requireServicesAt: 'lookup' },
+      )
+      return SessionCatalogCache.of({
+        get: (projectInput, hours) => Cache.get(cache, { projectInput, hours }),
+      })
+    }),
+  )
+}
+
+export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
+  projectInput: string,
+  hours: number,
+) {
+  const cache = yield* SessionCatalogCache
+  return yield* cache.get(projectInput, hours)
 })
 
 function findLocator(catalog: SessionCatalog, project: string, key: string): SessionLocator | null {

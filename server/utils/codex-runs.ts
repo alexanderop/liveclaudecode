@@ -3,7 +3,7 @@ import { Clock, Effect, Result } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type { CodexTranscriptScan } from './codex-transcript'
 import { CodexScanCache, CodexSessionsDirectory } from './services'
-import { rollup } from './runs'
+import { FILE_CONCURRENCY, rollup } from './runs'
 import type {
   AgentDiagnosticSummary,
   DiagnosticIncident,
@@ -92,7 +92,7 @@ export const buildCodexTree = Effect.fn('buildCodexTree')(function*(hours: numbe
   const results = yield* Effect.forEach(
     discovery.paths,
     path => Effect.result(cache.get(path)),
-    { concurrency: 'unbounded' },
+    { concurrency: FILE_CONCURRENCY },
   )
   const readable = results.flatMap((result, index) =>
     Result.isSuccess(result) ? [{ path: discovery.paths[index]!, scan: result.success }] : [])

@@ -1,6 +1,8 @@
-import { Effect, Layer, Option } from 'effect'
+import { Effect, Layer, Option, Stream } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import * as PlatformError from 'effect/PlatformError'
+
+const encoder = new TextEncoder()
 
 export interface FakeEntry {
   content: string
@@ -26,9 +28,12 @@ const notFound = (method: string, path: string) =>
 export function testFileSystem(tree: FakeTree, options: {
   /** Paths that fail with PermissionDenied instead of being read. */
   readonly denied?: ReadonlyArray<string>
+  /** Called with the path each time file content is read (not stat'd). */
+  readonly onRead?: (path: string) => void
 } = {}): Layer.Layer<FileSystem.FileSystem> {
   const files = new Map(Object.entries(tree).map(([path, value]) => [path, entryOf(value)]))
   const denied = new Set(options.denied ?? [])
+  const onRead = options.onRead ?? (() => {})
 
   const directories = new Set<string>()
   for (const path of files.keys()) {
@@ -53,7 +58,23 @@ export function testFileSystem(tree: FakeTree, options: {
       const denial = guard('readFileString', path)
       if (Option.isSome(denial)) return Effect.fail(denial.value)
       const file = files.get(path)
-      return file ? Effect.succeed(file.content) : Effect.fail(notFound('readFileString', path))
+      if (!file) return Effect.fail(notFound('readFileString', path))
+      onRead(path)
+      return Effect.succeed(file.content)
+    },
+
+    stream: (path, streamOptions) => {
+      const denial = guard('stream', path)
+      if (Option.isSome(denial)) return Stream.fail(denial.value)
+      const file = files.get(path)
+      if (!file) return Stream.fail(notFound('stream', path))
+      onRead(path)
+      const bytes = encoder.encode(file.content)
+      const offset = Number(streamOptions?.offset ?? 0)
+      const end = streamOptions?.bytesToRead === undefined
+        ? bytes.length
+        : Math.min(bytes.length, offset + Number(streamOptions.bytesToRead))
+      return Stream.make(bytes.subarray(offset, end))
     },
 
     readDirectory: (path: string) => {
@@ -78,7 +99,7 @@ export function testFileSystem(tree: FakeTree, options: {
         return Effect.succeed({
           type: 'File',
           mtime: file.mtime === undefined ? Option.none() : Option.some(new Date(file.mtime * 1_000)),
-          size: FileSystem.Size(file.content.length),
+          size: FileSystem.Size(Buffer.byteLength(file.content)),
         } as FileSystem.File.Info)
       }
       if (directories.has(path)) {

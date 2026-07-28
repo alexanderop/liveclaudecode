@@ -3,7 +3,6 @@ import { delimiter, join } from 'node:path'
 import { Context, Effect, Layer, Schema } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
-import { NodeFileSystem } from '@effect/platform-node'
 import { TranscriptScan } from './transcript'
 import { CodexTranscriptScan } from './codex-transcript'
 import { CopilotTranscriptScan } from './copilot-transcript'
@@ -247,11 +246,6 @@ export class PromptCache extends Context.Service<PromptCache, {
   )
 }
 
-/** Everything the server needs, backed by the real filesystem. */
-export const AppLayer = Layer.mergeAll(
-  ScanCache.layer,
-  CodexScanCache.layer,
-  CopilotScanCache.layer,
-  SessionLocatorCache.layer,
-  PromptCache.layer,
-).pipe(Layer.provideMerge(NodeFileSystem.layer))
+// The full server layer is composed once in ./runtime, which is also where
+// the SessionCatalogCache defined in ./session-browser joins these services
+// (importing it here would create a services ↔ session-browser cycle).

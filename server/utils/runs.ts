@@ -1,5 +1,5 @@
 import { join, resolve, sep } from 'node:path'
-import { Clock, Effect } from 'effect'
+import { Clock, Effect, Predicate } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import {
   parseClaudeRecord,
@@ -18,7 +18,21 @@ import type {
   TimelineLane,
   Usage,
 } from '#shared/types/run'
-import { plainText } from './transcript'
+import { plainText, readHead } from './transcript'
+
+/**
+ * How many transcript files one scan fan-out reads at once. Bounded rather
+ * than unbounded so a large history cannot exhaust file descriptors; nested
+ * fan-outs (directories × files) multiply it, which keeps the worst case in
+ * the low hundreds of open files.
+ */
+export const FILE_CONCURRENCY = 16
+
+/**
+ * The first prompt appears within the first records of a transcript, so only
+ * this much of the file is read when labelling a session.
+ */
+const FIRST_PROMPT_BYTES = 256 * 1_024
 
 interface CollectedItem {
   key: string
@@ -48,12 +62,11 @@ const readSubagentMeta = Effect.fn('readSubagentMeta')(function*(path: string) {
 })
 
 const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
-  const fs = yield* FileSystem.FileSystem
-  const raw = yield* fs.readFileString(path).pipe(
+  const raw = yield* readHead(path, FIRST_PROMPT_BYTES).pipe(
     Effect.catchTag('PlatformError', () => Effect.succeed('')),
   )
 
-  for (const line of raw.split('\n').slice(0, 61)) {
+  for (const line of raw.split('\n', 61)) {
     let value: unknown
     try {
       value = JSON.parse(line)
@@ -91,7 +104,6 @@ export const collect = Effect.fn('collect')(function*(
       () => Effect.succeed([] as Array<string>),
     ),
   )).sort((a, b) => a.localeCompare(b))
-  const items: CollectedItem[] = []
 
   const freshFile = Effect.fn('freshFile')(function*(path: string) {
     const info = yield* fs.stat(path)
@@ -99,43 +111,53 @@ export const collect = Effect.fn('collect')(function*(
     return info.mtime._tag === 'Some' ? info.mtime.value.getTime() >= cutoff : true
   })
 
-  for (const name of names) {
-    if (!name.endsWith('.jsonl')) continue
-    const path = join(projectDirectory, name)
-    if (!(yield* freshFile(path))) continue
-    const sid = name.slice(0, -'.jsonl'.length)
-    items.push({
-      key: sid,
-      path,
-      kind: 'session',
-      sid,
-      meta: null,
-      label: (yield* firstPrompt(path)) || sid.slice(0, 8),
-    })
-  }
-
-  for (const sessionName of names) {
-    const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
-    const subagentNames = yield* fs.readDirectory(subagentsDirectory).pipe(
-      Effect.catchTag('PlatformError', () => Effect.succeed([] as Array<string>)),
-    )
-    for (const name of subagentNames.sort((a, b) => a.localeCompare(b))) {
-      if (!name.endsWith('.jsonl')) continue
-      const path = join(subagentsDirectory, name)
-      if (!(yield* freshFile(path))) continue
-      const agent = name.slice(0, -'.jsonl'.length)
-      const meta = yield* readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`))
-      items.push({
-        key: `${sessionName}/${agent}`,
+  const sessions = yield* Effect.forEach(
+    names.filter(name => name.endsWith('.jsonl')),
+    name => Effect.gen(function*() {
+      const path = join(projectDirectory, name)
+      if (!(yield* freshFile(path))) return null
+      const sid = name.slice(0, -'.jsonl'.length)
+      return {
+        key: sid,
         path,
-        kind: 'subagent',
-        sid: sessionName,
-        meta,
-        label: meta?.description || agent,
-      })
-    }
-  }
-  return items
+        kind: 'session',
+        sid,
+        meta: null,
+        label: (yield* firstPrompt(path)) || sid.slice(0, 8),
+      } satisfies CollectedItem
+    }),
+    { concurrency: FILE_CONCURRENCY },
+  )
+
+  const subagents = yield* Effect.forEach(
+    names.filter(name => !name.endsWith('.jsonl')),
+    sessionName => Effect.gen(function*() {
+      const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
+      const subagentNames = yield* fs.readDirectory(subagentsDirectory).pipe(
+        Effect.catchTag('PlatformError', () => Effect.succeed([] as Array<string>)),
+      )
+      return yield* Effect.forEach(
+        subagentNames.filter(name => name.endsWith('.jsonl')).sort((a, b) => a.localeCompare(b)),
+        name => Effect.gen(function*() {
+          const path = join(subagentsDirectory, name)
+          if (!(yield* freshFile(path))) return null
+          const agent = name.slice(0, -'.jsonl'.length)
+          const meta = yield* readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`))
+          return {
+            key: `${sessionName}/${agent}`,
+            path,
+            kind: 'subagent',
+            sid: sessionName,
+            meta,
+            label: meta?.description || agent,
+          } satisfies CollectedItem
+        }),
+      )
+    }),
+    { concurrency: FILE_CONCURRENCY },
+  )
+
+  return [...sessions, ...subagents.flat()].filter(Predicate.isNotNull)
 })
 
 export const buildTree = Effect.fn('buildTree')(function*(
@@ -144,7 +166,11 @@ export const buildTree = Effect.fn('buildTree')(function*(
 ) {
   const cache = yield* ScanCache
   const items = yield* collect(projectDirectory, hours)
-  const scans = yield* Effect.forEach(items, item => cache.get(item.path))
+  const scans = yield* Effect.forEach(
+    items,
+    item => cache.get(item.path),
+    { concurrency: FILE_CONCURRENCY },
+  )
   const stats = yield* Effect.forEach(scans, scan => scan.stats)
   const byKey = new Map<string, RunNode>()
 
@@ -308,8 +334,11 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
   }
   gather(root)
 
-  const scans = yield* Effect.forEach(nodes, node =>
-    Effect.flatMap(pathFor(projectDirectory, node.key), path => cache.get(path)))
+  const scans = yield* Effect.forEach(
+    nodes,
+    node => Effect.flatMap(pathFor(projectDirectory, node.key), path => cache.get(path)),
+    { concurrency: FILE_CONCURRENCY },
+  )
   const childByToolId = new Map<string, RunNode>()
   for (const node of nodes) {
     if (node.toolUseId) childByToolId.set(node.toolUseId, node)

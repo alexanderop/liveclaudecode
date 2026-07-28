@@ -1,5 +1,5 @@
-import { Clock, Effect, Option, Predicate } from 'effect'
-import * as FileSystem from 'effect/FileSystem'
+import { Clock, Effect, Predicate } from 'effect'
+import type * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import {
   parseCodexPlanInput,
@@ -28,7 +28,14 @@ import type {
   TranscriptStats,
   Usage,
 } from '#shared/types/run'
-import { clip, findMilestones, resultText, shortPath, toolSummary } from './transcript'
+import {
+  clip,
+  consumeNewRecords,
+  findMilestones,
+  resultText,
+  shortPath,
+  toolSummary,
+} from './transcript'
 
 interface CodexToolRecord {
   name: string
@@ -173,50 +180,21 @@ export class CodexTranscriptScan {
   lastTs: Timestamp = null
   usage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
   taskActive = false
-  private mtime = 0
-  private size = 0
-  private lastLoadedMtime = 0
-  private lastLoadedSize = -1
+  mtime = 0
+  size = 0
+  bytesConsumed = 0
+  lastLoadedMtime = 0
+  lastLoadedSize = -1
 
   constructor(path: string | URL) {
     this.path = path.toString()
   }
 
+  /** Parse the records appended since the last refresh; see consumeNewRecords. */
   get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
     const self = this
     return Effect.gen(function*() {
-      const fs = yield* FileSystem.FileSystem
-      const infoOption = yield* fs.stat(self.path).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<FileSystem.File.Info>()),
-        ),
-      )
-      if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return self
-
-      const info = infoOption.value
-      const mtime = Option.match(info.mtime, {
-        onNone: () => self.mtime,
-        onSome: date => date.getTime() / 1_000,
-      })
-      const size = Number(info.size)
-      self.mtime = mtime
-      self.size = size
-      if (size === self.lastLoadedSize && mtime === self.lastLoadedMtime) return self
-
-      const raw = yield* fs.readFileString(self.path)
-      const completeLines = raw.split('\n').slice(0, -1)
-      for (let index = self.line; index < completeLines.length; index += 1) {
-        const line = completeLines[index]
-        if (!line?.trim()) continue
-        let value: unknown
-        try {
-          value = JSON.parse(line) as unknown
-        } catch {
-          self.malformed += 1
-          continue
-        }
+      for (const [index, value] of yield* consumeNewRecords(self.path, self)) {
         const parsed = parseCodexRecord(value)
         if (!parsed.success) {
           self.malformed += 1
@@ -225,9 +203,6 @@ export class CodexTranscriptScan {
         if (parsed.record.kind === 'unknown') self.unknown += 1
         self.ingest(parsed.record, index)
       }
-      self.line = completeLines.length
-      self.lastLoadedMtime = mtime
-      self.lastLoadedSize = size
       return self
     })
   }
