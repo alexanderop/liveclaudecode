@@ -44,7 +44,7 @@ liveclaudecode --open
 | `project` | all projects | Repository path or Claude project-storage slug; also filters Codex sessions to the matching working directory |
 | `-p, --port` | `8787` | Port to bind |
 | `--host` | `127.0.0.1` | Host to bind |
-| `--hours` | `24` | Ignore transcripts older than this |
+| `--hours` | `168` (7 days) | Ignore transcripts older than this |
 | `--open` | off | Open the viewer in a browser |
 
 Examples:

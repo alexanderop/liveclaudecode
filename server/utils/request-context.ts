@@ -6,7 +6,7 @@ import { UnknownProject } from './services'
 
 function hoursFor(event: H3Event): number {
   const hours = Number(useRuntimeConfig(event).lcc.hours)
-  return Number.isFinite(hours) && hours >= 0 ? hours : 24
+  return Number.isFinite(hours) && hours >= 0 ? hours : 168
 }
 
 export function browserOptionsFor(event: H3Event): { project: string, hours: number } {

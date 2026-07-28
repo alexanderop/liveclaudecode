@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { parseArguments } from '../../bin/liveclaudecode'
 
 describe('CLI arguments', () => {
-  it('uses the same defaults as the original viewer', () => {
+  it('shows the last seven days by default', () => {
     expect(parseArguments([])).toMatchObject({
       project: '',
       port: 8787,
       host: '127.0.0.1',
-      hours: 24,
+      hours: 168,
       open: false,
     })
   })

@@ -13,7 +13,7 @@ export function parseArguments(argv) {
     project: '',
     port: 8787,
     host: '127.0.0.1',
-    hours: 24,
+    hours: 168,
     open: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
@@ -48,7 +48,7 @@ Arguments:
 Options:
   -p, --port <port>    port to bind (default: 8787)
       --host <host>    host to bind (default: 127.0.0.1)
-      --hours <hours>  only show recently touched runs (default: 24)
+      --hours <hours>  only show recently touched runs (default: 168 / 7 days)
       --open            open the viewer in a browser
   -V, --version        print the version
   -h, --help           show this help`

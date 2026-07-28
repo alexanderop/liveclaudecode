@@ -19,7 +19,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     lcc: {
       project: process.env.LCC_PROJECT || '',
-      hours: Number(process.env.LCC_HOURS || 24),
+      hours: Number(process.env.LCC_HOURS || 168),
     },
   },
   devServer: {
