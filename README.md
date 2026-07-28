@@ -10,8 +10,9 @@ plans, diagnostics, changed files, command outcomes, and event feed. Every
 session and agent is visibly tagged **Claude**, **Codex**, or **Copilot**, and the sidebar can
 filter by provider and project.
 
-The server is read-only, binds to localhost by default, performs no telemetry,
-and needs no network access at runtime.
+The observer is read-only, binds to localhost by default, performs no telemetry,
+and needs no network access at runtime. The optional **Ask** panel launches a
+user-selected local coding agent, which may contact its configured model provider.
 
 ## Run it
 
@@ -67,6 +68,36 @@ LCC_VSCODE_USER_DATA='/path/to/Code/User:/path/to/Code - Insiders/User' \
 `LCC_PROJECT` can separately hold a repository path or Claude project-storage
 slug to restrict all providers to one project.
 
+### Ask a local agent about a session
+
+Open a session and select **Ask** (keyboard shortcut `Q`) to start a follow-up
+conversation backed by ACP, the Agent Client Protocol. Claude and Codex are
+available. A separate ACP conversation remains attached to the observed
+session while the panel is closed, and **New** discards it.
+
+By default the server launches the official adapters on demand:
+
+```text
+npx -y @agentclientprotocol/claude-agent-acp
+npx -y @agentclientprotocol/codex-acp
+```
+
+The first use can therefore download an adapter. Claude uses the machine's
+existing Claude credentials; Codex uses its existing login or API-key
+environment. Launch commands can be overridden when the adapters are already
+installed or live somewhere else:
+
+```bash
+LCC_ACP_CLAUDE='claude-agent-acp' \
+LCC_ACP_CODEX='codex-acp' \
+./bin/liveclaudecode
+```
+
+The chat client advertises no filesystem or terminal capabilities. It allows
+read/search/fetch/thinking permission requests and rejects mutating or command
+execution requests. Codex is additionally started in its `read-only` agent
+mode. The observed JSONL files are never modified.
+
 ## What it shows
 
 - **Combined session browser:** recent Claude, Codex, and Copilot sessions grouped by
@@ -79,6 +110,8 @@ slug to restrict all providers to one project.
   available, context/cache pressure, compaction boundaries, and agent summaries.
 - **Changed work:** files written across the run and command outcomes per agent.
 - **Event feed:** compact, normal, and raw densities with an errors-only filter.
+- **Session chat:** follow-up questions answered by a local Claude or Codex ACP
+  agent with the selected transcript supplied as read-only context.
 
 Fields that a provider does not record are left empty. The viewer does not
 decrypt Codex encrypted reasoning or infer private content from unrelated stores.
@@ -160,6 +193,8 @@ The browser polls three read-only endpoints:
 | `/api/tree` | Combined recent projects, run trees, and provider health |
 | `/api/run?project=&key=` | Timeline, files, phases, and diagnostics |
 | `/api/events?project=&key=&since=` | Incremental events after index `since` |
+| `GET /api/chat?project=&key=&since=` | Incremental chat events after index `since` |
+| `POST /api/chat` | Send, cancel, or reset a session chat |
 
 This application must run as a Node server on the same machine as the local
 transcripts. Static, edge, or remote deployments cannot read them.
@@ -194,6 +229,9 @@ failure isolation.
   no result is treated as unknown, not success.
 - Local transcripts can contain prompts, tool arguments, file paths, and outputs.
   Run the server on a trusted machine and keep its default localhost binding.
+- Asking a question starts the selected ACP adapter and can send the question,
+  transcript evidence, and referenced file contents to that agent's configured
+  model provider. No agent process starts until a message is sent.
 - Cloud-only chats, prompt-history indexes, Chromium caches, and generic desktop
   metadata are intentionally unsupported because they are incomplete or not a
   stable canonical session store.

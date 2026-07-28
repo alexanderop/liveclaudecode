@@ -210,7 +210,9 @@ export const buildTree = Effect.fn('buildTree')(function*(
     const scan = scans[index]!
     for (const id of scan.spawnIds) {
       owner.set(id, item.key)
-      spawnState.set(id, scan.openTools.has(id) ? 'running' : 'returned')
+      // Background launches resolve their tool call instantly, so an async
+      // spawn stays running until its task-notification arrives.
+      spawnState.set(id, scan.openTools.has(id) || scan.asyncSpawns.has(id) ? 'running' : 'returned')
     }
   }
 

@@ -241,6 +241,42 @@ describe('TranscriptScan', () => {
       assert.deepStrictEqual(result.todos, [{ content: 'a', status: 'completed' }])
     }))
 
+  it.effect('keeps a background agent outstanding after its launch acknowledgement', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.assistant([fixture.tool('Agent', 'spawn', { description: 'bg worker' })]),
+        fixture.userResult('spawn', 'Async agent launched successfully.', {
+          toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'agent-bg' },
+        }),
+      ])
+      assert.isTrue(result.asyncSpawns.has('spawn'))
+    }))
+
+  it.effect('settles a background agent when its task-notification arrives', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.assistant([fixture.tool('Agent', 'spawn', { description: 'bg worker' })]),
+        fixture.userResult('spawn', 'Async agent launched successfully.', {
+          toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'agent-bg' },
+        }),
+        fixture.userText(
+          '<task-notification>\n<task-id>agent-bg</task-id>\n<tool-use-id>spawn</tool-use-id>\n'
+          + '<status>completed</status>\n</task-notification>',
+          { meta: true },
+        ),
+      ])
+      assert.isFalse(result.asyncSpawns.has('spawn'))
+    }))
+
+  it.effect('does not treat a synchronous agent result as a background launch', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.assistant([fixture.tool('Agent', 'spawn', { description: 'sync worker' })]),
+        fixture.userResult('spawn', 'done', { toolUseResult: { status: 'completed' } }),
+      ])
+      assert.isFalse(result.asyncSpawns.has('spawn'))
+    }))
+
   it.effect('accumulates output tokens', () =>
     Effect.gen(function*() {
       const result = yield* scanOf([

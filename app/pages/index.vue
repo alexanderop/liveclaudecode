@@ -8,6 +8,7 @@ const views = [
   { id: 'guide', label: 'Guide', icon: 'i-lucide-map', shortcut: 'G' },
   { id: 'diagnostics', label: 'Diagnostics', icon: 'i-lucide-stethoscope', shortcut: 'I' },
   { id: 'changes', label: 'Changes', icon: 'i-lucide-files', shortcut: 'D' },
+  { id: 'chat', label: 'Ask', icon: 'i-lucide-message-square', shortcut: 'Q' },
 ] as const
 type SessionPanel = typeof views[number]['id']
 
@@ -76,6 +77,7 @@ function handleShortcut(event: KeyboardEvent): void {
     g: 'guide',
     i: 'diagnostics',
     d: 'changes',
+    q: 'chat',
   }
   const panel = shortcuts[event.key.toLowerCase()]
   if (!panel) return
@@ -235,6 +237,11 @@ onUnmounted(() => window.removeEventListener('keydown', handleShortcut))
             @select="inspectCanvasNode"
           />
           <RunChanges v-else-if="activePanel === 'changes'" :run="live.run.value" />
+          <ChatPanel
+            v-else-if="activePanel === 'chat'"
+            :project="live.selectedProject.value || ''"
+            :session-key="live.selectedKey.value || ''"
+          />
         </aside>
       </div>
     </main>

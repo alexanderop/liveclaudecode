@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { $fetch, setup } from '@nuxt/test-utils/e2e'
 import type { EventsResponse, RunResponse, TreeResponse } from '#shared/types/run'
+import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import * as fixture from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
 import * as copilot from '../fixtures/copilot'
@@ -173,6 +174,26 @@ describe('read-only API', async () => {
     const second = await $fetch<EventsResponse>(`/api/events?key=${SESSION}&since=${first.next}`)
     expect(second.events).toEqual([])
     expect(second.next).toBe(first.next)
+  })
+
+  it('serves an empty session chat and accepts a reset without starting an agent', async () => {
+    const events = await $fetch<ChatEventsResponse>(
+      `/api/chat?project=${encodeURIComponent(directory)}&key=${SESSION}&since=0&revision=0`,
+    )
+    expect(events).toEqual({
+      events: [],
+      next: 0,
+      revision: 0,
+      reset: false,
+      status: 'idle',
+      agent: null,
+    })
+
+    const reset = await $fetch<ChatActionResponse>('/api/chat', {
+      method: 'POST',
+      body: { action: 'reset', project: directory, key: SESSION },
+    })
+    expect(reset).toEqual({ status: 'idle' })
   })
 
   it('maps a Codex rollout into the same run, file, plan, usage, and event contracts', async () => {

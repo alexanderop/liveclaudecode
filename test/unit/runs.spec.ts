@@ -147,6 +147,56 @@ describe('run hierarchy', () => {
     }).pipe(Effect.provide(TestLayer)))
 })
 
+describe('background agents', () => {
+  const ASYNC_SESSION = 'sess-bg'
+  const launch = fixture.userResult('spawn-bg', 'Async agent launched successfully.', {
+    ts: fixture.T0(2),
+    toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'agent-bg' },
+  })
+  const notification = fixture.userText(
+    '<task-notification>\n<task-id>agent-bg</task-id>\n<tool-use-id>spawn-bg</tool-use-id>\n'
+    + '<status>completed</status>\n</task-notification>',
+    { ts: fixture.T0(40), meta: true },
+  )
+  const asyncTree = (settled: boolean): FakeTree => ({
+    [`/bg/${ASYNC_SESSION}.jsonl`]: fixture.transcript([
+      fixture.userText('/audit'),
+      fixture.assistant([fixture.tool('Agent', 'spawn-bg', { description: 'bg worker' })], { ts: fixture.T0(1) }),
+      ...(settled ? [launch, notification] : [launch]),
+    ]),
+    [`/bg/${ASYNC_SESSION}/subagents/agent-bg.jsonl`]: fixture.transcript([
+      fixture.assistant([fixture.tool('Bash', 'b1', { command: 'pnpm test' })], { ts: fixture.T0(3) }),
+    ]),
+    [`/bg/${ASYNC_SESSION}/subagents/agent-bg.meta.json`]: JSON.stringify({
+      agentType: 'Explore', description: 'bg worker', toolUseId: 'spawn-bg',
+    }),
+  })
+
+  const buildAsync = (settled: boolean) =>
+    buildTree('/bg', 99_999).pipe(Effect.provide(
+      Layer.mergeAll(ScanCache.layer, PromptCache.layer)
+        .pipe(Layer.provideMerge(testFileSystem(asyncTree(settled)))),
+    ))
+
+  it.effect('keeps an async-launched agent running despite the instant tool result', () =>
+    Effect.gen(function*() {
+      const built = yield* buildAsync(false)
+      const worker = built.roots[0]!.children[0]!
+      assert.strictEqual(worker.spawnState, 'running')
+      assert.isTrue(worker.live)
+      assert.strictEqual(built.roots[0]!.subRunning, 1)
+    }))
+
+  it.effect('settles an async agent once its task-notification arrives', () =>
+    Effect.gen(function*() {
+      const built = yield* buildAsync(true)
+      const worker = built.roots[0]!.children[0]!
+      assert.strictEqual(worker.spawnState, 'returned')
+      assert.isFalse(worker.live)
+      assert.strictEqual(built.roots[0]!.subRunning, 0)
+    }))
+})
+
 describe('pathFor', () => {
   it.effect('maps session and subagent keys to transcript paths', () =>
     Effect.gen(function*() {

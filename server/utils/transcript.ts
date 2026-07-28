@@ -326,6 +326,13 @@ export class TranscriptScan {
   readonly toolUses = new Map<string, ToolRecord>()
   readonly openTools = new Map<string, ToolRecord>()
   readonly spawnIds = new Set<string>()
+  /**
+   * Spawn tool calls whose tool_result was only a background-launch
+   * acknowledgement (`toolUseResult.isAsync`). The agent keeps running after
+   * the result, so the spawn stays outstanding until a task-notification
+   * naming its tool-use-id arrives.
+   */
+  readonly asyncSpawns = new Set<string>()
   readonly files = new Map<string, MutableFileChange>()
   readonly commands: CommandRun[] = []
   readonly commandByToolId = new Map<string, CommandRun>()
@@ -670,6 +677,11 @@ export class TranscriptScan {
         this.turnComplete = false
         const id = block.data.tool_use_id
         this.openTools.delete(id)
+        if (
+          this.spawnIds.has(id)
+          && Predicate.isObject(record.toolUseResult)
+          && record.toolUseResult.isAsync === true
+        ) this.asyncSpawns.add(id)
         const text = resultText(block.data.content)
         const isError = Boolean(block.data.is_error) || text.trimStart().toLowerCase().startsWith('error')
         if (isError) this.errors += 1
@@ -708,6 +720,11 @@ export class TranscriptScan {
       } else if (block.kind === 'text') {
         const text = block.data.text
         if (!text.trim()) continue
+        // A task-notification fires when a background agent stops, so it
+        // settles the async spawn its tool-use-id points at.
+        for (const match of text.matchAll(/<task-notification>[\s\S]*?<tool-use-id>\s*([^<\s]+)\s*<\/tool-use-id>/g)) {
+          this.asyncSpawns.delete(match[1]!)
+        }
         const meta = Boolean(record.isMeta) || text.trimStart().startsWith('<system-reminder')
         if (!meta) this.turnComplete = false
         const [body, full] = clip(text)

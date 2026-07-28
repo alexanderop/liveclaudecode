@@ -1,0 +1,56 @@
+import { mount } from '@vue/test-utils'
+import { ref } from 'vue'
+import { describe, expect, it, vi } from 'vitest'
+import ExecutionAgentNode from '~/components/ExecutionAgentNode.vue'
+import { ExecutionCanvasKey } from '~/composables/useExecutionCanvas'
+import type { ExecutionNodeData } from '~/utils/execution-graph'
+
+const data: ExecutionNodeData = {
+  label: 'Explore agent',
+  agentType: 'Explore',
+  tools: 3,
+  files: 1,
+  firstTs: null,
+  lastTs: null,
+  depth: 1,
+  root: false,
+  state: 'active',
+  overview: false,
+  agents: 1,
+  errors: 0,
+  workstream: 1,
+  memberKeys: ['explore'],
+}
+
+describe('execution agent node', () => {
+  it('renders accessible selection state and delegates keyboard selection', async () => {
+    const selectNode = vi.fn()
+    const component = mount(ExecutionAgentNode, {
+      props: {
+        id: 'explore',
+        data,
+        selected: true,
+      },
+      global: {
+        provide: {
+          [ExecutionCanvasKey as symbol]: {
+            layoutDirection: ref('left-to-right'),
+            selectNode,
+          },
+        },
+        stubs: {
+          Handle: true,
+          UIcon: true,
+        },
+      },
+    })
+
+    const node = component.get('.sketch-node')
+    expect(node.classes()).toContain('active')
+    expect(node.attributes('aria-current')).toBe('true')
+    expect(node.attributes('aria-label')).toContain('Explore agent, Active')
+
+    await node.trigger('keydown', { key: 'Enter' })
+    expect(selectNode).toHaveBeenCalledWith('explore')
+  })
+})

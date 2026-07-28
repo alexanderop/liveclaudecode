@@ -1,6 +1,6 @@
 import { Effect, Layer, ManagedRuntime, Result } from 'effect'
 import type * as PlatformError from 'effect/PlatformError'
-import { NodeFileSystem } from '@effect/platform-node'
+import { NodeServices } from '@effect/platform-node'
 import { createError } from 'h3'
 import {
   CodexScanCache,
@@ -14,6 +14,13 @@ import {
   type UnknownRun,
 } from './services'
 import { SessionCatalogCache } from './session-browser'
+import { AcpAgentError, AcpConnector } from './acp-connection'
+import {
+  ChatBusy,
+  ChatStore,
+  InvalidChatAction,
+  UnknownChatAgent,
+} from './chat'
 
 /** Everything the server needs, backed by the real filesystem. */
 const ServerLayer = Layer.mergeAll(
@@ -23,7 +30,9 @@ const ServerLayer = Layer.mergeAll(
   SessionLocatorCache.layer,
   PromptCache.layer,
   SessionCatalogCache.layer,
-).pipe(Layer.provideMerge(NodeFileSystem.layer))
+  AcpConnector.layer,
+  ChatStore.layer,
+).pipe(Layer.provideMerge(NodeServices.layer))
 
 type AppServices = Layer.Success<typeof ServerLayer>
 
@@ -46,6 +55,10 @@ export type AppError =
   | UnknownProject
   | UnknownRun
   | InvalidRunKey
+  | InvalidChatAction
+  | UnknownChatAgent
+  | ChatBusy
+  | AcpAgentError
   | PlatformError.PlatformError
 
 /**
@@ -56,13 +69,19 @@ export type AppError =
 function toHttpError(error: AppError) {
   switch (error._tag) {
     case 'InvalidRunKey':
+    case 'InvalidChatAction':
+    case 'UnknownChatAgent':
       return createError({ statusCode: 400, statusMessage: error.message })
+    case 'ChatBusy':
+      return createError({ statusCode: 409, statusMessage: error.message })
     case 'UnknownProject':
     case 'NoTranscriptsFound':
     case 'UnknownRun':
       return createError({ statusCode: 404, statusMessage: error.message })
     case 'PlatformError':
       return createError({ statusCode: 500, statusMessage: `Filesystem error: ${error.reason._tag}` })
+    case 'AcpAgentError':
+      return createError({ statusCode: 502, statusMessage: error.message })
   }
 }
 

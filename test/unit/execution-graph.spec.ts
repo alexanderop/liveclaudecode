@@ -31,7 +31,7 @@ describe('execution graph layout', () => {
       lane('research', 1),
       lane('source-check', 2),
       lane('implementation', 1),
-    ], null)
+    ])
 
     expect(graph.edges.map(edge => [edge.source, edge.target])).toEqual([
       ['research', 'source-check'],
@@ -41,7 +41,7 @@ describe('execution graph layout', () => {
     expect(graph.nodes.find(node => node.id === 'source-check')?.position.x).toBe(600)
   })
 
-  it('surfaces active, blocked, failed, completed, inactive, and selected states', () => {
+  it('surfaces active, blocked, failed, completed, and inactive states', () => {
     const graph = buildExecutionGraph([
       lane('root', 0),
       lane('live', 1, { live: true }),
@@ -49,35 +49,32 @@ describe('execution graph layout', () => {
       lane('failed', 1, { errors: 2 }),
       lane('completed', 1, { firstTs: '2026-07-28T10:00:00.000Z' }),
       lane('inactive', 1),
-    ], 'failed')
+    ])
 
     expect(graph.nodes.find(node => node.id === 'live')?.data?.state).toBe('active')
     expect(graph.nodes.find(node => node.id === 'blocked')?.data?.state).toBe('blocked')
     expect(graph.nodes.find(node => node.id === 'failed')?.data?.state).toBe('failed')
     expect(graph.nodes.find(node => node.id === 'completed')?.data?.state).toBe('completed')
     expect(graph.nodes.find(node => node.id === 'inactive')?.data?.state).toBe('inactive')
-    expect(graph.nodes.find(node => node.id === 'failed')?.data?.selected).toBe(true)
     expect(graph.edges.find(edge => edge.target === 'live')?.animated).toBe(true)
   })
 
   it('preserves positions after a user drags an agent', () => {
     const graph = buildExecutionGraph(
       [lane('root', 0), lane('worker', 1)],
-      null,
       new Map([['worker', { x: 42, y: 84 }]]),
     )
 
     expect(graph.nodes.find(node => node.id === 'worker')?.position).toEqual({ x: 42, y: 84 })
   })
 
-  it('preserves existing positions and selection when live activity adds a lane', () => {
+  it('preserves existing positions when live activity adds a lane', () => {
     const updated = buildExecutionGraph(
       [
         lane('root', 0, { live: true }),
         lane('worker', 1, { live: true, tools: 4 }),
         lane('new-reviewer', 1, { spawnState: 'running' }),
       ],
-      'worker',
       new Map([
         ['root', { x: 18, y: 28 }],
         ['worker', { x: 412, y: 96 }],
@@ -86,14 +83,12 @@ describe('execution graph layout', () => {
 
     expect(updated.nodes.find(node => node.id === 'root')?.position).toEqual({ x: 18, y: 28 })
     expect(updated.nodes.find(node => node.id === 'worker')?.position).toEqual({ x: 412, y: 96 })
-    expect(updated.nodes.find(node => node.id === 'worker')?.data?.selected).toBe(true)
     expect(updated.nodes.find(node => node.id === 'new-reviewer')?.data?.state).toBe('blocked')
   })
 
   it('can arrange the graph from top to bottom', () => {
     const graph = buildExecutionGraph(
       [lane('root', 0), lane('research', 1), lane('source-check', 2), lane('implementation', 1)],
-      null,
       new Map(),
       'top-to-bottom',
     )
@@ -114,7 +109,6 @@ describe('execution graph layout', () => {
         lane('research', 2, { tools: 7, errors: 1 }),
         lane('qa', 1, { tools: 4 }),
       ],
-      null,
       new Map(),
       'left-to-right',
       'overview',
@@ -145,19 +139,29 @@ describe('execution graph layout', () => {
         lane('implementation', 1, { tools: 3 }),
         lane('review', 2, { tools: 2 }),
       ],
-      'review',
       new Map(),
       'left-to-right',
       'overview',
     )
 
-    expect(graph.nodes.find(node => node.id === 'implementation')?.data).toMatchObject({
-      selected: true,
-      memberKeys: ['implementation', 'review'],
-    })
+    expect(graph.nodes.find(node => node.id === 'implementation')?.data?.memberKeys)
+      .toEqual(['implementation', 'review'])
     expect(graph.nodes.find(node => node.id === 'root')?.data).toMatchObject({
-      selected: false,
       memberKeys: ['root'],
     })
+  })
+
+  it('puts non-zero tool and file metrics on edges', () => {
+    const graph = buildExecutionGraph([
+      lane('root', 0),
+      lane('worker', 1, { tools: 2, files: 1 }),
+      lane('silent', 1),
+    ])
+
+    expect(graph.edges.find(edge => edge.target === 'worker')).toMatchObject({
+      interactionWidth: 40,
+      label: '2 tools · 1 file',
+    })
+    expect(graph.edges.find(edge => edge.target === 'silent')?.label).toBe('')
   })
 })
