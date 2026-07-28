@@ -4,10 +4,10 @@ import { Result, Schema } from 'effect'
  * Schemas for the Agent Client Protocol (ACP) wire format: newline-delimited
  * JSON-RPC 2.0 spoken over an agent subprocess's stdio.
  *
- * Adapters (claude-agent-acp, codex-acp) extend the protocol over time —
- * unknown update variants, `_meta` fields, extra permission option ids — so
- * every decoder preserves excess properties and unknown variants degrade to
- * a raw envelope instead of failing the connection.
+ * Agents (claude-agent-acp, codex-acp, Copilot CLI) extend the protocol over
+ * time — unknown update variants, `_meta` fields, extra permission option ids
+ * — so every decoder preserves excess properties and unknown variants degrade
+ * to a raw envelope instead of failing the connection.
  */
 const PRESERVE = { onExcessProperty: 'preserve' } as const
 

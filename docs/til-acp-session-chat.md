@@ -28,9 +28,9 @@ process. The browser is only the interface.
                             │ ACP over stdin/stdout
                    ┌────────┴────────┐
                    v                 v
-          claude-agent-acp       codex-acp
-                   │                 │
-                   └────────┬────────┘
+          claude-agent-acp       codex-acp       copilot --acp
+                   │                 │                 │
+                   └─────────────────┼─────────────────┘
                             v
                  configured model provider
 ```
@@ -59,7 +59,7 @@ The server scans the local session stores used by the coding agents, including:
 
 It parses those transcript files and sends safe, structured data to the browser
 for the session list, timeline, tools, errors, and changed files. Opening the
-dashboard does not start Claude or Codex.
+dashboard does not start Claude, Codex, or Copilot.
 
 ## What happens when I click Ask?
 
@@ -73,14 +73,15 @@ The following happens:
    `/api/chat` endpoint.
 2. The Node server resolves that ID to the actual JSONL transcript and the
    session's original working directory.
-3. The server starts either the Claude or Codex ACP adapter:
+3. The server starts the selected Claude, Codex, or Copilot ACP agent:
 
    ```text
    npx -y @agentclientprotocol/claude-agent-acp
    npx -y @agentclientprotocol/codex-acp
+   copilot --acp --stdio --available-tools=view,rg,glob
    ```
 
-4. The adapter inherits the local environment, including the user's existing
+4. The agent inherits the local environment, including the user's existing
    Claude login or Codex login/API-key configuration.
 5. The server creates a new ACP conversation and gives it a read-only
    instruction containing the transcript path and working directory.
@@ -96,8 +97,8 @@ session as context.
 ## Why ACP is useful
 
 The Agent Client Protocol gives the local server one interface for different
-agents. Instead of teaching the Vue UI how Claude and Codex each work, the
-server speaks the same JSON-RPC protocol to either adapter.
+agents. Instead of teaching the Vue UI how Claude, Codex, and Copilot each work,
+the server speaks the same JSON-RPC protocol to every agent.
 
 ACP messages are newline-delimited JSON sent through the child process's stdin
 and stdout:
@@ -116,7 +117,7 @@ allowed; the local client gets a chance to approve or reject requested actions.
 
 There are two separate histories:
 
-- The original Claude or Codex JSONL transcript is evidence being inspected.
+- The original Claude, Codex, or Copilot JSONL transcript is evidence being inspected.
 - The Ask conversation is a new ACP session stored in the running dashboard
   server's memory.
 
@@ -135,6 +136,7 @@ enforces a narrower policy for the agent:
 - It approves only read, search, fetch, and thinking tool kinds.
 - It rejects edits, command execution, and unknown permission kinds.
 - It launches Codex in read-only mode with browser access disabled.
+- It limits Copilot CLI to file viewing, text search, and file discovery.
 - Its first prompt explicitly instructs the agent not to modify files.
 
 The JSONL transcript remains read-only. This is a defense-in-depth policy, but
@@ -144,8 +146,8 @@ localhost.
 ## Local does not necessarily mean offline
 
 The dashboard can read and display transcripts without network access. Asking a
-new question is different: Claude or Codex normally contacts its configured
-model provider.
+new question is different: Claude, Codex, or Copilot normally contacts its
+configured model provider.
 
 That means the provider may receive:
 

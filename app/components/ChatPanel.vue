@@ -30,7 +30,11 @@ const markdownComponents = { a: TranscriptMarkdownLink }
 const agents: ReadonlyArray<{ id: ChatAgentId, label: string }> = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex' },
+  { id: 'copilot', label: 'Copilot' },
 ]
+const agentLabels: Readonly<Record<ChatAgentId, string>> = Object.fromEntries(
+  agents.map(agent => [agent.id, agent.label]),
+) as Record<ChatAgentId, string>
 
 const events = ref<ChatEvent[]>([])
 const since = ref(0)
@@ -238,7 +242,7 @@ onUnmounted(() => {
           <p>{{ row.text }}</p>
         </article>
         <article v-else-if="row.kind === 'assistant'" class="chat-message assistant">
-          <header><UIcon name="i-lucide-sparkles" />{{ row.agent === 'codex' ? 'Codex' : 'Claude' }}</header>
+          <header><UIcon name="i-lucide-sparkles" />{{ agentLabels[row.agent] }}</header>
           <Comark
             class="markdown-body"
             :markdown="row.text"

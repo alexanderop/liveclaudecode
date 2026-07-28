@@ -72,31 +72,36 @@ slug to restrict all providers to one project.
 
 Open a session and select **Ask** (keyboard shortcut `Q`) to start a follow-up
 conversation backed by ACP, the Agent Client Protocol. Claude and Codex are
-available. A separate ACP conversation remains attached to the observed
-session while the panel is closed, and **New** discards it.
+available through adapters, and GitHub Copilot is available through Copilot
+CLI's native ACP server. A separate ACP conversation remains attached to the
+observed session while the panel is closed, and **New** discards it.
 
-By default the server launches the official adapters on demand:
+By default the server launches these local ACP agents on demand:
 
 ```text
 npx -y @agentclientprotocol/claude-agent-acp
 npx -y @agentclientprotocol/codex-acp
+copilot --acp --stdio --available-tools=view,rg,glob
 ```
 
-The first use can therefore download an adapter. Claude uses the machine's
-existing Claude credentials; Codex uses its existing login or API-key
-environment. Launch commands can be overridden when the adapters are already
-installed or live somewhere else:
+The first Claude or Codex use can therefore download an adapter. Claude uses
+the machine's existing Claude credentials; Codex uses its existing login or
+API-key environment. Copilot requires the `copilot` command to be installed and
+authenticated. Launch commands can be overridden when an executable is
+installed or lives somewhere else:
 
 ```bash
 LCC_ACP_CLAUDE='claude-agent-acp' \
 LCC_ACP_CODEX='codex-acp' \
+LCC_ACP_COPILOT='copilot --acp --stdio --available-tools=view,rg,glob' \
 ./bin/liveclaudecode
 ```
 
 The chat client advertises no filesystem or terminal capabilities. It allows
 read/search/fetch/thinking permission requests and rejects mutating or command
 execution requests. Codex is additionally started in its `read-only` agent
-mode. The observed JSONL files are never modified.
+mode. Copilot CLI only receives its `view`, `rg`, and `glob` tools. The
+observed JSONL files are never modified.
 
 ## What it shows
 
@@ -110,8 +115,8 @@ mode. The observed JSONL files are never modified.
   available, context/cache pressure, compaction boundaries, and agent summaries.
 - **Changed work:** files written across the run and command outcomes per agent.
 - **Event feed:** compact, normal, and raw densities with an errors-only filter.
-- **Session chat:** follow-up questions answered by a local Claude or Codex ACP
-  agent with the selected transcript supplied as read-only context.
+- **Session chat:** follow-up questions answered by a local Claude, Codex, or
+  Copilot ACP agent with the selected transcript supplied as read-only context.
 
 Fields that a provider does not record are left empty. The viewer does not
 decrypt Codex encrypted reasoning or infer private content from unrelated stores.

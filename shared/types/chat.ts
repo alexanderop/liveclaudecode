@@ -4,7 +4,7 @@
  * Plain interfaces only — this file is shared with the client.
  */
 
-export type ChatAgentId = 'claude' | 'codex'
+export type ChatAgentId = 'claude' | 'codex' | 'copilot'
 
 export type ChatStatus = 'idle' | 'starting' | 'busy' | 'error'
 

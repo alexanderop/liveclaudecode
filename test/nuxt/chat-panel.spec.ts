@@ -16,8 +16,8 @@ describe('ChatPanel', () => {
         events: initial
           ? [
               { kind: 'user', text: 'Why did the tests fail?' },
-              { kind: 'assistant-chunk', agent: 'codex', text: 'The setup ' },
-              { kind: 'assistant-chunk', agent: 'codex', text: '**failed**.' },
+              { kind: 'assistant-chunk', agent: 'copilot', text: 'The setup ' },
+              { kind: 'assistant-chunk', agent: 'copilot', text: '**failed**.' },
               { kind: 'turn-end', stopReason: 'end_turn' },
             ]
           : [],
@@ -25,7 +25,7 @@ describe('ChatPanel', () => {
         revision: 1,
         reset: initial,
         status: 'idle',
-        agent: 'codex',
+        agent: 'copilot',
       })
     })
     vi.stubGlobal('$fetch', fetch)
@@ -39,7 +39,9 @@ describe('ChatPanel', () => {
     await vi.waitFor(() => {
       expect(component.get('.chat-message.assistant strong').text()).toBe('failed')
     })
+    expect(component.get('.chat-message.assistant header').text()).toContain('Copilot')
     expect(component.findAll('[aria-label="Answering agent"] button').map(button => button.attributes('aria-pressed'))).toEqual([
+      'false',
       'false',
       'true',
     ])
@@ -53,7 +55,7 @@ describe('ChatPanel', () => {
       action: 'send',
       project: '/repo',
       key: 'codex:session',
-      agent: 'codex',
+      agent: 'copilot',
       text: 'What should I change?',
     })
     expect(component.get('textarea').element).toHaveProperty('value', '')

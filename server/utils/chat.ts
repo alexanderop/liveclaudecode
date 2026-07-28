@@ -68,23 +68,39 @@ function commandFromEnv(
 
 /**
  * ACP agent launchers, keyed by the id the client sends. Overridable via
- * `LCC_ACP_CLAUDE` / `LCC_ACP_CODEX` (a full command line, split on spaces).
- * codex-acp starts in its read-only sandbox mode; claude-agent-acp is kept
- * read-only by the permission policy below.
+ * `LCC_ACP_CLAUDE`, `LCC_ACP_CODEX`, or `LCC_ACP_COPILOT` (a full command
+ * line, split on spaces). Codex starts in its read-only sandbox mode, while
+ * Copilot only exposes file-viewing and search tools. The permission policy
+ * below provides a second read-only boundary for every agent.
  */
+export function chatAgentCommandsFromEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<ChatAgentId, ChatAgentCommand>> {
+  return {
+    claude: {
+      ...commandFromEnv(env.LCC_ACP_CLAUDE, ['npx', '-y', '@agentclientprotocol/claude-agent-acp']),
+      env: {},
+    },
+    codex: {
+      ...commandFromEnv(env.LCC_ACP_CODEX, ['npx', '-y', '@agentclientprotocol/codex-acp']),
+      env: { INITIAL_AGENT_MODE: 'read-only', NO_BROWSER: '1' },
+    },
+    copilot: {
+      ...commandFromEnv(env.LCC_ACP_COPILOT, [
+        'copilot',
+        '--acp',
+        '--stdio',
+        '--available-tools=view,rg,glob',
+      ]),
+      env: {},
+    },
+  }
+}
+
 export const ChatAgentCommands = Context.Reference<Readonly<Record<ChatAgentId, ChatAgentCommand>>>(
   'lcc/ChatAgentCommands',
   {
-    defaultValue: () => ({
-      claude: {
-        ...commandFromEnv(process.env.LCC_ACP_CLAUDE, ['npx', '-y', '@agentclientprotocol/claude-agent-acp']),
-        env: {},
-      },
-      codex: {
-        ...commandFromEnv(process.env.LCC_ACP_CODEX, ['npx', '-y', '@agentclientprotocol/codex-acp']),
-        env: { INITIAL_AGENT_MODE: 'read-only', NO_BROWSER: '1' },
-      },
-    }),
+    defaultValue: () => chatAgentCommandsFromEnv(process.env),
   },
 )
 
@@ -157,6 +173,15 @@ function chatPermissionPolicy(request: PermissionRequest): 'allow' | 'reject' {
   return kind !== undefined && READ_ONLY_TOOL_KINDS.has(kind) ? 'allow' : 'reject'
 }
 
+/**
+ * Copilot reports its launch-time tool filter as an assistant message on the
+ * first prompt. It is ACP transport noise rather than model output, so keep it
+ * out of the user's conversation while preserving all other chunks verbatim.
+ */
+function isAgentLaunchNotice(agent: ChatAgentId, text: string): boolean {
+  return agent === 'copilot' && text.startsWith('Info: Disabled tools: ')
+}
+
 function chatUpdateHandler(record: ChatRecord) {
   return (notification: SessionNotification): Effect.Effect<void> => Effect.sync(() => {
     if (record.sessionId !== notification.sessionId) return
@@ -165,6 +190,7 @@ function chatUpdateHandler(record: ChatRecord) {
       case 'agent_message_chunk':
       case 'agent_thought_chunk': {
         if (!('content' in update) || typeof update.content.text !== 'string') return
+        if (isAgentLaunchNotice(record.agent, update.content.text)) return
         appendEvent(record, {
           kind: update.sessionUpdate === 'agent_message_chunk' ? 'assistant-chunk' : 'thought-chunk',
           agent: record.agent,

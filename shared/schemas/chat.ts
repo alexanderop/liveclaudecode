@@ -1,6 +1,6 @@
 import { Result, Schema } from 'effect'
 
-const ChatAgentIdSchema = Schema.Literals(['claude', 'codex'])
+const ChatAgentIdSchema = Schema.Literals(['claude', 'codex', 'copilot'])
 const ChatTextSchema = Schema.String.check(
   Schema.isPattern(/\S/),
   Schema.isMaxLength(20_000),
