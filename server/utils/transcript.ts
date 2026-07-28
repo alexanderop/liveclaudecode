@@ -82,7 +82,7 @@ const PHASE_PATTERNS = [
   /^\s{0,3}#{1,4}\s+([^\n]{4,70})$/gm,
 ]
 
-const FAIL_RE = /\b(\d+ failed|FAIL\b|failing|error TS\d+|Error:|✗|✘|command not found|exit code [1-9]|Test Files\s+\d+ failed)/i
+const FAIL_RE = /\b([1-9]\d* failed|FAIL\b(?!\s+0\b)|failing|error TS\d+|Error:|✗|✘|command not found|exit code [1-9]|Test Files\s+[1-9]\d* failed)/i
 const PASS_RE = /\b(passed|✓|PASS\b|0 problems|no issues|success)/i
 
 /**

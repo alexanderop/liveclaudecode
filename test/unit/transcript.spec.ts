@@ -356,6 +356,12 @@ describe('transcript helpers', () => {
     assert.isFalse(commandOk('anything', true))
   })
 
+  it('understands TAP failure totals without relying on an early pass marker', () => {
+    const prefix = 'ok 1 - first\n'.repeat(30)
+    assert.isTrue(commandOk(`${prefix}# pass 3\n# fail 0\n# duration_ms 40`, false))
+    assert.isFalse(commandOk(`${prefix}# pass 2\n# fail 1\n# duration_ms 40`, false))
+  })
+
   /**
    * `PHASE_PATTERNS` are module-level `/g` regexes whose `lastIndex` is shared
    * across calls. The reset in `findMilestones` is what keeps repeated calls
