@@ -16,6 +16,7 @@ import { MiniMap } from '@vue-flow/minimap'
 import type { RunResponse } from '#shared/types/run'
 import {
   buildExecutionGraph,
+  DEFAULT_EXECUTION_DETAIL,
   type ExecutionDirection,
   type ExecutionDetail,
   type ExecutionNodeData,
@@ -33,7 +34,7 @@ const emit = defineEmits<{
 const nodes = shallowRef<Array<Node<ExecutionNodeData>>>([])
 const edges = shallowRef<Edge[]>([])
 const layoutDirection = ref<ExecutionDirection>('left-to-right')
-const displayMode = ref<ExecutionDetail>('overview')
+const displayMode = ref<ExecutionDetail>(DEFAULT_EXECUTION_DETAIL)
 const pendingFit = ref(false)
 const { fitView, onNodesInitialized } = useVueFlow('execution-canvas')
 

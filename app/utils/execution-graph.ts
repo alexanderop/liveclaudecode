@@ -4,6 +4,7 @@ import type { TimelineLane } from '#shared/types/run'
 export type ExecutionNodeState = 'active' | 'blocked' | 'completed' | 'failed' | 'inactive'
 export type ExecutionDirection = 'left-to-right' | 'top-to-bottom'
 export type ExecutionDetail = 'overview' | 'all-agents'
+export const DEFAULT_EXECUTION_DETAIL: ExecutionDetail = 'all-agents'
 
 export interface ExecutionNodeData {
   label: string
@@ -122,7 +123,7 @@ export function buildExecutionGraph(
   selectedKey: string | null,
   previousPositions: ReadonlyMap<string, XYPosition> = new Map(),
   direction: ExecutionDirection = 'left-to-right',
-  detail: ExecutionDetail = 'all-agents',
+  detail: ExecutionDetail = DEFAULT_EXECUTION_DETAIL,
 ): ExecutionGraph {
   const roots = buildTree(lanes)
   const nodes: Array<Node<ExecutionNodeData>> = []
