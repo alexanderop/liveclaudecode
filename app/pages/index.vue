@@ -15,6 +15,77 @@ type SessionPanel = typeof views[number]['id']
 const activePanel = ref<SessionPanel | 'inspector' | null>(null)
 const inspectedKey = ref<string | null>(null)
 const sidebarVisible = ref(true)
+const viewportWidth = ref(1440)
+const sidebarWidth = ref(272)
+const panelWidth = ref(380)
+
+const SIDEBAR_MIN = 220
+const SIDEBAR_MAX = 480
+const SIDEBAR_DEFAULT = 272
+const PANEL_MIN = 280
+const PANEL_MAX = 720
+const PANEL_DEFAULT = 380
+const PRIMARY_MIN = 300
+const RESIZE_HANDLES_WIDTH = 14
+const SIDEBAR_STORAGE_KEY = 'liveclaudecode:sidebar-width'
+const PANEL_STORAGE_KEY = 'liveclaudecode:panel-width'
+
+const sidebarMax = computed(() => {
+  if (viewportWidth.value <= 680) return SIDEBAR_MAX
+  const dockedPanelWidth = viewportWidth.value > 880 && activePanel.value ? panelWidth.value : 0
+  return Math.max(
+    SIDEBAR_MIN,
+    Math.min(SIDEBAR_MAX, viewportWidth.value - dockedPanelWidth - PRIMARY_MIN - RESIZE_HANDLES_WIDTH),
+  )
+})
+
+const panelMax = computed(() => {
+  if (viewportWidth.value <= 880) return PANEL_MAX
+  const browserWidth = sidebarVisible.value ? sidebarWidth.value : 0
+  return Math.max(
+    PANEL_MIN,
+    Math.min(PANEL_MAX, viewportWidth.value - browserWidth - PRIMARY_MIN - RESIZE_HANDLES_WIDTH),
+  )
+})
+
+const shellStyle = computed(() => ({
+  '--sidebar-width': `${sidebarWidth.value}px`,
+}))
+
+const workspaceStyle = computed(() => ({
+  '--panel-width': `${panelWidth.value}px`,
+}))
+
+let widthsHydrated = false
+
+function clampWidth(width: number, min: number, max: number): number {
+  return Math.round(Math.min(Math.max(width, min), max))
+}
+
+function readStoredWidth(key: string, fallback: number): number {
+  try {
+    const width = Number.parseInt(window.localStorage.getItem(key) || '', 10)
+    return Number.isFinite(width) ? width : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function persistWidth(key: string, width: number): void {
+  if (!widthsHydrated) return
+  try {
+    window.localStorage.setItem(key, String(width))
+  } catch {
+    // The dashboard remains usable when browser storage is unavailable.
+  }
+}
+
+function fitPanelsToViewport(): void {
+  viewportWidth.value = window.innerWidth
+  if (viewportWidth.value <= 880) return
+  panelWidth.value = clampWidth(panelWidth.value, PANEL_MIN, panelMax.value)
+  sidebarWidth.value = clampWidth(sidebarWidth.value, SIDEBAR_MIN, sidebarMax.value)
+}
 
 const inspectedNode = computed(() => {
   if (!inspectedKey.value || !live.selectedRoot.value) return null
@@ -93,12 +164,37 @@ watch(inspectedNode, node => {
   if (inspectedKey.value && !node) closePanel()
 })
 
-onMounted(() => window.addEventListener('keydown', handleShortcut))
-onUnmounted(() => window.removeEventListener('keydown', handleShortcut))
+watch(sidebarWidth, width => persistWidth(SIDEBAR_STORAGE_KEY, width))
+watch(panelWidth, width => persistWidth(PANEL_STORAGE_KEY, width))
+watch([activePanel, sidebarVisible], () => {
+  if (import.meta.client) fitPanelsToViewport()
+})
+
+onMounted(() => {
+  sidebarWidth.value = clampWidth(
+    readStoredWidth(SIDEBAR_STORAGE_KEY, SIDEBAR_DEFAULT),
+    SIDEBAR_MIN,
+    SIDEBAR_MAX,
+  )
+  panelWidth.value = clampWidth(
+    readStoredWidth(PANEL_STORAGE_KEY, PANEL_DEFAULT),
+    PANEL_MIN,
+    PANEL_MAX,
+  )
+  fitPanelsToViewport()
+  widthsHydrated = true
+  window.addEventListener('keydown', handleShortcut)
+  window.addEventListener('resize', fitPanelsToViewport)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleShortcut)
+  window.removeEventListener('resize', fitPanelsToViewport)
+})
 </script>
 
 <template>
-  <div class="shell">
+  <div class="shell" :style="shellStyle">
     <UBadge
       v-if="live.offline.value"
       class="offline-badge"
@@ -125,6 +221,16 @@ onUnmounted(() => window.removeEventListener('keydown', handleShortcut))
       @select="selectSession"
       @collapse="sidebarVisible = false"
     />
+    <PanelResizeHandle
+      v-if="sidebarVisible"
+      v-model="sidebarWidth"
+      class="sidebar-resize-handle"
+      :min="SIDEBAR_MIN"
+      :max="sidebarMax"
+      :default-value="SIDEBAR_DEFAULT"
+      direction="right"
+      label="Resize session browser"
+    />
     <main class="main-content">
       <RunHero
         v-model:follow-active="live.followActive.value"
@@ -134,7 +240,11 @@ onUnmounted(() => window.removeEventListener('keydown', handleShortcut))
         :file-count="live.run.value?.files.length || 0"
         @show-sidebar="sidebarVisible = true"
       />
-      <div class="session-workspace" :class="{ 'panel-open': activePanel }">
+      <div
+        class="session-workspace"
+        :class="{ 'panel-open': activePanel }"
+        :style="workspaceStyle"
+      >
         <section class="session-primary">
           <div class="view-bar canvas-view-bar">
             <div class="canvas-view-identity">
@@ -167,6 +277,17 @@ onUnmounted(() => window.removeEventListener('keydown', handleShortcut))
             @deselect="closePanel"
           />
         </section>
+
+        <PanelResizeHandle
+          v-if="activePanel"
+          v-model="panelWidth"
+          class="workspace-panel-resize-handle"
+          :min="PANEL_MIN"
+          :max="panelMax"
+          :default-value="PANEL_DEFAULT"
+          direction="left"
+          label="Resize details panel"
+        />
 
         <RunInspector
           v-if="activePanel === 'inspector'"

@@ -1,11 +1,12 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
-import { defineComponent } from 'vue'
+import { defineComponent, nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import type { RunNode, RunResponse } from '#shared/types/run'
 
 afterEach(() => {
+  window.localStorage.clear()
   vi.unstubAllGlobals()
 })
 
@@ -115,6 +116,51 @@ const InspectorStub = defineComponent({
 })
 
 describe('persistent session canvas', () => {
+  it('resizes and remembers both docked sidebars', async () => {
+    vi.stubGlobal('$fetch', vi.fn().mockResolvedValue({
+      projects: [],
+      sources: [],
+      now: 0,
+    }))
+    const component = await mountSuspended(IndexPage, {
+      global: {
+        stubs: {
+          EventFeed: true,
+          RunCanvas: CanvasStub,
+          RunChanges: true,
+          RunDiagnostics: true,
+          RunHero: true,
+          RunInspector: InspectorStub,
+          RunOverview: true,
+          RunSidebar: true,
+        },
+      },
+    })
+
+    const sidebarHandle = component.get('button[aria-label="Resize session browser"]')
+    expect(sidebarHandle.attributes('aria-valuenow')).toBe('272')
+
+    await sidebarHandle.trigger('pointerdown', { button: 0, clientX: 272 })
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 332 }))
+    window.dispatchEvent(new PointerEvent('pointerup'))
+    await nextTick()
+
+    expect(sidebarHandle.attributes('aria-valuenow')).toBe('332')
+    expect(window.localStorage.getItem('liveclaudecode:sidebar-width')).toBe('332')
+
+    await sidebarHandle.trigger('dblclick')
+    await component.get('.view-tabs button').trigger('click')
+    const panelHandle = component.get('button[aria-label="Resize details panel"]')
+    expect(panelHandle.attributes('aria-valuenow')).toBe('380')
+
+    await panelHandle.trigger('keydown', { key: 'ArrowLeft' })
+    expect(panelHandle.attributes('aria-valuenow')).toBe('392')
+    expect(window.localStorage.getItem('liveclaudecode:panel-width')).toBe('392')
+
+    await panelHandle.trigger('dblclick')
+    expect(panelHandle.attributes('aria-valuenow')).toBe('380')
+  })
+
   it('keeps the canvas mounted while node details open and empty space closes them', async () => {
     const fetch = vi.fn(async (url: string) => {
       if (url === '/api/tree') {
