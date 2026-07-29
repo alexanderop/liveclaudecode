@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const followActive = defineModel<boolean>('followActive', { required: true })
 const emit = defineEmits<{ showSidebar: [] }>()
+const toast = useToast()
 const copyState = ref<'idle' | 'copied' | 'failed'>('idle')
 let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -25,8 +26,10 @@ async function copyTranscriptPath(): Promise<void> {
   try {
     await navigator.clipboard.writeText(props.transcriptPath)
     copyState.value = 'copied'
+    toast.add({ title: 'Transcript path copied', icon: 'i-lucide-check', color: 'success' })
   } catch {
     copyState.value = 'failed'
+    toast.add({ title: 'Could not copy transcript path', icon: 'i-lucide-copy-x', color: 'error' })
   }
   if (copyResetTimer) clearTimeout(copyResetTimer)
   copyResetTimer = setTimeout(() => {
@@ -92,19 +95,26 @@ onUnmounted(() => {
 
 <template>
   <header class="hero">
-    <div class="location-bar">
-      <div class="breadcrumbs">
-        <button
+    <UDashboardNavbar class="location-bar" :toggle="true" :ui="{ root: '!px-3 !h-[55px]' }">
+      <template #leading>
+        <UButton
           v-if="!sidebarVisible"
-          type="button"
           class="sidebar-toggle header-sidebar-toggle"
+          color="neutral"
+          variant="ghost"
+          icon="i-lucide-panel-left"
           aria-label="Show sidebar"
           aria-keyshortcuts="Meta+B Control+B"
-          title="Show sidebar (⌘B)"
           @click="emit('showSidebar')"
-        >
-          <UIcon name="i-lucide-panel-left" />
-        </button>
+        />
+        <UDashboardSidebarCollapse
+          v-else
+          class="header-sidebar-collapse"
+          aria-keyshortcuts="Meta+B Control+B"
+        />
+      </template>
+      <template #title>
+        <div class="breadcrumbs">
         <span class="breadcrumb-root">
           <UIcon name="i-lucide-terminal-square" />
           {{ root ? sourceLabel : 'Local sessions' }}
@@ -113,8 +123,11 @@ onUnmounted(() => {
         <span>Sessions</span>
         <UIcon name="i-lucide-chevron-right" />
         <strong>{{ root?.sid?.slice(0, 8) || 'Select a session' }}</strong>
-      </div>
-      <div class="header-actions">
+        </div>
+      </template>
+      <template #right>
+        <div class="header-actions">
+        <UDashboardSearchButton label="Jump to session" class="dashboard-search-button" />
         <UColorModeSelect
           class="color-mode-select"
           aria-label="Color mode"
@@ -122,18 +135,20 @@ onUnmounted(() => {
           variant="ghost"
           :search-input="false"
         />
-        <button
-          type="button"
+        <UButton
           class="quiet-action"
+          color="neutral"
+          variant="ghost"
+          icon="i-lucide-locate-fixed"
           :class="{ active: followActive }"
           :aria-pressed="followActive"
           @click="followActive = !followActive"
         >
-          <UIcon name="i-lucide-locate-fixed" />
           Follow active
-        </button>
-      </div>
-    </div>
+        </UButton>
+        </div>
+      </template>
+    </UDashboardNavbar>
 
     <div class="hero-body">
       <div class="session-heading">
@@ -146,16 +161,18 @@ onUnmounted(() => {
           <UIcon name="i-lucide-file-json" />
           <span>JSONL</span>
           <code :title="transcriptPath">{{ transcriptPath }}</code>
-          <button
-            type="button"
+          <UButton
+            color="neutral"
+            variant="ghost"
+            size="xs"
+            :icon="copyState === 'copied' ? 'i-lucide-check' : 'i-lucide-copy'"
             :aria-label="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
             :title="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
             aria-live="polite"
             @click="copyTranscriptPath"
           >
-            <UIcon :name="copyState === 'copied' ? 'i-lucide-check' : 'i-lucide-copy'" />
             {{ copyLabel }}
-          </button>
+          </UButton>
         </div>
         <div class="status-line">
           <template v-if="busy.length">

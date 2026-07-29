@@ -42,6 +42,7 @@ describe('accessibility', () => {
       global: {
         stubs: {
           RunCanvas: true,
+          UTooltip: { template: '<slot />' },
         },
       },
     })
@@ -92,6 +93,7 @@ describe('accessibility', () => {
       global: {
         stubs: {
           RunCanvas: true,
+          UTooltip: { template: '<slot />' },
         },
       },
     })

@@ -69,7 +69,8 @@ onBeforeUnmount(stopDragging)
 </script>
 
 <template>
-  <button
+  <UDashboardResizeHandle
+    as="button"
     type="button"
     class="panel-resize-handle"
     :class="{ dragging }"

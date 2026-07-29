@@ -45,7 +45,6 @@ const draft = ref('')
 const actionPending = ref(false)
 const pollPending = ref(false)
 const requestError = ref('')
-const log = useTemplateRef('log')
 let timer: ReturnType<typeof setInterval> | undefined
 
 const busy = computed(() => status.value === 'starting' || status.value === 'busy')
@@ -56,6 +55,12 @@ const canSend = computed(() => Boolean(
   && !busy.value
   && !actionPending.value,
 ))
+const chatUiStatus = computed<'submitted' | 'streaming' | 'ready' | 'error'>(() => {
+  if (status.value === 'starting') return 'submitted'
+  if (status.value === 'busy') return 'streaming'
+  if (status.value === 'error') return 'error'
+  return 'ready'
+})
 
 const rows = computed<ChatRow[]>(() => {
   const output: ChatRow[] = []
@@ -93,11 +98,6 @@ const rows = computed<ChatRow[]>(() => {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The local chat agent is unavailable.'
-}
-
-async function scrollToBottom(): Promise<void> {
-  await nextTick()
-  if (log.value) log.value.scrollTop = log.value.scrollHeight
 }
 
 async function poll(): Promise<void> {
@@ -171,17 +171,6 @@ async function reset(): Promise<void> {
   status.value = 'idle'
 }
 
-function handleComposerKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
-  event.preventDefault()
-  void send()
-}
-
-watch(
-  () => rows.value.length,
-  () => void scrollToBottom(),
-)
-
 watch(
   () => `${props.project}\0${props.sessionKey}`,
   () => {
@@ -208,15 +197,17 @@ onUnmounted(() => {
   <div class="chat-panel">
     <div class="chat-agent-bar">
       <div class="segments" role="group" aria-label="Answering agent">
-        <button
+        <UButton
           v-for="agent in agents"
           :key="agent.id"
           type="button"
+          color="neutral"
+          variant="ghost"
           :class="{ selected: selectedAgent === agent.id }"
           :aria-pressed="selectedAgent === agent.id"
           :disabled="busy"
           @click="selectedAgent = agent.id"
-        >{{ agent.label }}</button>
+        >{{ agent.label }}</UButton>
       </div>
       <span class="chat-status" :class="status">
         <span class="status-dot" :class="busy ? 'running' : status === 'error' ? 'failed' : 'completed'" />
@@ -224,80 +215,128 @@ onUnmounted(() => {
       </span>
     </div>
 
-    <div ref="log" class="chat-log" aria-live="polite" aria-label="Session chat messages">
-      <div v-if="!project || !sessionKey" class="empty-state chat-empty">
-        <span class="empty-state-icon"><UIcon name="i-lucide-message-square" /></span>
-        <h2>Select a session first</h2>
-        <p>The local agent needs a session transcript to answer questions.</p>
-      </div>
-      <div v-else-if="!rows.length" class="empty-state chat-empty">
-        <span class="empty-state-icon"><UIcon name="i-lucide-messages-square" /></span>
-        <h2>Ask about this session</h2>
-        <p>The selected local coding agent can inspect the transcript and referenced files using read-only tools.</p>
-      </div>
+    <UChatMessages
+      class="chat-log"
+      aria-live="polite"
+      aria-label="Session chat messages"
+      :status="chatUiStatus"
+      should-auto-scroll
+      :should-scroll-to-bottom="true"
+    >
+      <UEmpty
+        v-if="!project || !sessionKey"
+        class="chat-empty"
+        icon="i-lucide-message-square"
+        title="Select a session first"
+        description="The local agent needs a session transcript to answer questions."
+        variant="naked"
+      />
+      <UEmpty
+        v-else-if="!rows.length && !busy"
+        class="chat-empty"
+        icon="i-lucide-messages-square"
+        title="Ask about this session"
+        description="The selected local coding agent can inspect the transcript and referenced files using read-only tools."
+        variant="naked"
+      />
 
       <template v-for="(row, index) in rows" :key="`${row.kind}-${index}`">
-        <article v-if="row.kind === 'user'" class="chat-message user">
-          <header><UIcon name="i-lucide-user-round" />You</header>
-          <p>{{ row.text }}</p>
-        </article>
-        <article v-else-if="row.kind === 'assistant'" class="chat-message assistant">
-          <header><UIcon name="i-lucide-sparkles" />{{ agentLabels[row.agent] }}</header>
-          <Comark
-            class="markdown-body"
-            :markdown="row.text"
-            :plugins="markdownPlugins"
-            :components="markdownComponents"
-          />
-        </article>
-        <details v-else-if="row.kind === 'thought'" class="chat-thought">
-          <summary><UIcon name="i-lucide-brain" />Reasoning</summary>
-          <pre>{{ row.text }}</pre>
-        </details>
-        <div v-else-if="row.kind === 'tool'" class="chat-tool">
-          <UIcon name="i-lucide-wrench" />
-          <span><strong>{{ row.title || row.toolKind || 'Tool call' }}</strong><small>{{ row.toolKind }}</small></span>
-          <span class="chat-tool-status">{{ row.status || 'running' }}</span>
-        </div>
-        <div v-else-if="row.kind === 'error'" class="chat-error">
-          <UIcon name="i-lucide-circle-alert" />{{ row.text }}
-        </div>
+        <UChatMessage
+          v-if="row.kind === 'user'"
+          class="chat-message user"
+          role="user"
+          :content="row.text"
+          icon="i-lucide-user-round"
+          variant="soft"
+          side="right"
+        >
+          <template #header><header><UIcon name="i-lucide-user-round" />You</header></template>
+        </UChatMessage>
+        <UChatMessage
+          v-else-if="row.kind === 'assistant'"
+          class="chat-message assistant"
+          role="assistant"
+          icon="i-lucide-sparkles"
+          variant="naked"
+          side="left"
+        >
+          <template #header><header><UIcon name="i-lucide-sparkles" />{{ agentLabels[row.agent] }}</header></template>
+          <template #content>
+            <Comark
+              class="markdown-body"
+              :markdown="row.text"
+              :plugins="markdownPlugins"
+              :components="markdownComponents"
+            />
+          </template>
+        </UChatMessage>
+        <UChatReasoning
+          v-else-if="row.kind === 'thought'"
+          class="chat-thought"
+          :text="row.text"
+          :streaming="busy && index === rows.length - 1"
+          icon="i-lucide-brain"
+        />
+        <UChatTool
+          v-else-if="row.kind === 'tool'"
+          class="chat-tool"
+          :text="row.title || row.toolKind || 'Tool call'"
+          :suffix="row.toolKind && row.toolKind !== row.title ? row.toolKind : row.status || 'running'"
+          icon="i-lucide-wrench"
+          :loading="row.status === 'running'"
+          :streaming="row.status === 'running'"
+        />
+        <UAlert
+          v-else-if="row.kind === 'error'"
+          class="chat-error"
+          color="error"
+          variant="soft"
+          icon="i-lucide-circle-alert"
+          title="Agent error"
+          :description="row.text"
+        />
         <div v-else-if="row.kind === 'turn-end' && row.stopReason !== 'end_turn'" class="chat-turn-end">
           Turn ended: {{ row.stopReason.replace(/_/g, ' ') }}
         </div>
       </template>
 
-      <div v-if="busy" class="chat-typing">
-        <UIcon name="i-lucide-loader-circle" />
-        {{ status === 'starting' ? 'Starting local agent…' : 'Reading the session…' }}
-      </div>
-    </div>
-
-    <div v-if="requestError" class="chat-request-error" role="alert">
-      <UIcon name="i-lucide-wifi-off" />{{ requestError }}
-    </div>
-
-    <form class="chat-composer" @submit.prevent="send">
-      <textarea
-        v-model="draft"
-        aria-label="Question about this session"
-        placeholder="Ask why something happened…"
-        rows="3"
-        :disabled="!project || !sessionKey"
-        @keydown="handleComposerKeydown"
+      <UChatShimmer
+        v-if="busy"
+        class="chat-typing"
+        :text="status === 'starting' ? 'Starting local agent…' : 'Reading the session…'"
       />
-      <div class="chat-composer-footer">
+    </UChatMessages>
+
+    <UAlert
+      v-if="requestError"
+      class="chat-request-error"
+      color="error"
+      variant="soft"
+      icon="i-lucide-wifi-off"
+      title="Local chat unavailable"
+      :description="requestError"
+    />
+
+    <UChatPrompt
+      v-model="draft"
+      class="chat-composer"
+      aria-label="Question about this session"
+      placeholder="Ask why something happened…"
+      :rows="2"
+      :maxrows="8"
+      :disabled="!project || !sessionKey"
+      @submit="send"
+    >
+      <template #footer><div class="chat-composer-footer">
         <span><UIcon name="i-lucide-shield-check" />Read-only tools</span>
-        <button type="button" class="chat-secondary" :disabled="actionPending" title="Start a new chat" @click="reset">
-          <UIcon name="i-lucide-rotate-ccw" />New
-        </button>
-        <button v-if="busy" type="button" class="chat-stop" :disabled="actionPending" @click="cancel">
-          <UIcon name="i-lucide-square" />Stop
-        </button>
-        <button v-else type="submit" class="chat-send" :disabled="!canSend">
-          <UIcon name="i-lucide-arrow-up" />Send
-        </button>
-      </div>
-    </form>
+        <UButton type="button" class="chat-secondary" color="neutral" variant="ghost" icon="i-lucide-rotate-ccw" :disabled="actionPending" @click="reset">New</UButton>
+        <UChatPromptSubmit
+          :status="chatUiStatus"
+          :disabled="!canSend"
+          @stop="cancel"
+          @reload="send"
+        >{{ busy ? 'Stop' : 'Send' }}</UChatPromptSubmit>
+      </div></template>
+    </UChatPrompt>
   </div>
 </template>

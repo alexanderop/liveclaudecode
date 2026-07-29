@@ -1,6 +1,6 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import EventFeed from '~/components/EventFeed.vue'
 import type { TranscriptEvent } from '#shared/types/run'
 
@@ -83,6 +83,37 @@ describe('EventFeed', () => {
     expect(component.get('.feed-empty h2').text()).toBe('No errors found')
     expect(component.get('.feed-empty').text()).toContain('no recorded error events')
     expect(component.find('.event').exists()).toBe(false)
+  })
+
+  it('centers a selected transaction when the feed mounts after selection', async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('feed')) {
+        return { top: 100, bottom: 400, left: 0, right: 400, width: 400, height: 300, x: 0, y: 100, toJSON: () => ({}) }
+      }
+      if (this.dataset.eventLine === '2') {
+        return { top: 600, bottom: 640, left: 0, right: 400, width: 400, height: 40, x: 0, y: 600, toJSON: () => ({}) }
+      }
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) }
+    })
+    const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollTo').mockImplementation(() => undefined)
+
+    try {
+      const component = await mountSuspended(EventFeed, {
+        props: {
+          events: [textEvent('First event'), { ...textEvent('Selected event'), line: 2 }],
+          density: 'normal',
+          errorsOnly: false,
+          followOutput: false,
+          selectedLine: 2,
+        },
+      })
+      await flushPromises()
+
+      expect(scrollSpy).toHaveBeenCalledWith({ top: 370, behavior: 'smooth' })
+    } finally {
+      rectSpy.mockRestore()
+      scrollSpy.mockRestore()
+    }
   })
 
   it('jumps to the newest activity when following is enabled', async () => {
