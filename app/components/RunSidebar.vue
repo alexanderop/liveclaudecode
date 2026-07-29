@@ -23,7 +23,6 @@ const emit = defineEmits<{
 }>()
 const organization = ref<'project' | 'list'>('project')
 const collapsedProjects = ref(new Set<string>())
-const organizeMenu = useTemplateRef('organizeMenu')
 
 const allRoots = computed(() => props.allProjects.flatMap(project => project.roots))
 const liveCount = computed(() => allRoots.value.filter(root => root.subLive).length)
@@ -31,12 +30,32 @@ const attentionCount = computed(() => allRoots.value.filter(root => root.subErro
 const recentRoots = computed(() => props.projects
   .flatMap(project => project.roots.map(root => ({ project: project.id, root })))
   .sort((a, b) => (b.root.subLast || '').localeCompare(a.root.subLast || '')))
-const sourceOptions = [
+const sourceOptions: Array<{ value: 'all' | 'claude' | 'codex' | 'copilot', label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
   { value: 'copilot', label: 'Copilot' },
-] as const
+]
+
+const projectSelectOptions = computed(() => [
+  { label: 'All projects', value: 'all' },
+  ...props.projectOptions.map(project => ({ label: project.name, value: project.id })),
+])
+const organizeItems = computed(() => [[
+  { label: 'Organize sidebar', type: 'label' as const },
+  {
+    label: 'By project',
+    icon: organization.value === 'project' ? 'i-lucide-check' : undefined,
+    onSelect: () => organizeBy('project'),
+  },
+  {
+    label: 'In one list',
+    icon: organization.value === 'list' ? 'i-lucide-check' : undefined,
+    onSelect: () => organizeBy('list'),
+  },
+], [
+  { label: 'Sort by last updated', icon: 'i-lucide-arrow-down-wide-narrow', disabled: true },
+]])
 
 function isExpanded(project: string): boolean {
   return !collapsedProjects.value.has(project)
@@ -74,7 +93,6 @@ function showAttention(): void {
 
 function organizeBy(value: 'project' | 'list'): void {
   organization.value = value
-  if (organizeMenu.value) organizeMenu.value.open = false
 }
 </script>
 
@@ -88,33 +106,38 @@ function organizeBy(value: 'project' | 'list'): void {
         <strong>Live Sessions</strong>
         <span>Claude + Codex + Copilot</span>
       </div>
-      <button
-        type="button"
-        class="sidebar-toggle"
-        aria-label="Hide sidebar"
-        aria-keyshortcuts="Meta+B Control+B"
-        title="Hide sidebar (⌘B)"
-        @click="emit('collapse')"
-      >
-        <UIcon name="i-lucide-panel-left" />
-      </button>
+      <UTooltip text="Hide sidebar" :kbds="['meta', 'B']">
+        <UButton
+          class="sidebar-toggle"
+          color="neutral"
+          variant="ghost"
+          icon="i-lucide-panel-left"
+          aria-label="Hide sidebar"
+          aria-keyshortcuts="Meta+B Control+B"
+          @click="emit('collapse')"
+        />
+      </UTooltip>
     </header>
 
     <nav class="primary-nav" aria-label="Workspace">
-      <button
+      <UButton
         type="button"
         class="primary-nav-item"
+        color="neutral"
+        variant="ghost"
         :class="{ selected: !liveOnly && !attentionOnly }"
         :aria-pressed="!liveOnly && !attentionOnly"
         @click="showAllSessions"
       >
         <UIcon name="i-lucide-panels-top-left" />
         <span>Sessions</span>
-        <kbd>G S</kbd>
-      </button>
-      <button
+        <span class="nav-shortcut"><UKbd value="G" /><UKbd value="S" /></span>
+      </UButton>
+      <UButton
         type="button"
         class="primary-nav-item"
+        color="neutral"
+        variant="ghost"
         :class="{ selected: liveOnly }"
         :aria-pressed="liveOnly"
         @click="showRunning"
@@ -122,10 +145,12 @@ function organizeBy(value: 'project' | 'list'): void {
         <UIcon name="i-lucide-radio" />
         <span>Running</span>
         <span class="nav-count">{{ liveCount }}</span>
-      </button>
-      <button
+      </UButton>
+      <UButton
         type="button"
         class="primary-nav-item"
+        color="neutral"
+        variant="ghost"
         :class="{ selected: attentionOnly }"
         :aria-pressed="attentionOnly"
         @click="showAttention"
@@ -133,40 +158,21 @@ function organizeBy(value: 'project' | 'list'): void {
         <UIcon name="i-lucide-circle-alert" />
         <span>Needs attention</span>
         <span class="nav-count" :class="{ warning: attentionCount }">{{ attentionCount }}</span>
-      </button>
+      </UButton>
     </nav>
 
     <section class="session-browser">
       <div class="sidebar-section-title">
         <span>{{ organization === 'project' ? 'Projects' : 'Recent sessions' }}</span>
-        <details ref="organizeMenu" class="organize-menu">
-          <summary aria-label="Organize sidebar" title="Organize sidebar">
-            <UIcon name="i-lucide-ellipsis" />
-          </summary>
-          <div class="organize-popover">
-            <span class="organize-title">Organize sidebar</span>
-            <button
-              type="button"
-              :class="{ selected: organization === 'project' }"
-              :aria-pressed="organization === 'project'"
-              @click="organizeBy('project')"
-            >
-              <UIcon name="i-lucide-check" />
-              By project
-            </button>
-            <button
-              type="button"
-              :class="{ selected: organization === 'list' }"
-              :aria-pressed="organization === 'list'"
-              @click="organizeBy('list')"
-            >
-              <UIcon name="i-lucide-check" />
-              In one list
-            </button>
-            <span class="organize-title secondary">Sort by</span>
-            <div class="organize-static"><UIcon name="i-lucide-check" /> Last updated</div>
-          </div>
-        </details>
+        <UDropdownMenu :items="organizeItems" :content="{ align: 'end' }">
+          <UButton
+            class="organize-trigger"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-ellipsis"
+            aria-label="Organize sidebar"
+          />
+        </UDropdownMenu>
       </div>
       <UInput
         v-model="query"
@@ -176,40 +182,50 @@ function organizeBy(value: 'project' | 'list'): void {
         aria-label="Filter runs"
       />
       <div class="source-filters" aria-label="Session source filter">
-        <button
+        <UButton
           v-for="option in sourceOptions"
           :key="option.value"
           type="button"
+          color="neutral"
+          variant="ghost"
           :class="{ selected: sourceFilter === option.value }"
           :aria-pressed="sourceFilter === option.value"
           @click="sourceFilter = option.value"
-        >{{ option.label }}</button>
+        >{{ option.label }}</UButton>
       </div>
       <label class="project-filter">
         <span>Project</span>
-        <select v-model="projectFilter" aria-label="Filter by project">
-          <option value="all">All projects</option>
-          <option v-for="project in projectOptions" :key="project.id" :value="project.id">
-            {{ project.name }}
-          </option>
-        </select>
+        <USelectMenu
+          v-model="projectFilter"
+          :items="projectSelectOptions"
+          value-key="value"
+          label-key="label"
+          size="xs"
+          aria-label="Filter by project"
+          :search-input="{ placeholder: 'Find project…' }"
+        />
       </label>
       <div class="filters">
         <UCheckbox v-model="liveOnly" class="toggle" label="Live only" />
         <UCheckbox v-model="hideIdle" class="toggle" label="Hide empty" />
       </div>
       <div v-if="sources.some(source => source.state !== 'ready')" class="source-statuses" aria-live="polite">
-        <p
+        <UAlert
           v-for="source in sources.filter(source => source.state !== 'ready')"
           :key="source.source"
           :class="source.state"
-        >
-          <strong>{{ source.source === 'claude' ? 'Claude' : source.source === 'codex' ? 'Codex' : 'Copilot' }}</strong>
-          {{ source.message }}
-        </p>
+          :color="source.state === 'degraded' ? 'warning' : 'error'"
+          variant="soft"
+          :title="source.source === 'claude' ? 'Claude' : source.source === 'codex' ? 'Codex' : 'Copilot'"
+          :description="source.message"
+          icon="i-lucide-triangle-alert"
+        />
       </div>
       <nav class="run-tree" aria-label="Claude, Codex, and Copilot sessions">
-        <p v-if="loading" class="muted empty-sidebar">Loading local sessions…</p>
+        <div v-if="loading" class="sidebar-skeleton" aria-live="polite" aria-label="Loading local sessions…">
+          <span class="sr-only">Loading local sessions…</span>
+          <USkeleton v-for="index in 4" :key="index" class="h-12 w-full rounded-md" />
+        </div>
         <template v-if="organization === 'project'">
           <div v-for="project in projects" :key="project.id" class="project-group">
             <button
@@ -232,12 +248,17 @@ function organizeBy(value: 'project' | 'list'): void {
                 :selected-key="selectedProject === project.id ? selectedKey : null"
                 @select="emit('select', project.id, $event)"
               />
-              <p v-if="!project.roots.length" class="muted empty-sidebar">No recent sessions.</p>
+              <UEmpty v-if="!project.roots.length" class="empty-sidebar" title="No recent sessions" variant="naked" />
             </div>
           </div>
-          <p v-if="!loading && !projects.some(project => project.roots.length)" class="muted empty-sidebar">
-            No matching sessions.
-          </p>
+          <UEmpty
+            v-if="!loading && !projects.some(project => project.roots.length)"
+            class="empty-sidebar"
+            icon="i-lucide-search-x"
+            title="No matching sessions"
+            description="Try clearing one of the session filters."
+            variant="naked"
+          />
         </template>
         <template v-else>
           <RunTreeNode
@@ -248,7 +269,13 @@ function organizeBy(value: 'project' | 'list'): void {
             :selected-key="selectedProject === entry.project ? selectedKey : null"
             @select="emit('select', entry.project, $event)"
           />
-          <p v-if="!loading && !recentRoots.length" class="muted empty-sidebar">No matching sessions.</p>
+          <UEmpty
+            v-if="!loading && !recentRoots.length"
+            class="empty-sidebar"
+            icon="i-lucide-search-x"
+            title="No matching sessions"
+            variant="naked"
+          />
         </template>
       </nav>
     </section>

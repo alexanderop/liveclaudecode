@@ -9,83 +9,95 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ select: [key: string] }>()
-const expanded = ref(true)
-const hasChildren = computed(() => props.node.children.length > 0)
-const displayLabel = computed(() => normalizeSessionLabel(props.node.label, props.node.key))
-const sourceLabel = computed(() =>
-  props.node.source === 'claude' ? 'Claude' : props.node.source === 'codex' ? 'Codex' : 'Copilot',
-)
-
-const running = computed(() =>
-  props.node.spawnState === 'running'
-  || (props.node.live && props.node.kind === 'subagent'),
-)
-
-const statusLabel = computed(() => {
-  if (running.value || props.node.subLive) return 'running'
-  if (props.node.subErrors) return `${props.node.subErrors} err`
-  return 'complete'
-})
-
-function handleClick(): void {
-  emit('select', props.node.key)
-  if (hasChildren.value) expanded.value = !expanded.value
+interface RunTreeItem {
+  key: string
+  label: string
+  node: RunNode
+  slot: 'session'
+  defaultExpanded: boolean
+  class: Array<string | Record<string, boolean>>
+  children: RunTreeItem[]
+  onSelect: () => void
 }
+
+function sourceLabel(node: RunNode): string {
+  return node.source === 'claude' ? 'Claude' : node.source === 'codex' ? 'Codex' : 'Copilot'
+}
+
+function statusLabel(node: RunNode): string {
+  if (node.spawnState === 'running' || node.subLive || (node.live && node.kind === 'subagent')) return 'running'
+  if (node.subErrors) return `${node.subErrors} err`
+  return 'complete'
+}
+
+function toItem(node: RunNode): RunTreeItem {
+  return {
+    key: node.key,
+    label: normalizeSessionLabel(node.label, node.key),
+    node,
+    slot: 'session',
+    defaultExpanded: true,
+    class: ['tree-node', { selected: props.selectedKey === node.key }],
+    children: node.children.map(toItem),
+    onSelect: () => emit('select', node.key),
+  }
+}
+
+const items = computed(() => [toItem(props.node)])
+const selectedItem = computed(() => {
+  const visit = (entries: RunTreeItem[]): RunTreeItem | undefined => {
+    for (const item of entries) {
+      if (item.node.key === props.selectedKey) return item
+      const child = visit(item.children)
+      if (child) return child
+    }
+  }
+  return visit(items.value)
+})
 </script>
 
 <template>
-  <div :class="{ kid: depth > 0 }">
-    <button
-      class="tree-node"
-      :class="{ selected: selectedKey === node.key }"
-      type="button"
-      :aria-expanded="hasChildren ? expanded : undefined"
-      :aria-current="selectedKey === node.key ? 'page' : undefined"
-      @click="handleClick"
-    >
-      <span class="tree-status" :class="{ running: node.subLive, error: node.subErrors && !node.subLive }">
-        <UIcon :name="node.kind === 'subagent' ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
+  <UTree
+    :items="items"
+    :model-value="selectedItem"
+    :get-key="item => item.key"
+    :aria-label="depth ? 'Agent subtree' : 'Session agents'"
+    :ui="{ listWithChildren: 'tree-children', itemWithChildren: 'tree-child' }"
+  >
+    <template #session="{ item, expanded }">
+      <span class="tree-status" :class="{ running: item.node.subLive, error: item.node.subErrors && !item.node.subLive }">
+        <UIcon :name="item.node.kind === 'subagent' ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
       </span>
       <span class="tree-content">
         <span class="tree-title-row">
-          <span class="tree-title">{{ displayLabel }}</span>
-          <span class="source-tag" :class="node.source">
-            {{ sourceLabel }}
+          <span class="tree-title">{{ item.label }}</span>
+          <span class="source-tag" :class="item.node.source">
+            {{ sourceLabel(item.node) }}
           </span>
         </span>
         <span class="tree-meta">
-          <span>{{ node.agentType || node.sourceDetail || sourceLabel }}</span>
+          <span>{{ item.node.agentType || item.node.sourceDetail || sourceLabel(item.node) }}</span>
           <span aria-hidden="true">·</span>
-          <span>{{ node.subTools }} tools</span>
-          <span v-if="node.subAgents">· {{ node.subAgents }} agents</span>
-          <span>· {{ formatDuration(node.firstTs, node.subLast) }}</span>
+          <span>{{ item.node.subTools }} tools</span>
+          <span v-if="item.node.subAgents">· {{ item.node.subAgents }} agents</span>
+          <span>· {{ formatDuration(item.node.firstTs, item.node.subLast) }}</span>
         </span>
-        <span v-if="node.current" class="current-activity">
-          {{ node.current.tool }} {{ node.current.summary.slice(0, 54) }}
+        <span v-if="item.node.current" class="current-activity">
+          {{ item.node.current.tool }} {{ item.node.current.summary.slice(0, 54) }}
         </span>
       </span>
       <span class="tree-trailing">
-        <span class="tree-end" :class="{ hot: node.subLive, error: node.subErrors && !node.subLive }">
-          {{ statusLabel }}
+        <span class="tree-end" :class="{ hot: item.node.subLive, error: item.node.subErrors && !item.node.subLive }">
+          {{ statusLabel(item.node) }}
         </span>
         <UIcon
-          v-if="hasChildren"
+          v-if="item.children.length"
           class="tree-chevron"
           :class="{ expanded }"
           name="i-lucide-chevron-right"
           aria-hidden="true"
         />
       </span>
-    </button>
-    <div v-if="hasChildren" v-show="expanded" class="tree-children">
-      <RunTreeNode
-        v-for="child in node.children"
-        :key="child.key"
-        :node="child"
-        :depth="depth + 1"
-        :selected-key="selectedKey"
-        @select="emit('select', $event)"
-      />
-    </div>
-  </div>
+    </template>
+  </UTree>
 </template>

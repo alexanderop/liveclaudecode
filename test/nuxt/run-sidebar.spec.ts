@@ -52,6 +52,7 @@ describe('RunSidebar', () => {
   it('groups sessions under the current project by default and can flatten the list', async () => {
     const root = run()
     const component = await mountSuspended(RunSidebar, {
+      global: { stubs: { UTooltip: { template: '<slot />' } } },
       props: {
         projects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
         allProjects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
@@ -89,10 +90,12 @@ describe('RunSidebar', () => {
     expect(project.attributes('aria-expanded')).toBe('false')
     expect(component.get('.project-runs').attributes('style')).toContain('display: none')
 
-    const listOption = component.findAll('.organize-popover button')
-      .find(button => button.text().includes('In one list'))
+    await component.get('button[aria-label="Organize sidebar"]').trigger('click')
+    const listOption = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find(button => button.textContent?.includes('In one list'))
     expect(listOption).toBeDefined()
-    await listOption!.trigger('click')
+    listOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await component.vm.$nextTick()
 
     expect(component.find('.project-row').exists()).toBe(false)
     expect(component.text()).toContain('Recent sessions')
@@ -106,6 +109,7 @@ describe('RunSidebar', () => {
     const first = run()
     const second = { ...run(), key: 'second-session', sid: 'second-session', label: 'Other run' }
     const component = await mountSuspended(RunSidebar, {
+      global: { stubs: { UTooltip: { template: '<slot />' } } },
       props: {
         projects: [
           { id: 'workout', name: 'workoutTracker', roots: [first] },
@@ -145,6 +149,7 @@ describe('RunSidebar', () => {
 
   it('updates provider/project filters and distinguishes loading, empty, and degraded states', async () => {
     const component = await mountSuspended(RunSidebar, {
+      global: { stubs: { UTooltip: { template: '<slot />' } } },
       props: {
         projects: [],
         allProjects: [],
@@ -172,7 +177,8 @@ describe('RunSidebar', () => {
     })
 
     expect(component.text()).toContain('Loading local sessions')
-    expect(component.text()).toContain('Codex 2 malformed records skipped')
+    expect(component.text()).toContain('Codex')
+    expect(component.text()).toContain('2 malformed records skipped')
 
     const codexButton = component.findAll('.source-filters button')
       .find(button => button.text() === 'Codex')
@@ -186,7 +192,12 @@ describe('RunSidebar', () => {
     await copilotButton!.trigger('click')
     expect(component.emitted('update:sourceFilter')).toContainEqual(['copilot'])
 
-    await component.get('select[aria-label="Filter by project"]').setValue('/repo')
+    await component.get('[aria-label="Filter by project"]').trigger('click')
+    const projectOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find(option => option.textContent?.includes('repo'))
+    expect(projectOption).toBeDefined()
+    projectOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await component.vm.$nextTick()
     expect(component.emitted('update:projectFilter')).toContainEqual(['/repo'])
 
     await component.setProps({ loading: false })

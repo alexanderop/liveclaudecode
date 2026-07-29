@@ -171,6 +171,25 @@ function resumeFollowing(): void {
   void scrollToBottom()
 }
 
+async function scrollToSelectedEvent(line: number): Promise<void> {
+  await nextTick()
+  const container = feed.value
+  const target = container?.querySelector<HTMLElement>(`[data-event-line="${line}"]`)
+  if (!container || !target) return
+
+  const containerRect = container.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const top = Math.max(
+    0,
+    container.scrollTop
+    + targetRect.top
+    - containerRect.top
+    - (containerRect.height - targetRect.height) / 2,
+  )
+
+  container.scrollTo({ top, behavior: 'smooth' })
+}
+
 watch(
   () => visibleEvents.value.length,
   () => {
@@ -189,10 +208,21 @@ watch(
   { immediate: true },
 )
 
-watch(() => props.selectedLine, async line => {
-  if (line == null) return
-  await nextTick()
-  feed.value?.querySelector<HTMLElement>(`[data-event-line="${line}"]`)?.scrollIntoView({ block: 'center' })
+watch(
+  [
+    () => props.selectedLine,
+    () => props.events.length,
+    () => props.density,
+    () => props.errorsOnly,
+  ],
+  ([line]) => {
+    if (line != null) void scrollToSelectedEvent(line)
+  },
+  { flush: 'post' },
+)
+
+onMounted(() => {
+  if (props.selectedLine != null) void scrollToSelectedEvent(props.selectedLine)
 })
 </script>
 
@@ -201,11 +231,14 @@ watch(() => props.selectedLine, async line => {
     <div v-if="truncated" class="feed-notice" role="status">
       <UIcon name="i-lucide-history" /> Showing the latest {{ formatCount(events.length) }} session events
     </div>
-    <div v-if="!visibleEvents.length" class="empty-state feed-empty">
-      <span class="empty-state-icon"><UIcon name="i-lucide-activity" /></span>
-      <h2>{{ emptyState.title }}</h2>
-      <p>{{ emptyState.description }}</p>
-    </div>
+    <UEmpty
+      v-if="!visibleEvents.length"
+      class="feed-empty"
+      icon="i-lucide-activity"
+      :title="emptyState.title"
+      :description="emptyState.description"
+      variant="naked"
+    />
     <template v-for="(event, eventIndex) in visibleEvents" :key="`${event.line}-${event.kind}-${event.id || ''}-${eventIndex}`">
       <button
         v-if="isCompact(event)"

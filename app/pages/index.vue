@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RunNode, TranscriptEvent } from '#shared/types/run'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
 
 const live = useLiveRuns()
@@ -21,7 +22,8 @@ const canvasTime = ref<number | null>(null)
 const focusedLine = ref<number | null>(null)
 const focusedFile = ref<string | null>(null)
 const activityAgentKey = ref('all')
-const sidebarVisible = ref(true)
+const searchOpen = ref(false)
+const sidebarCollapsed = ref(false)
 const viewportWidth = ref(1440)
 const sidebarWidth = ref(272)
 const panelWidth = ref(380)
@@ -36,6 +38,8 @@ const PRIMARY_MIN = 300
 const RESIZE_HANDLES_WIDTH = 14
 const SIDEBAR_STORAGE_KEY = 'liveclaudecode:sidebar-width'
 const PANEL_STORAGE_KEY = 'liveclaudecode:panel-width'
+const sidebarVisible = computed(() => !sidebarCollapsed.value)
+const mobilePanel = computed(() => viewportWidth.value <= 880)
 
 const sidebarMax = computed(() => {
   if (viewportWidth.value <= 680) return SIDEBAR_MAX
@@ -54,10 +58,6 @@ const panelMax = computed(() => {
     Math.min(PANEL_MAX, viewportWidth.value - browserWidth - PRIMARY_MIN - RESIZE_HANDLES_WIDTH),
   )
 })
-
-const shellStyle = computed(() => ({
-  '--sidebar-width': `${sidebarWidth.value}px`,
-}))
 
 const workspaceStyle = computed(() => ({
   '--panel-width': `${panelWidth.value}px`,
@@ -109,6 +109,43 @@ const inspectedNode = computed(() => {
 })
 
 const activityAgents = computed(() => flattenRunTree(live.selectedRoot.value))
+const activityAgentOptions = computed(() => [
+  { label: 'Whole session', value: 'all' },
+  ...activityAgents.value.map(agent => ({ label: agent.label, value: agent.key })),
+])
+const searchGroups = computed(() => [{
+  id: 'sessions',
+  label: 'Sessions',
+  items: live.projects.value.flatMap(project => project.roots.map(root => ({
+    id: `${project.id}/${root.key}`,
+    label: normalizeSessionLabel(root.label, root.key),
+    description: project.name,
+    suffix: root.subLive ? 'Running' : root.subErrors ? 'Attention' : root.source,
+    icon: root.subLive
+      ? 'i-lucide-radio'
+      : root.subErrors
+        ? 'i-lucide-circle-alert'
+        : 'i-lucide-message-square-code',
+    onSelect: () => {
+      searchOpen.value = false
+      void selectSession(project.id, root.key)
+    },
+  }))),
+}, {
+  id: 'views',
+  label: 'Open view',
+  items: views.map(view => ({
+    id: view.id,
+    label: view.label,
+    icon: view.icon,
+    kbds: [view.shortcut],
+    disabled: !live.selectedRoot.value,
+    onSelect: () => {
+      searchOpen.value = false
+      openSessionPanel(view.id)
+    },
+  })),
+}])
 const activityEvents = computed<TranscriptEvent[]>(() => {
   const root = live.selectedRoot.value
   const base = live.sessionEvents.value.length
@@ -191,7 +228,7 @@ function handleShortcut(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b' && !event.altKey) {
     event.preventDefault()
-    sidebarVisible.value = !sidebarVisible.value
+    sidebarCollapsed.value = !sidebarCollapsed.value
     return
   }
   if (target?.matches('input, textarea, [contenteditable="true"]') || event.metaKey || event.ctrlKey || event.altKey) return
@@ -234,9 +271,9 @@ watch(inspectedNode, node => {
   if (inspectedKey.value && !node) closePanel()
 })
 
-watch(sidebarWidth, width => persistWidth(SIDEBAR_STORAGE_KEY, width))
 watch(panelWidth, width => persistWidth(PANEL_STORAGE_KEY, width))
-watch([activePanel, sidebarVisible], () => {
+watch(sidebarWidth, width => persistWidth(SIDEBAR_STORAGE_KEY, width))
+watch([activePanel, sidebarCollapsed], () => {
   if (import.meta.client) fitPanelsToViewport()
 })
 
@@ -264,7 +301,19 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="shell" :style="shellStyle">
+  <UDashboardGroup
+    class="shell"
+    storage="local"
+    storage-key="liveclaudecode"
+    unit="px"
+  >
+    <UDashboardSearch
+      v-model:open="searchOpen"
+      :groups="searchGroups"
+      placeholder="Jump to a session or view…"
+      :color-mode="false"
+      virtualize
+    />
     <UBadge
       v-if="live.offline.value"
       class="offline-badge"
@@ -273,24 +322,33 @@ onUnmounted(() => {
       icon="i-lucide-wifi-off"
       label="Viewer offline — retrying"
     />
-    <RunSidebar
-      :class="{ 'sidebar-collapsed': !sidebarVisible }"
-      v-model:query="live.query.value"
-      v-model:source-filter="live.sourceFilter.value"
-      v-model:project-filter="live.projectFilter.value"
-      v-model:live-only="live.liveOnly.value"
-      v-model:attention-only="live.attentionOnly.value"
-      v-model:hide-idle="live.hideIdle.value"
-      :projects="live.visibleProjects.value"
-      :all-projects="live.projects.value"
-      :sources="live.sources.value"
-      :project-options="live.projectOptions.value"
-      :loading="live.loading.value"
-      :selected-project="live.selectedProject.value"
-      :selected-key="live.selectedKey.value"
-      @select="selectSession"
-      @collapse="sidebarVisible = false"
-    />
+    <UDashboardSidebar
+      id="session-browser"
+      v-model:collapsed="sidebarCollapsed"
+      class="dashboard-session-sidebar"
+      collapsible
+      :style="{ '--custom-sidebar-width': `${sidebarWidth}px` }"
+      :collapsed-size="0"
+      :ui="{ root: '!min-w-0', body: '!p-0 !gap-0 !overflow-hidden' }"
+    >
+      <RunSidebar
+        v-model:query="live.query.value"
+        v-model:source-filter="live.sourceFilter.value"
+        v-model:project-filter="live.projectFilter.value"
+        v-model:live-only="live.liveOnly.value"
+        v-model:attention-only="live.attentionOnly.value"
+        v-model:hide-idle="live.hideIdle.value"
+        :projects="live.visibleProjects.value"
+        :all-projects="live.projects.value"
+        :sources="live.sources.value"
+        :project-options="live.projectOptions.value"
+        :loading="live.loading.value"
+        :selected-project="live.selectedProject.value"
+        :selected-key="live.selectedKey.value"
+        @select="selectSession"
+        @collapse="sidebarCollapsed = true"
+      />
+    </UDashboardSidebar>
     <PanelResizeHandle
       v-if="sidebarVisible"
       v-model="sidebarWidth"
@@ -301,7 +359,8 @@ onUnmounted(() => {
       direction="right"
       label="Resize session browser"
     />
-    <main class="main-content">
+    <UDashboardPanel class="main-content-panel" :ui="{ root: '!min-h-0' }">
+      <main class="main-content">
       <RunHero
         v-model:follow-active="live.followActive.value"
         :sidebar-visible="sidebarVisible"
@@ -309,15 +368,15 @@ onUnmounted(() => {
         :selected="live.selectedNode.value"
         :file-count="live.run.value?.files.length || 0"
         :transcript-path="live.run.value?.transcriptPath || ''"
-        @show-sidebar="sidebarVisible = true"
+        @show-sidebar="sidebarCollapsed = false"
       />
       <div
         class="session-workspace"
-        :class="{ 'panel-open': activePanel }"
+        :class="{ 'panel-open': activePanel && !mobilePanel }"
         :style="workspaceStyle"
       >
         <section class="session-primary">
-          <div class="view-bar canvas-view-bar">
+          <UDashboardToolbar class="view-bar canvas-view-bar">
             <div class="canvas-view-identity">
               <UIcon name="i-lucide-workflow" />
               <span>
@@ -326,20 +385,22 @@ onUnmounted(() => {
               </span>
             </div>
             <nav class="view-tabs" aria-label="Supporting session views">
-              <button
+              <UButton
                 v-for="view in views"
                 :key="view.id"
                 type="button"
+                color="neutral"
+                variant="ghost"
                 :class="{ selected: activePanel === view.id }"
                 :aria-pressed="activePanel === view.id"
                 @click="openSessionPanel(view.id)"
               >
                 <UIcon :name="view.icon" />
                 {{ view.label }}
-                <kbd>{{ view.shortcut }}</kbd>
-              </button>
+                <UKbd :value="view.shortcut" />
+              </UButton>
             </nav>
-          </div>
+          </UDashboardToolbar>
 
           <RunCanvas
             :run="live.run.value"
@@ -356,7 +417,7 @@ onUnmounted(() => {
         </section>
 
         <PanelResizeHandle
-          v-if="activePanel"
+          v-if="activePanel && !mobilePanel"
           v-model="panelWidth"
           class="workspace-panel-resize-handle"
           :min="PANEL_MIN"
@@ -366,45 +427,53 @@ onUnmounted(() => {
           label="Resize details panel"
         />
 
-        <RunInspector
-          v-if="activePanel === 'inspector'"
-          :run="live.run.value"
-          :root="live.selectedRoot.value"
-          :selected="inspectedNode"
-          :selected-key="inspectedKey"
-          :events="live.inspectedEvents.value"
-          :events-loading="live.inspectedEventsLoading.value"
-          :density="live.density.value"
-          :errors-only="live.errorsOnly.value"
-          :follow-output="live.followOutput.value"
-          :current-time="canvasTime"
-          :focused-line="focusedLine"
-          :focused-file="focusedFile"
-          @select="inspectCanvasNode"
+        <ResponsiveDashboardPanel
+          v-if="activePanel"
+          :mobile="mobilePanel"
+          :title="activePanel === 'inspector' ? 'Selected agent details' : `${views.find(view => view.id === activePanel)?.label || 'Session'} panel`"
           @close="closePanel"
-          @focus-time="focusTime"
-          @focus-file="focusFile"
-          @update:density="live.density.value = $event"
-          @update:errors-only="live.errorsOnly.value = $event"
-        />
+        >
+          <RunInspector
+            v-if="activePanel === 'inspector'"
+            :run="live.run.value"
+            :root="live.selectedRoot.value"
+            :selected="inspectedNode"
+            :selected-key="inspectedKey"
+            :events="live.inspectedEvents.value"
+            :events-loading="live.inspectedEventsLoading.value"
+            :density="live.density.value"
+            :errors-only="live.errorsOnly.value"
+            :follow-output="live.followOutput.value"
+            :current-time="canvasTime"
+            :focused-line="focusedLine"
+            :focused-file="focusedFile"
+            @select="inspectCanvasNode"
+            @close="closePanel"
+            @focus-time="focusTime"
+            @focus-file="focusFile"
+            @update:density="live.density.value = $event"
+            @update:errors-only="live.errorsOnly.value = $event"
+          />
 
-        <aside v-else-if="activePanel" class="session-panel" :aria-label="`${views.find(view => view.id === activePanel)?.label} panel`">
+          <aside v-else class="session-panel" :aria-label="`${views.find(view => view.id === activePanel)?.label} panel`">
           <header class="session-panel-title">
             <span>
               <UIcon :name="views.find(view => view.id === activePanel)?.icon" />
               {{ views.find(view => view.id === activePanel)?.label }}
             </span>
-            <button type="button" aria-label="Close panel" @click="closePanel">
-              <UIcon name="i-lucide-x" />
-            </button>
+            <UButton color="neutral" variant="ghost" icon="i-lucide-x" aria-label="Close panel" @click="closePanel" />
           </header>
           <div v-if="activePanel === 'activity'" class="session-panel-controls">
             <label class="activity-agent-filter">
               <span>Agent</span>
-              <select v-model="activityAgentKey" aria-label="Filter activity by agent">
-                <option value="all">Whole session</option>
-                <option v-for="agent in activityAgents" :key="agent.key" :value="agent.key">{{ agent.label }}</option>
-              </select>
+              <USelectMenu
+                v-model="activityAgentKey"
+                :items="activityAgentOptions"
+                value-key="value"
+                label-key="label"
+                size="xs"
+                aria-label="Filter activity by agent"
+              />
             </label>
             <div class="segments" role="group" aria-label="Event detail">
               <button
@@ -416,24 +485,30 @@ onUnmounted(() => {
                 @click="live.density.value = option"
               >{{ option }}</button>
             </div>
-            <button
+            <UButton
               type="button"
               class="quiet-action"
+              color="neutral"
+              variant="ghost"
+              icon="i-lucide-circle-alert"
               :class="{ active: live.errorsOnly.value }"
               :aria-pressed="live.errorsOnly.value"
               @click="live.errorsOnly.value = !live.errorsOnly.value"
             >
-              <UIcon name="i-lucide-circle-alert" />Errors
-            </button>
-            <button
+              Errors
+            </UButton>
+            <UButton
               type="button"
               class="quiet-action"
+              color="neutral"
+              variant="ghost"
+              icon="i-lucide-arrow-down-to-line"
               :class="{ active: live.followOutput.value }"
               :aria-pressed="live.followOutput.value"
               @click="live.followOutput.value = !live.followOutput.value"
             >
-              <UIcon name="i-lucide-arrow-down-to-line" />Follow
-            </button>
+              Follow
+            </UButton>
           </div>
           <RunNowBoard
             v-if="activePanel === 'now'"
@@ -474,8 +549,10 @@ onUnmounted(() => {
             :project="live.selectedProject.value || ''"
             :session-key="live.selectedKey.value || ''"
           />
-        </aside>
+          </aside>
+        </ResponsiveDashboardPanel>
       </div>
-    </main>
-  </div>
+      </main>
+    </UDashboardPanel>
+  </UDashboardGroup>
 </template>

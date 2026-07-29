@@ -38,6 +38,13 @@ const tabs = [
   { id: 'files', label: 'Files', icon: 'i-lucide-files' },
   { id: 'result', label: 'Result', icon: 'i-lucide-message-square-text' },
 ] as const
+const inspectorTabs = computed(() => tabs.map(tab => ({
+  ...tab,
+  value: tab.id,
+  badge: tab.id === 'incidents' && selectedIncidents.value.length
+    ? { label: String(selectedIncidents.value.length), color: 'error' as const, variant: 'soft' as const }
+    : undefined,
+})))
 
 const status = computed(() => {
   const summary = agentState(props.selected, props.run?.diagnostics.incidents)
@@ -88,21 +95,20 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
   <aside class="inspector" aria-label="Selected node details">
     <div class="inspector-title">
       <span><small>Selected agent</small><strong>{{ displayLabel }}</strong></span>
-      <button type="button" class="inspector-close" aria-label="Close details" @click="emit('close')"><UIcon name="i-lucide-x" /></button>
+      <UButton class="inspector-close" color="neutral" variant="ghost" icon="i-lucide-x" aria-label="Close details" @click="emit('close')" />
     </div>
 
-    <div v-if="run && root && selected" class="inspector-tabs" role="tablist" aria-label="Selected agent view">
-      <button
-        v-for="tab in tabs"
-        :key="tab.id"
-        type="button"
-        role="tab"
-        :aria-selected="activeTab === tab.id"
-        :class="{ selected: activeTab === tab.id }"
-        :title="tab.label"
-        @click="activeTab = tab.id"
-      ><UIcon :name="tab.icon" /><span>{{ tab.label }}</span><b v-if="tab.id === 'incidents' && selectedIncidents.length">{{ selectedIncidents.length }}</b></button>
-    </div>
+    <UTabs
+      v-if="run && root && selected"
+      v-model="activeTab"
+      class="inspector-tabs"
+      :items="inspectorTabs"
+      :content="false"
+      color="neutral"
+      variant="link"
+      size="xs"
+      aria-label="Selected agent view"
+    />
 
     <div v-if="run && root && selected && activeTab === 'activity'" class="inspector-activity">
       <div class="session-panel-controls">
@@ -111,7 +117,14 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
         </div>
         <button type="button" class="quiet-action" :class="{ active: errorsOnly }" :aria-pressed="errorsOnly" @click="emit('update:errorsOnly', !errorsOnly)"><UIcon name="i-lucide-circle-alert" />Errors</button>
       </div>
-      <div v-if="eventsLoading" class="inspector-activity-loading" aria-live="polite"><UIcon name="i-lucide-loader-circle" />Loading agent activity…</div>
+      <UEmpty
+        v-if="eventsLoading"
+        class="inspector-activity-loading"
+        loading
+        title="Loading agent activity…"
+        variant="naked"
+        aria-live="polite"
+      />
       <EventFeed
         v-else
         :events="events"
@@ -167,14 +180,14 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
         <UIcon :name="incident.severity === 'error' ? 'i-lucide-circle-alert' : 'i-lucide-triangle-alert'" />
         <span><strong>{{ incident.title }}</strong><small>{{ incident.detail }}</small><code>line {{ incident.line + 1 }} · {{ formatTime(incident.ts) }}</code></span>
       </button>
-      <div v-if="!selectedIncidents.length" class="inspector-empty"><UIcon name="i-lucide-circle-check" /><span>No incidents recorded for this agent.</span></div>
+      <UEmpty v-if="!selectedIncidents.length" class="inspector-empty" icon="i-lucide-circle-check" title="No incidents recorded for this agent" variant="naked" />
     </div>
 
     <div v-else-if="run && selected && activeTab === 'files'" class="inspector-details inspector-list-tab">
       <button v-for="file in selectedFiles" :key="file.path" type="button" class="inspector-list-row file" :class="{ selected: focusedFile === file.path }" @click="emit('focus-file', focusedFile === file.path ? null : file.path)">
         <UIcon name="i-lucide-file-code-2" /><span><strong :title="file.path">{{ file.path }}</strong><small>{{ file.ops }} operations <template v-if="file.added || file.removed">· +{{ file.added }} −{{ file.removed }}</template></small></span>
       </button>
-      <div v-if="!selectedFiles.length" class="inspector-empty"><UIcon name="i-lucide-files" /><span>No file changes recorded for this agent.</span></div>
+      <UEmpty v-if="!selectedFiles.length" class="inspector-empty" icon="i-lucide-files" title="No file changes recorded for this agent" variant="naked" />
     </div>
 
     <div v-else-if="run && selected && activeTab === 'result'" class="inspector-details inspector-result">
@@ -182,6 +195,6 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
       <section><span class="section-eyebrow">Final result</span><div class="result-copy">{{ selected.finalText || lastText?.body || 'No final result was recorded.' }}</div></section>
     </div>
 
-    <div v-else class="inspector-empty"><UIcon name="i-lucide-panel-right" /><span>Session properties will appear here.</span></div>
+    <UEmpty v-else class="inspector-empty" icon="i-lucide-panel-right" title="Session properties will appear here" variant="naked" />
   </aside>
 </template>

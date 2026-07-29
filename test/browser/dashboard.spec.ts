@@ -39,6 +39,12 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
   await expect(page.getByText('Claude', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Supporting session views' })).toBeVisible()
 
+  await page.getByRole('button', { name: /Jump to session/ }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByPlaceholder('Jump to a session or view…')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
   await page.keyboard.press('a')
   await expect(page.getByRole('complementary', { name: 'Activity panel' })).toBeVisible()
 
@@ -74,6 +80,13 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
       `${mode} mode accessibility violations`,
     ).toEqual([])
   }
+
+  await page.setViewportSize({ width: 800, height: 900 })
+  await page.keyboard.press('a')
+  await expect(page.locator('.supporting-slideover')).toBeVisible()
+  await expect(page.getByRole('complementary', { name: 'Activity panel' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.supporting-slideover')).toHaveCount(0)
 
   expect(hydrationErrors).toEqual([])
   expect(externalRequests).toEqual([])

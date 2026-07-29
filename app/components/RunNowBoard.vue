@@ -68,11 +68,13 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
 <template>
   <div class="now-view">
-    <div v-if="!root" class="empty-state">
-      <span class="empty-state-icon"><UIcon name="i-lucide-gauge" /></span>
-      <h2>No session selected</h2>
-      <p>Choose a session to see what every agent is doing now.</p>
-    </div>
+    <UEmpty
+      v-if="!root"
+      icon="i-lucide-gauge"
+      title="No session selected"
+      description="Choose a session to see what every agent is doing now."
+      variant="naked"
+    />
 
     <template v-else>
       <section class="now-intro">

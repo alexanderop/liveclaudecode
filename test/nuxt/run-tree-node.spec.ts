@@ -58,7 +58,7 @@ describe('RunTreeNode', () => {
     expect(component.text()).toContain('Claude')
     expect(component.text()).toContain('2 tools')
     expect(component.get('button').classes()).toContain('selected')
-    expect(component.get('button').attributes('aria-current')).toBe('page')
+    expect(component.get('button').attributes('aria-selected')).toBe('true')
     await component.get('button').trigger('click')
     expect(component.emitted('select')).toEqual([['session']])
   })
@@ -137,7 +137,7 @@ describe('RunTreeNode', () => {
     await parent.trigger('click')
     expect(component.emitted('select')).toEqual([['session']])
     expect(parent.attributes('aria-expanded')).toBe('false')
-    expect(component.get('.tree-children').attributes('style')).toContain('display: none')
+    expect(component.find('.tree-children').exists()).toBe(false)
 
     await parent.trigger('click')
     expect(parent.attributes('aria-expanded')).toBe('true')
