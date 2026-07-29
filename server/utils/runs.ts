@@ -19,6 +19,7 @@ import type {
   Usage,
 } from '#shared/types/run'
 import { plainText, readHead } from './transcript'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 /**
  * How many transcript files one scan fan-out reads at once. Bounded rather
@@ -75,12 +76,8 @@ const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
     }
     const parsed = parseClaudeRecord(value)
     if (!parsed.success || parsed.record.kind !== 'user') continue
-    const candidate = plainText(parsed.record.data.message.content)
-      .replace(/<command-(?:name|message|args)>/g, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-    if (candidate && !candidate.startsWith('Caveat:')) return candidate.slice(0, 100)
+    const candidate = normalizeSessionLabel(plainText(parsed.record.data.message.content))
+    if (candidate) return candidate
   }
   return ''
 })
@@ -123,7 +120,7 @@ export const collect = Effect.fn('collect')(function*(
         kind: 'session',
         sid,
         meta: null,
-        label: (yield* firstPrompt(path)) || sid.slice(0, 8),
+        label: normalizeSessionLabel(yield* firstPrompt(path), sid.slice(0, 8)),
       } satisfies CollectedItem
     }),
     { concurrency: FILE_CONCURRENCY },
@@ -149,7 +146,7 @@ export const collect = Effect.fn('collect')(function*(
             kind: 'subagent',
             sid: sessionName,
             meta,
-            label: meta?.description || agent,
+            label: normalizeSessionLabel(meta?.description || '', agent),
           } satisfies CollectedItem
         }),
       )

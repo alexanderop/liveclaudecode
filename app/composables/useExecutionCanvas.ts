@@ -8,6 +8,7 @@ import type { ExecutionDirection } from '~/utils/execution-graph'
 export interface ExecutionCanvasContext {
   layoutDirection: Readonly<Ref<ExecutionDirection>>
   selectNode: (key: string) => void
+  toggleNode: (key: string) => void
 }
 
 export const ExecutionCanvasKey: InjectionKey<ExecutionCanvasContext>

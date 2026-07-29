@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RunNode } from '#shared/types/run'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 const props = defineProps<{
   root: RunNode | null
@@ -17,6 +18,7 @@ let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 const copyLabel = computed(() =>
   copyState.value === 'copied' ? 'Copied' : copyState.value === 'failed' ? 'Try again' : 'Copy',
 )
+const displayLabel = computed(() => normalizeSessionLabel(props.root?.label || '', 'Select a local session'))
 
 async function copyTranscriptPath(): Promise<void> {
   if (!props.transcriptPath) return
@@ -124,7 +126,7 @@ onUnmounted(() => {
           <UIcon :name="selected?.agentType ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
           {{ selected?.agentType || `${sourceLabel} session` }}
         </div>
-        <h1>{{ root?.label || 'Select a local session' }}</h1>
+        <h1>{{ displayLabel }}</h1>
         <div v-if="transcriptPath" class="transcript-location">
           <UIcon name="i-lucide-file-json" />
           <span>JSONL</span>

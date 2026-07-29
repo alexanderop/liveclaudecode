@@ -28,6 +28,7 @@ import type {
   TranscriptStats,
   Usage,
 } from '#shared/types/run'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 import {
   clip,
   consumeNewRecords,
@@ -271,7 +272,7 @@ export class CodexTranscriptScan {
         ? 'text'
         : item.role === 'user' ? 'prompt' : 'meta'
       this.events.push({ role, kind, ts, line, body, full, model: this.model || undefined })
-      if (item.role === 'user') this.firstPrompt ||= text.replace(/\s+/g, ' ').trim().slice(0, 100)
+      if (item.role === 'user') this.firstPrompt ||= normalizeSessionLabel(text)
       if (item.role === 'assistant') {
         this.finalText = text
         for (const [title, strong] of findMilestones(text)) {
