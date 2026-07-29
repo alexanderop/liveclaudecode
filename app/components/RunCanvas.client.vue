@@ -77,15 +77,31 @@ const {
   getNodes,
   getSelectedNodes,
   getViewport,
+  maxZoom,
+  minZoom,
   onNodesInitialized,
   removeSelectedNodes,
   setViewport,
+  viewport,
+  zoomIn,
+  zoomOut,
 } = useVueFlow('execution-canvas')
 
 provide(ExecutionCanvasKey, {
   layoutDirection,
   selectNode: key => emit('select', key),
 })
+
+const minZoomReached = computed(() => viewport.value.zoom <= minZoom.value)
+const maxZoomReached = computed(() => viewport.value.zoom >= maxZoom.value)
+
+function zoomCanvasIn(): void {
+  void zoomIn()
+}
+
+function zoomCanvasOut(): void {
+  void zoomOut()
+}
 
 function viewKey(): string {
   return `${displayMode.value}:${layoutDirection.value}`
@@ -425,8 +441,39 @@ onBeforeUnmount(() => document.removeEventListener('visibilitychange', handleVis
         />
         <Controls
           position="bottom-left"
+          :show-zoom="false"
+          :show-fit-view="false"
           :show-interactive="false"
-        />
+        >
+          <template #top>
+            <button
+              type="button"
+              class="vue-flow__controls-button vue-flow__controls-zoomin"
+              aria-label="Zoom in"
+              :disabled="maxZoomReached"
+              @click="zoomCanvasIn"
+            >
+              <UIcon name="i-lucide-plus" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="vue-flow__controls-button vue-flow__controls-zoomout"
+              aria-label="Zoom out"
+              :disabled="minZoomReached"
+              @click="zoomCanvasOut"
+            >
+              <UIcon name="i-lucide-minus" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="vue-flow__controls-button vue-flow__controls-fitview"
+              aria-label="Fit graph to view"
+              @click="fitView()"
+            >
+              <UIcon name="i-lucide-scan" aria-hidden="true" />
+            </button>
+          </template>
+        </Controls>
       </VueFlow>
     </template>
   </div>

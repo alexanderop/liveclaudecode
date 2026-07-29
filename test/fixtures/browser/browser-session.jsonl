@@ -1,0 +1,3 @@
+{"cwd":"/repo","type":"user","timestamp":"2026-07-29T08:00:00.000Z","message":{"content":[{"type":"text","text":"Verify the browser dashboard"}]}}
+{"cwd":"/repo","type":"assistant","timestamp":"2026-07-29T08:00:01.000Z","message":{"content":[{"type":"text","text":"The synthetic browser session is ready."}],"model":"claude-opus-5","stop_reason":"end_turn"}}
+{"cwd":"/repo","type":"system","subtype":"turn_duration","timestamp":"2026-07-29T08:00:02.000Z","durationMs":2000,"messageCount":2}

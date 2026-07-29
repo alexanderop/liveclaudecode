@@ -1,10 +1,29 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import axe from 'axe-core'
+import type { RunOptions } from 'axe-core'
+import { flushPromises } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import RunChanges from '~/components/RunChanges.vue'
 import RunOverview from '~/components/RunOverview.vue'
-import { runResponse } from '../fixtures/runs'
+import { runNode, runResponse } from '../fixtures/runs'
+
+const axeOptions: RunOptions = {
+  resultTypes: ['violations'],
+  rules: {
+    // happy-dom has no layout engine, so contrast results are not meaningful here.
+    'color-contrast': { enabled: false },
+  },
+}
+
+async function expectNoViolations(element: Element, disabledRules: string[] = []) {
+  const rules = Object.fromEntries(disabledRules.map(rule => [rule, { enabled: false }]))
+  const results = await axe.run(element, {
+    ...axeOptions,
+    rules: { ...axeOptions.rules, ...rules },
+  })
+  expect(results.violations).toEqual([])
+}
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -28,15 +47,67 @@ describe('accessibility', () => {
     })
 
     try {
-      const results = await axe.run(component.element, {
-        resultTypes: ['violations'],
-        rules: {
-          // happy-dom has no layout engine, so contrast results are not meaningful here.
-          'color-contrast': { enabled: false },
-        },
-      })
+      await expectNoViolations(component.element)
+    } finally {
+      component.unmount()
+    }
+  })
 
-      expect(results.violations).toEqual([])
+  it('has no detectable violations across the populated dashboard panels', async () => {
+    const root = runNode()
+    const run = runResponse()
+    vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
+      if (url === '/api/tree') {
+        return {
+          projects: [{ id: '/repo', name: 'repo', roots: [root] }],
+          sources: [],
+          now: 0,
+        }
+      }
+      if (url.startsWith('/api/run')) return run
+      if (url.startsWith('/api/events')) {
+        return {
+          key: root.key,
+          events: [],
+          next: 0,
+          revision: 1,
+          reset: false,
+          node: run.node,
+        }
+      }
+      if (url.startsWith('/api/chat')) {
+        return {
+          events: [],
+          next: 0,
+          revision: 0,
+          reset: false,
+          status: 'idle',
+          agent: null,
+        }
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }))
+    const component = await mountSuspended(IndexPage, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          RunCanvas: true,
+        },
+      },
+    })
+
+    try {
+      await flushPromises()
+      await expectNoViolations(component.element)
+
+      for (const label of ['Activity', 'Guide', 'Diagnostics', 'Changes', 'Ask']) {
+        const button = component.findAll('.view-tabs button')
+          .find(candidate => candidate.text().includes(label))
+        expect(button, `Missing ${label} view button`).toBeDefined()
+        await button!.trigger('click')
+        await flushPromises()
+        await expectNoViolations(component.element)
+      }
     } finally {
       component.unmount()
     }
@@ -54,16 +125,8 @@ describe('accessibility', () => {
     })
 
     try {
-      const results = await axe.run(document.body, {
-        resultTypes: ['violations'],
-        rules: {
-          'color-contrast': { enabled: false },
-          // These are isolated views; the dashboard supplies their enclosing main landmark.
-          'region': { enabled: false },
-        },
-      })
-
-      expect(results.violations).toEqual([])
+      // These are isolated views; the dashboard supplies their enclosing main landmark.
+      await expectNoViolations(document.body, ['region'])
     } finally {
       changes.unmount()
       overview.unmount()

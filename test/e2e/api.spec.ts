@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { $fetch, setup } from '@nuxt/test-utils/e2e'
+import { $fetch, fetch, setup } from '@nuxt/test-utils/e2e'
 import type { EventsResponse, RunResponse, TreeResponse } from '#shared/types/run'
 import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import * as fixture from '../fixtures/transcripts'
@@ -155,6 +155,20 @@ describe('read-only API', async () => {
     expect(html).toContain('aria-label="Supporting session views"')
   })
 
+  it('prevents caching of every live read endpoint', async () => {
+    const paths = [
+      '/api/tree',
+      `/api/run?key=${SESSION}`,
+      `/api/events?key=${SESSION}&since=0`,
+      `/api/chat?project=${encodeURIComponent(directory)}&key=${SESSION}&since=0&revision=0`,
+    ]
+
+    for (const path of paths) {
+      const response = await fetch(path)
+      expect(response.headers.get('cache-control'), path).toBe('no-store')
+    }
+  })
+
   it('returns a combined, provider-tagged run hierarchy and source health', async () => {
     const response = await $fetch<TreeResponse>('/api/tree')
     const project = response.projects.find(item => item.name === 'repo')
@@ -243,73 +257,83 @@ describe('read-only API', async () => {
   })
 
   it('reads newly appended complete Codex records without duplicating prior events', async () => {
-    const key = `codex:${CODEX_SESSION}`
-    const first = await $fetch<EventsResponse>(`/api/events?key=${key}&since=0`)
-    codex.appendRecords(codexRootPath, [
-      codex.toolOutput('live-command', { exit_code: 0, output: 'passed' }),
-      codex.message('assistant', 'Codex run complete', { ts: codex.C0(9) }),
-      codex.event('task_complete', {}, codex.C0(10)),
-    ])
+    const original = readFileSync(codexRootPath)
+    try {
+      const key = `codex:${CODEX_SESSION}`
+      const first = await $fetch<EventsResponse>(`/api/events?key=${key}&since=0`)
+      codex.appendRecords(codexRootPath, [
+        codex.toolOutput('live-command', { exit_code: 0, output: 'passed' }),
+        codex.message('assistant', 'Codex run complete', { ts: codex.C0(9) }),
+        codex.event('task_complete', {}, codex.C0(10)),
+      ])
 
-    const second = await $fetch<EventsResponse>(`/api/events?key=${key}&since=${first.next}`)
-    expect(second.events.map(event => event.kind)).toEqual(['tool_result', 'text'])
-    expect(second.next).toBe(first.next + 2)
+      const second = await $fetch<EventsResponse>(`/api/events?key=${key}&since=${first.next}`)
+      expect(second.events.map(event => event.kind)).toEqual(['tool_result', 'text'])
+      expect(second.next).toBe(first.next + 2)
 
-    const run = await $fetch<RunResponse>(`/api/run?key=${key}`)
-    expect(run.root.subLive).toBe(false)
-    expect(run.root.finalText).toBe('Codex run complete')
+      const run = await $fetch<RunResponse>(`/api/run?key=${key}`)
+      expect(run.root.subLive).toBe(false)
+      expect(run.root.finalText).toBe('Codex run complete')
+    } finally {
+      writeFileSync(codexRootPath, original)
+    }
   })
 
   it('maps Copilot chat, tools, commands, edits, and targeted incremental updates', async () => {
-    const key = `copilot:${COPILOT_SESSION}`
-    const response = await $fetch<RunResponse>(`/api/run?key=${key}`)
-    expect(response.root).toMatchObject({ key, source: 'copilot', subLive: true })
-    expect(response.files).toEqual([['src/copilot.ts', 1]])
-    expect(response.node.commands).toEqual([
-      expect.objectContaining({ cmd: 'pnpm test:unit', ok: null }),
-    ])
-    expect(response.diagnostics.environment.entrypoint).toBe('VS Code')
-    expect(response.diagnostics.changes[0]?.path).toBe('src/copilot.ts')
+    const original = readFileSync(copilotRootPath)
+    try {
+      const key = `copilot:${COPILOT_SESSION}`
+      const response = await $fetch<RunResponse>(`/api/run?key=${key}`)
+      expect(response.root).toMatchObject({ key, source: 'copilot', subLive: true })
+      expect(response.files).toEqual([['src/copilot.ts', 1]])
+      expect(response.node.commands).toEqual([
+        expect.objectContaining({ cmd: 'pnpm test:unit', ok: null }),
+      ])
+      expect(response.diagnostics.environment.entrypoint).toBe('VS Code')
+      expect(response.diagnostics.changes[0]?.path).toBe('src/copilot.ts')
 
-    const first = await $fetch<EventsResponse>(`/api/events?key=${key}&since=0`)
-    expect(first.events.some(event => event.kind === 'prompt')).toBe(true)
-    expect(first.events.some(event => event.tool === 'run_in_terminal')).toBe(true)
+      const first = await $fetch<EventsResponse>(`/api/events?key=${key}&since=0`)
+      expect(first.events.some(event => event.kind === 'prompt')).toBe(true)
+      expect(first.events.some(event => event.tool === 'run_in_terminal')).toBe(true)
 
-    copilot.appendRecords(copilotRootPath, [
-      copilot.set(['requests', 0, 'response', 0], copilot.tool('run_in_terminal', 'copilot-command', {
-        command: 'pnpm test:unit',
-        exitCode: 0,
-      })),
-      copilot.set(['requests', 0, 'modelState'], { value: 1, completedAt: copilot.T0 + 8_000 }),
-      copilot.set(['pendingRequests'], []),
-    ])
+      copilot.appendRecords(copilotRootPath, [
+        copilot.set(['requests', 0, 'response', 0], copilot.tool('run_in_terminal', 'copilot-command', {
+          command: 'pnpm test:unit',
+          exitCode: 0,
+        })),
+        copilot.set(['requests', 0, 'modelState'], { value: 1, completedAt: copilot.T0 + 8_000 }),
+        copilot.set(['pendingRequests'], []),
+      ])
 
-    const second = await $fetch<EventsResponse>(
-      `/api/events?key=${key}&since=${first.next}&revision=${first.revision}`,
-    )
-    expect(second.reset).toBe(true)
-    expect(second.events.filter(event => event.kind === 'tool_result')).toEqual([
-      expect.objectContaining({
-        kind: 'tool_result',
-        tool: 'run_in_terminal',
-        error: false,
-        body: 'Ran run_in_terminal',
-      }),
-    ])
-    const updated = await $fetch<RunResponse>(`/api/run?key=${key}`)
-    expect(updated.root.subLive).toBe(false)
-    expect(updated.node.commands[0]?.ok).toBe(true)
+      const second = await $fetch<EventsResponse>(
+        `/api/events?key=${key}&since=${first.next}&revision=${first.revision}`,
+      )
+      expect(second.reset).toBe(true)
+      expect(second.events.filter(event => event.kind === 'tool_result')).toEqual([
+        expect.objectContaining({
+          kind: 'tool_result',
+          tool: 'run_in_terminal',
+          error: false,
+          body: 'Ran run_in_terminal',
+        }),
+      ])
+      const updated = await $fetch<RunResponse>(`/api/run?key=${key}`)
+      expect(updated.root.subLive).toBe(false)
+      expect(updated.node.commands[0]?.ok).toBe(true)
 
-    copilot.appendRecords(copilotRootPath, [
-      copilot.set(['requests', 0, 'response', 2, 'value'], 'Copilot response complete.'),
-    ])
-    const streamed = await $fetch<EventsResponse>(
-      `/api/events?key=${key}&since=${second.next}&revision=${second.revision}`,
-    )
-    expect(streamed.reset).toBe(true)
-    expect(streamed.events.filter(event => event.kind === 'text')).toEqual([
-      expect.objectContaining({ body: 'Copilot response complete.' }),
-    ])
+      copilot.appendRecords(copilotRootPath, [
+        copilot.set(['requests', 0, 'response', 2, 'value'], 'Copilot response complete.'),
+      ])
+      const streamed = await $fetch<EventsResponse>(
+        `/api/events?key=${key}&since=${second.next}&revision=${second.revision}`,
+      )
+      expect(streamed.reset).toBe(true)
+      expect(streamed.events.filter(event => event.kind === 'text')).toEqual([
+        expect.objectContaining({ body: 'Copilot response complete.' }),
+      ])
+    } finally {
+      writeFileSync(copilotRootPath, original)
+    }
   })
 
   it('returns 404 for an unknown key', async () => {

@@ -51,9 +51,9 @@ export function useLiveRuns() {
   let eventTimer: ReturnType<typeof setInterval> | undefined
   let runTimer: ReturnType<typeof setInterval> | undefined
   let treePending = false
-  let eventPending = false
-  let inspectedEventPending = false
-  let runPending = false
+  let eventPendingKey: string | null = null
+  let inspectedEventPendingKey: string | null = null
+  let runPendingKey: string | null = null
 
   const nodeIndex = computed(() => {
     const map = new Map<string, { node: RunNode, parent: string | null }>()
@@ -142,21 +142,25 @@ export function useLiveRuns() {
   async function loadRun(): Promise<void> {
     const key = selectedKey.value
     const project = selectedProject.value
-    if (!key || !project || runPending) return
-    runPending = true
+    if (!key || !project) return
+    const requestKey = `${project}\0${key}`
+    if (runPendingKey === requestKey) return
+    runPendingKey = requestKey
     try {
       const response = await request<RunResponse>(`/api/run?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}`)
       if (response && selectedKey.value === key && selectedProject.value === project) run.value = response
     } finally {
-      runPending = false
+      if (runPendingKey === requestKey) runPendingKey = null
     }
   }
 
   async function pollEvents(): Promise<void> {
     const key = selectedKey.value
     const project = selectedProject.value
-    if (!key || !project || eventPending) return
-    eventPending = true
+    if (!key || !project) return
+    const requestKey = `${project}\0${key}`
+    if (eventPendingKey === requestKey) return
+    eventPendingKey = requestKey
     try {
       const response = await request<EventsResponse>(
         `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${eventRevision.value}`,
@@ -167,15 +171,17 @@ export function useLiveRuns() {
       if (response.reset) events.value = [...response.events]
       else events.value.push(...response.events)
     } finally {
-      eventPending = false
+      if (eventPendingKey === requestKey) eventPendingKey = null
     }
   }
 
   async function pollInspectedEvents(): Promise<void> {
     const key = inspectedKey.value
     const project = selectedProject.value
-    if (!key || !project || inspectedEventPending) return
-    inspectedEventPending = true
+    if (!key || !project) return
+    const requestKey = `${project}\0${key}`
+    if (inspectedEventPendingKey === requestKey) return
+    inspectedEventPendingKey = requestKey
     try {
       const response = await request<EventsResponse>(
         `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${inspectedSince.value}&revision=${inspectedEventRevision.value}`,
@@ -186,7 +192,7 @@ export function useLiveRuns() {
       if (response.reset) inspectedEvents.value = [...response.events]
       else inspectedEvents.value.push(...response.events)
     } finally {
-      inspectedEventPending = false
+      if (inspectedEventPendingKey === requestKey) inspectedEventPendingKey = null
       if (inspectedKey.value === key) inspectedEventsLoading.value = false
       else if (inspectedKey.value) void pollInspectedEvents()
     }

@@ -181,6 +181,7 @@ test/
   unit/             schema, parser, hierarchy, catalog, filter, and CLI tests
   nuxt/             mounted component behavior
   e2e/              built server/API integration tests with synthetic JSONL
+  browser/          production hydration, accessibility, and keyboard smoke tests
   fixtures/         synthetic Claude, Codex, and Copilot transcript builders
 ```
 
@@ -212,16 +213,18 @@ pnpm test         # all Vitest projects
 pnpm test:unit    # schemas, parsers, hierarchy, catalog, filters, CLI
 pnpm test:nuxt    # Nuxt-mounted component behavior
 pnpm test:e2e     # real Nitro endpoints with synthetic JSONL fixtures
+pnpm test:browser # production Chromium smoke test with synthetic JSONL
 pnpm test:types   # strict Nuxt/Vue TypeScript checks
 pnpm build        # production Node server build
-pnpm check        # tests, typecheck, and production build
+pnpm check        # tests, typecheck, production build, and browser smoke test
 ```
 
 Automated tests never depend on private real sessions. They construct synthetic
 Claude, Codex, and Copilot logs and cover complete and partial lines, malformed and
 unknown records, tool/result pairing, active updates, spawn hierarchy, project
 grouping, deduplication, combined filters, diagnostics, pagination, and source
-failure isolation.
+failure isolation. The production-browser smoke test blocks external requests and
+fails on Vue hydration mismatches.
 
 ## Limitations and privacy
 
