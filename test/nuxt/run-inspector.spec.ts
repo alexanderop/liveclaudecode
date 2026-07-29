@@ -53,6 +53,7 @@ function node(key: string, options: Partial<RunNode> = {}): RunNode {
 function run(root: RunNode, selected: RunNode): RunResponse {
   return {
     key: root.key,
+    transcriptPath: `/claude/projects/repo/${selected.key}.jsonl`,
     lanes: [
       {
         key: root.key,

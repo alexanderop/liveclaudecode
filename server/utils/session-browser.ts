@@ -379,9 +379,13 @@ export const getSessionRun = Effect.fn('getSessionRun')(function*(
     : locator.source === 'codex'
       ? codexRunDiagnostics(root, locator.tree.scanByKey)
       : copilotRunDiagnostics(locator.tree.scanByKey.get(locator.node.key)!)
+  const transcriptPath = locator.source === 'claude'
+    ? yield* pathFor(locator.projectDirectory, locator.node.key)
+    : locator.tree.pathByKey.get(locator.node.key) || ''
 
   return {
     key,
+    transcriptPath,
     lanes: flatten(root),
     files: Object.entries(root.subFiles).sort((a, b) => b[1] - a[1]),
     phases: runPhases(root),

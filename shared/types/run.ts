@@ -319,6 +319,7 @@ export interface ProjectRuns {
 
 export interface RunResponse {
   key: string
+  transcriptPath: string
   lanes: TimelineLane[]
   files: Array<[string, number]>
   phases: Milestone[]

@@ -122,6 +122,7 @@ export function runResponse(overrides: Partial<RunResponse> = {}): RunResponse {
   const root = runNode()
   return {
     key: root.key,
+    transcriptPath: `/claude/projects/repo/${root.key}.jsonl`,
     lanes: [{
       key: root.key,
       label: root.label,

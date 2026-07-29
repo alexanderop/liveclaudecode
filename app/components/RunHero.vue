@@ -5,11 +5,32 @@ const props = defineProps<{
   root: RunNode | null
   selected: RunNode | null
   fileCount: number
+  transcriptPath: string
   sidebarVisible: boolean
 }>()
 
 const followActive = defineModel<boolean>('followActive', { required: true })
 const emit = defineEmits<{ showSidebar: [] }>()
+const copyState = ref<'idle' | 'copied' | 'failed'>('idle')
+let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+
+const copyLabel = computed(() =>
+  copyState.value === 'copied' ? 'Copied' : copyState.value === 'failed' ? 'Try again' : 'Copy',
+)
+
+async function copyTranscriptPath(): Promise<void> {
+  if (!props.transcriptPath) return
+  try {
+    await navigator.clipboard.writeText(props.transcriptPath)
+    copyState.value = 'copied'
+  } catch {
+    copyState.value = 'failed'
+  }
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+  copyResetTimer = setTimeout(() => {
+    copyState.value = 'idle'
+  }, 2_000)
+}
 
 function flatten(node: RunNode, output: RunNode[] = []): RunNode[] {
   output.push(node)
@@ -48,6 +69,14 @@ const kpis = computed(() => {
     { label: 'out tokens', value: formatCount(root.tokensOut) },
     { label: 'elapsed', value: formatDuration(root.firstTs, root.subLast) },
   ]
+})
+
+watch(() => props.transcriptPath, () => {
+  copyState.value = 'idle'
+})
+
+onUnmounted(() => {
+  if (copyResetTimer) clearTimeout(copyResetTimer)
 })
 </script>
 
@@ -96,6 +125,21 @@ const kpis = computed(() => {
           {{ selected?.agentType || `${sourceLabel} session` }}
         </div>
         <h1>{{ root?.label || 'Select a local session' }}</h1>
+        <div v-if="transcriptPath" class="transcript-location">
+          <UIcon name="i-lucide-file-json" />
+          <span>JSONL</span>
+          <code :title="transcriptPath">{{ transcriptPath }}</code>
+          <button
+            type="button"
+            :aria-label="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
+            :title="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
+            aria-live="polite"
+            @click="copyTranscriptPath"
+          >
+            <UIcon :name="copyState === 'copied' ? 'i-lucide-check' : 'i-lucide-copy'" />
+            {{ copyLabel }}
+          </button>
+        </div>
         <div class="status-line">
           <template v-if="busy.length">
             <span class="status-dot running" />

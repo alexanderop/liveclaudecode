@@ -447,6 +447,44 @@ html.panel-resizing * { cursor: col-resize !important; user-select: none !import
 .session-kicker { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; color: #77777d; font-size: 10.5px; }
 .session-kicker svg { width: 13px; height: 13px; }
 .session-heading h1 { max-width: 860px; margin: 0; overflow: hidden; color: #f0f0f1; font-size: 22px; font-weight: 590; letter-spacing: -.025em; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.transcript-location {
+  display: flex;
+  max-width: min(860px, calc(100vw - 430px));
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 0 3px 0 7px;
+  border: 1px solid #29292d;
+  border-radius: 6px;
+  background: #151517;
+  color: #6f6f75;
+}
+.transcript-location > svg { flex: 0 0 auto; width: 12px; height: 12px; color: #77717f; }
+.transcript-location > span { flex: 0 0 auto; color: #77717f; font: 8px var(--mono); letter-spacing: .04em; }
+.transcript-location code { min-width: 0; flex: 1; overflow: hidden; color: #85858b; font: 9.5px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.transcript-location button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 18px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 4px;
+  background: #29292d;
+  color: #b7b7bc;
+  cursor: pointer;
+  font-size: 8.5px;
+  transition: opacity .12s ease, background .12s ease;
+}
+.transcript-location button:hover { background: #35353a; color: #eeeeef; }
+.transcript-location button:focus-visible { outline: 2px solid #7d6fc2; outline-offset: 1px; }
+.transcript-location button svg { width: 10px; height: 10px; }
+@media (hover: hover) and (pointer: fine) {
+  .transcript-location button { opacity: 0; }
+  .transcript-location:hover button, .transcript-location:focus-within button { opacity: 1; }
+}
 .status-line { display: flex; max-width: 900px; align-items: center; gap: 7px; margin-top: 8px; overflow: hidden; color: #a7a7ac; font-size: 11.5px; white-space: nowrap; }
 .status-line strong { color: #cfcfd3; font-weight: 540; }
 .status-line .muted { overflow: hidden; color: #626268; text-overflow: ellipsis; }
@@ -1347,6 +1385,7 @@ html.panel-resizing * { cursor: col-resize !important; user-select: none !import
   .breadcrumbs span:not(.breadcrumb-root), .breadcrumbs > svg { display: none; }
   .hero-body { min-height: 100px; padding: 18px; }
   .session-heading h1 { font-size: 18px; white-space: normal; }
+  .transcript-location { max-width: 100%; }
   .pill { display: none; }
   .kpis { padding: 0 18px; overflow-x: auto; }
   .kpi { flex: 0 0 auto; }

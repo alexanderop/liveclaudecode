@@ -199,6 +199,7 @@ describe('read-only API', async () => {
 
   it('describes the whole run for a selected worker', async () => {
     const response = await $fetch<RunResponse>(`/api/run?key=${SESSION}/agent-a`)
+    expect(response.transcriptPath).toBe(`${directory}/${SESSION}/subagents/agent-a.jsonl`)
     expect(response.root.key).toBe(SESSION)
     expect(response.node.label).toBe('slice A')
     expect(response.lanes).toHaveLength(2)
@@ -243,6 +244,7 @@ describe('read-only API', async () => {
     const key = `codex:${CODEX_SESSION}`
     const response = await $fetch<RunResponse>(`/api/run?key=${key}`)
 
+    expect(response.transcriptPath).toBe(codexRootPath)
     expect(response.root).toMatchObject({ key, source: 'codex', subLive: true })
     expect(response.lanes).toHaveLength(2)
     expect(response.files).toEqual([['src/codex.ts', 1]])
@@ -284,6 +286,7 @@ describe('read-only API', async () => {
     try {
       const key = `copilot:${COPILOT_SESSION}`
       const response = await $fetch<RunResponse>(`/api/run?key=${key}`)
+      expect(response.transcriptPath).toBe(copilotRootPath)
       expect(response.root).toMatchObject({ key, source: 'copilot', subLive: true })
       expect(response.files).toEqual([['src/copilot.ts', 1]])
       expect(response.node.commands).toEqual([

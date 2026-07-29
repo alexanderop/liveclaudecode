@@ -238,6 +238,7 @@ onUnmounted(() => {
         :root="live.selectedRoot.value"
         :selected="live.selectedNode.value"
         :file-count="live.run.value?.files.length || 0"
+        :transcript-path="live.run.value?.transcriptPath || ''"
         @show-sidebar="sidebarVisible = true"
       />
       <div
