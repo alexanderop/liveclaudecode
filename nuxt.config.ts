@@ -6,7 +6,7 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   modules: ['@comark/nuxt', '@nuxt/ui', '@nuxt/test-utils/module'],
   colorMode: {
-    preference: 'dark',
+    preference: 'system',
     fallback: 'dark',
   },
   ui: {

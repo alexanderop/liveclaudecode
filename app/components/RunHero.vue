@@ -115,6 +115,13 @@ onUnmounted(() => {
         <strong>{{ root?.sid?.slice(0, 8) || 'Select a session' }}</strong>
       </div>
       <div class="header-actions">
+        <UColorModeSelect
+          class="color-mode-select"
+          aria-label="Color mode"
+          color="neutral"
+          variant="ghost"
+          :search-input="false"
+        />
         <button
           type="button"
           class="quiet-action"

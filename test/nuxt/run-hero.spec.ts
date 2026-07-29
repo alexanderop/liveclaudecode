@@ -8,6 +8,21 @@ afterEach(() => {
 })
 
 describe('RunHero', () => {
+  it('offers the Nuxt UI system, light, and dark color-mode control', async () => {
+    const component = await mountSuspended(RunHero, {
+      props: {
+        root: null,
+        selected: null,
+        fileCount: 0,
+        transcriptPath: '',
+        sidebarVisible: true,
+        followActive: true,
+      },
+    })
+
+    expect(component.get('[aria-label="Color mode"]').attributes('aria-label')).toBe('Color mode')
+  })
+
   it('offers a compact restore control when the sidebar is hidden', async () => {
     const component = await mountSuspended(RunHero, {
       props: {

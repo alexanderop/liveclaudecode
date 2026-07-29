@@ -49,18 +49,32 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
   await expect(page.getByRole('complementary', { name: 'Guide panel' })).toHaveCount(0)
 
   await page.addScriptTag({ content: axe.source })
-  const violations = await page.evaluate(async () => {
-    const results = await window.axe.run(document, {
-      resultTypes: ['violations'],
-      rules: {
-        // The keyboard-operable resize separator sits between the sidebar and main landmarks.
-        'region': { enabled: false },
-      },
+  for (const mode of ['Light', 'Dark']) {
+    await page.getByRole('button', { name: 'Color mode' }).click()
+    await page.getByRole('option', { name: mode }).click()
+    await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${mode.toLowerCase()}\\b`))
+    await page.waitForTimeout(300)
+
+    const violations = await page.evaluate(async () => {
+      const results = await window.axe.run(document, {
+        resultTypes: ['violations'],
+        rules: {
+          // The keyboard-operable resize separator sits between the sidebar and main landmarks.
+          'region': { enabled: false },
+        },
+      })
+      return results.violations
     })
-    return results.violations
-  })
+
+    expect(
+      violations.map(violation => ({
+        id: violation.id,
+        nodes: violation.nodes.map(node => node.target),
+      })),
+      `${mode} mode accessibility violations`,
+    ).toEqual([])
+  }
 
   expect(hydrationErrors).toEqual([])
   expect(externalRequests).toEqual([])
-  expect(violations).toEqual([])
 })
