@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { Handle, Position } from '@vue-flow/core'
-import { formatDuration } from '~/utils/format'
 import {
   type ExecutionNodeData,
 } from '~/utils/execution-graph'
@@ -21,13 +20,6 @@ function handleKeydown(event: KeyboardEvent): void {
   selectNode(props.id)
 }
 
-function idleLabel(milliseconds: number): string {
-  const seconds = Math.floor(milliseconds / 1_000)
-  if (seconds < 5) return 'now'
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  return minutes < 60 ? `${minutes}m ago` : `${Math.floor(minutes / 60)}h ago`
-}
 </script>
 
 <template>
@@ -82,17 +74,9 @@ function idleLabel(milliseconds: number): string {
     </div>
     <div v-if="data.overview" class="sketch-overview-stats">
       <span><b>{{ data.agents }}</b>{{ data.agents === 1 ? 'agent' : 'agents' }}</span>
-      <span><b>{{ data.tools }}</b>tools</span>
-      <span :class="{ bad: data.issues }"><b>{{ data.issues }}</b>{{ data.issues === 1 ? 'issue' : 'issues' }}</span>
     </div>
-    <div class="sketch-node-meta">
-      <span><UIcon name="i-lucide-wrench" />{{ data.tools }}</span>
-      <span v-if="!data.overview"><UIcon name="i-lucide-files" />{{ data.files }}</span>
-      <span v-if="data.tokens"><UIcon name="i-lucide-brain-circuit" />{{ formatCount(data.tokens) }}</span>
-      <span><UIcon name="i-lucide-clock-3" />{{ formatDuration(data.firstTs, data.lastTs) }}</span>
-      <span v-if="data.state === 'active'"><UIcon name="i-lucide-activity" />{{ idleLabel(data.idleMs) }}</span>
+    <div v-if="data.collapsible" class="sketch-node-actions">
       <button
-        v-if="data.collapsible"
         type="button"
         class="sketch-collapse"
         :aria-label="data.collapsed ? 'Expand workstream' : 'Collapse workstream'"

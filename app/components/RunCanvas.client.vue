@@ -58,6 +58,8 @@ const layoutDirection = ref<ExecutionDirection>('left-to-right')
 const displayMode = ref<ExecutionDetail>(DEFAULT_EXECUTION_DETAIL)
 const lens = ref<ExecutionLens>('all')
 const searchQuery = ref('')
+const searchOpen = ref(false)
+const optionsOpen = ref(false)
 const replayAt = ref<number | null>(null)
 const playing = ref(false)
 const positionOverrides = shallowRef<ReadonlyMap<string, XYPosition>>(new Map())
@@ -272,7 +274,7 @@ async function refit(): Promise<void> {
       : nodes.value.slice(0, 5).map(node => node.id)
   await fitView({
     nodes: [...new Set(focusNodes.length ? focusNodes : nodes.value.map(node => node.id))],
-    padding: { top: '120px', right: '8%', bottom: '90px', left: '8%' },
+    padding: { top: '48px', right: '8%', bottom: '90px', left: '8%' },
     duration: 250,
     minZoom: 0.45,
     maxZoom: 1,
@@ -440,44 +442,70 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="canvas-heading" :class="{ 'inspector-open': inspectorOpen }">
         <div class="canvas-title">
-          <span class="section-eyebrow">Agent canvas</span>
-          <strong>Execution graph</strong>
-          <span>{{ run?.lanes?.length || 0 }} agents · {{ nodes.length }} visible</span>
+          <UIcon name="i-lucide-workflow" />
+          <span>
+            <strong>Execution graph</strong>
+            <small>
+              {{ run?.lanes?.length || 0 }} agents<template v-if="nodes.length !== (run?.lanes?.length || 0)"> · {{ nodes.length }} visible</template>
+            </small>
+          </span>
         </div>
-        <div class="canvas-lenses" aria-label="Investigation lens">
-          <button
-            v-for="option in ([
-              { id: 'all', label: 'All', icon: 'i-lucide-workflow' },
-              { id: 'active', label: 'Active', icon: 'i-lucide-radio' },
-              { id: 'problems', label: 'Problems', icon: 'i-lucide-circle-alert' },
-              { id: 'files', label: 'Files', icon: 'i-lucide-files' },
-              { id: 'coordination', label: 'Coordination', icon: 'i-lucide-git-fork' },
-            ] as const)"
-            :key="option.id"
-            type="button"
-            :class="{ selected: lens === option.id }"
-            :aria-pressed="lens === option.id"
-            @click="setLens(option.id)"
-          ><UIcon :name="option.icon" />{{ option.label }}</button>
+        <div class="canvas-command-bar">
+          <div class="canvas-heading-actions">
+            <button
+              type="button"
+              :class="{ selected: searchOpen }"
+              :aria-expanded="searchOpen"
+              aria-controls="canvas-search-control"
+              @click="searchOpen = !searchOpen"
+            ><UIcon name="i-lucide-search" /><span>Search</span></button>
+            <button
+              type="button"
+              :class="{ selected: optionsOpen || lens !== 'all' }"
+              :aria-expanded="optionsOpen"
+              aria-controls="canvas-display-options"
+              @click="optionsOpen = !optionsOpen"
+            ><UIcon name="i-lucide-sliders-horizontal" /><span>View</span></button>
+          </div>
+          <slot name="actions" />
         </div>
-        <label class="canvas-search">
+        <label v-if="searchOpen" id="canvas-search-control" class="canvas-search">
           <UIcon name="i-lucide-search" />
           <input v-model="searchQuery" type="search" placeholder="Find agent or activity" aria-label="Search canvas" />
           <button v-if="searchQuery" type="button" aria-label="Clear canvas search" @click="searchQuery = ''"><UIcon name="i-lucide-x" /></button>
         </label>
-        <div class="canvas-toolbar">
-          <div class="canvas-layout" aria-label="Graph detail">
-            <button type="button" :class="{ selected: displayMode === 'overview' }" :aria-pressed="displayMode === 'overview'" title="Group nested agents into readable workstreams" @click="setDisplayMode('overview')"><UIcon name="i-lucide-scan" /><span>Overview</span></button>
-            <button type="button" :class="{ selected: displayMode === 'all-agents' }" :aria-pressed="displayMode === 'all-agents'" title="Show every individual agent" @click="setDisplayMode('all-agents')"><UIcon name="i-lucide-list-tree" /><span>All agents</span></button>
+        <div v-if="optionsOpen" id="canvas-display-options" class="canvas-options">
+          <div class="canvas-lenses" aria-label="Investigation lens">
+            <button
+              v-for="option in ([
+                { id: 'all', label: 'All', icon: 'i-lucide-workflow' },
+                { id: 'active', label: 'Active', icon: 'i-lucide-radio' },
+                { id: 'problems', label: 'Problems', icon: 'i-lucide-circle-alert' },
+                { id: 'files', label: 'Files', icon: 'i-lucide-files' },
+                { id: 'coordination', label: 'Coordination', icon: 'i-lucide-git-fork' },
+              ] as const)"
+              :key="option.id"
+              type="button"
+              :class="{ selected: lens === option.id }"
+              :aria-pressed="lens === option.id"
+              @click="setLens(option.id)"
+            ><UIcon :name="option.icon" />{{ option.label }}</button>
           </div>
-          <div class="canvas-layout" aria-label="Graph direction">
-            <button type="button" :class="{ selected: layoutDirection === 'left-to-right' }" :aria-pressed="layoutDirection === 'left-to-right'" title="Lay out agents from left to right" @click="setLayout('left-to-right')"><UIcon name="i-lucide-arrow-right" /><span>Left to right</span></button>
-            <button type="button" :class="{ selected: layoutDirection === 'top-to-bottom' }" :aria-pressed="layoutDirection === 'top-to-bottom'" title="Lay out agents from top to bottom" @click="setLayout('top-to-bottom')"><UIcon name="i-lucide-arrow-down" /><span>Top to bottom</span></button>
+          <div class="canvas-toolbar">
+            <div class="canvas-layout" aria-label="Graph detail">
+              <button type="button" :class="{ selected: displayMode === 'overview' }" :aria-pressed="displayMode === 'overview'" title="Group nested agents into readable workstreams" @click="setDisplayMode('overview')"><UIcon name="i-lucide-scan" /><span>Overview</span></button>
+              <button type="button" :class="{ selected: displayMode === 'all-agents' }" :aria-pressed="displayMode === 'all-agents'" title="Show every individual agent" @click="setDisplayMode('all-agents')"><UIcon name="i-lucide-list-tree" /><span>All agents</span></button>
+            </div>
+            <div class="canvas-layout" aria-label="Graph direction">
+              <button type="button" :class="{ selected: layoutDirection === 'left-to-right' }" :aria-pressed="layoutDirection === 'left-to-right'" title="Lay out agents from left to right" @click="setLayout('left-to-right')"><UIcon name="i-lucide-arrow-right" /><span>Left to right</span></button>
+              <button type="button" :class="{ selected: layoutDirection === 'top-to-bottom' }" :aria-pressed="layoutDirection === 'top-to-bottom'" title="Lay out agents from top to bottom" @click="setLayout('top-to-bottom')"><UIcon name="i-lucide-arrow-down" /><span>Top to bottom</span></button>
+            </div>
           </div>
         </div>
       </div>
 
-      <div v-if="breadcrumb.length > 1" class="canvas-breadcrumb" :class="{ 'inspector-open': inspectorOpen }" aria-label="Selected agent path">
+      <div class="canvas-stage">
+      <div v-if="breadcrumb.length > 1" class="canvas-breadcrumb" aria-label="Selected agent path">
         <button v-for="(item, index) in breadcrumb" :key="item.key" type="button" @click="emit('select', item.key)">
           <UIcon v-if="index" name="i-lucide-chevron-right" />{{ item.label }}
         </button>
@@ -485,13 +513,13 @@ onBeforeUnmount(() => {
       <div class="canvas-status" :class="{ live: sessionLive }" role="status"><i />{{ replayAt !== null ? `Replay · ${replayLabel}` : sessionLive ? 'Session live' : 'Session idle' }}</div>
       <p class="canvas-announcer" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
 
-      <div v-if="lens === 'problems'" class="canvas-issue-nav" :class="{ 'inspector-open': inspectorOpen }">
+      <div v-if="lens === 'problems'" class="canvas-issue-nav">
         <span><UIcon name="i-lucide-circle-alert" />{{ issues.length }} incidents</span>
         <button type="button" aria-label="Previous incident" :disabled="!issues.length" @click="navigateIncident(-1)"><UIcon name="i-lucide-chevron-left" /></button>
         <button type="button" aria-label="Next incident" :disabled="!issues.length" @click="navigateIncident(1)"><UIcon name="i-lucide-chevron-right" /></button>
       </div>
 
-      <div v-if="lens === 'coordination'" class="coordination-overlay" :class="{ 'inspector-open': inspectorOpen }">
+      <div v-if="lens === 'coordination'" class="coordination-overlay">
         <header><span><UIcon name="i-lucide-git-fork" />Coordination signals</span><b>{{ coordination.findings.length }}</b></header>
         <button
           v-for="finding in coordination.findings.slice(0, 6)"
@@ -568,6 +596,7 @@ onBeforeUnmount(() => {
         </div>
         <span>{{ replayAt === null ? new Date(replayRange.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : replayLabel }}</span>
         <button type="button" class="live-tail" :class="{ selected: replayAt === null }" @click="stopPlayback(); setReplayTime(null)"><i />Live tail</button>
+      </div>
       </div>
     </template>
   </div>

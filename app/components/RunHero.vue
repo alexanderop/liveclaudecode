@@ -157,23 +157,6 @@ onUnmounted(() => {
           {{ selected?.agentType || `${sourceLabel} session` }}
         </div>
         <h1>{{ displayLabel }}</h1>
-        <div v-if="transcriptPath" class="transcript-location">
-          <UIcon name="i-lucide-file-json" />
-          <span>JSONL</span>
-          <code :title="transcriptPath">{{ transcriptPath }}</code>
-          <UButton
-            color="neutral"
-            variant="ghost"
-            size="xs"
-            :icon="copyState === 'copied' ? 'i-lucide-check' : 'i-lucide-copy'"
-            :aria-label="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
-            :title="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
-            aria-live="polite"
-            @click="copyTranscriptPath"
-          >
-            {{ copyLabel }}
-          </UButton>
-        </div>
         <div class="status-line">
           <template v-if="busy.length">
             <span class="status-dot running" />
@@ -200,15 +183,46 @@ onUnmounted(() => {
           <template v-else>Select a session from the sidebar to inspect its work.</template>
         </div>
       </div>
-      <span class="pill" :class="status.class">
-        <UIcon :name="status.icon" />
-        {{ status.label }}
-      </span>
-    </div>
-
-    <div v-if="root" class="kpis">
-      <div v-for="kpi in kpis" :key="kpi.label" class="kpi" :class="kpi.class">
-        <span>{{ kpi.label }}</span><b>{{ kpi.value }}</b>
+      <div class="hero-summary-actions">
+        <span class="pill" :class="status.class">
+          <UIcon :name="status.icon" />
+          {{ status.label }}
+        </span>
+        <details v-if="root" class="session-info-disclosure">
+          <summary>
+            <UIcon name="i-lucide-info" />
+            Session info
+            <UIcon class="disclosure-chevron" name="i-lucide-chevron-down" />
+          </summary>
+          <div class="session-info-card">
+            <div class="session-info-heading">
+              <span>Session details</span>
+              <strong>{{ root.sid?.slice(0, 8) }}</strong>
+            </div>
+            <div class="kpis">
+              <div v-for="kpi in kpis" :key="kpi.label" class="kpi" :class="kpi.class">
+                <span>{{ kpi.label }}</span><b>{{ kpi.value }}</b>
+              </div>
+            </div>
+            <div v-if="transcriptPath" class="transcript-location">
+              <UIcon name="i-lucide-file-json" />
+              <span>JSONL</span>
+              <code :title="transcriptPath">{{ transcriptPath }}</code>
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                :icon="copyState === 'copied' ? 'i-lucide-check' : 'i-lucide-copy'"
+                :aria-label="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
+                :title="copyState === 'copied' ? 'JSONL file path copied' : 'Copy JSONL file path'"
+                aria-live="polite"
+                @click="copyTranscriptPath"
+              >
+                {{ copyLabel }}
+              </UButton>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   </header>

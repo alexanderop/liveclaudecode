@@ -27,7 +27,7 @@ function sourceLabel(node: RunNode): string {
 function statusLabel(node: RunNode): string {
   if (node.spawnState === 'running' || node.subLive || (node.live && node.kind === 'subagent')) return 'running'
   if (node.subErrors) return `${node.subErrors} err`
-  return 'complete'
+  return ''
 }
 
 function toItem(node: RunNode): RunTreeItem {
@@ -65,29 +65,24 @@ const selectedItem = computed(() => {
     :ui="{ listWithChildren: 'tree-children', itemWithChildren: 'tree-child' }"
   >
     <template #session="{ item, expanded }">
-      <span class="tree-status" :class="{ running: item.node.subLive, error: item.node.subErrors && !item.node.subLive }">
+      <span
+        class="tree-status"
+        :class="[item.node.source, { running: item.node.subLive, error: item.node.subErrors && !item.node.subLive }]"
+        :title="`${sourceLabel(item.node)} · ${item.node.agentType || item.node.sourceDetail || 'Session'}`"
+      >
         <UIcon :name="item.node.kind === 'subagent' ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
       </span>
       <span class="tree-content">
         <span class="tree-title-row">
           <span class="tree-title">{{ item.label }}</span>
-          <span class="source-tag" :class="item.node.source">
-            {{ sourceLabel(item.node) }}
-          </span>
-        </span>
-        <span class="tree-meta">
-          <span>{{ item.node.agentType || item.node.sourceDetail || sourceLabel(item.node) }}</span>
-          <span aria-hidden="true">·</span>
-          <span>{{ item.node.subTools }} tools</span>
-          <span v-if="item.node.subAgents">· {{ item.node.subAgents }} agents</span>
-          <span>· {{ formatDuration(item.node.firstTs, item.node.subLast) }}</span>
-        </span>
-        <span v-if="item.node.current" class="current-activity">
-          {{ item.node.current.tool }} {{ item.node.current.summary.slice(0, 54) }}
         </span>
       </span>
       <span class="tree-trailing">
-        <span class="tree-end" :class="{ hot: item.node.subLive, error: item.node.subErrors && !item.node.subLive }">
+        <span
+          v-if="statusLabel(item.node)"
+          class="tree-end"
+          :class="{ hot: item.node.subLive, error: item.node.subErrors && !item.node.subLive }"
+        >
           {{ statusLabel(item.node) }}
         </span>
         <UIcon

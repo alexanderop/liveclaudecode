@@ -29,7 +29,7 @@ const emit = defineEmits<{
   'focus-file': [path: string | null]
 }>()
 type InspectorTab = 'summary' | 'activity' | 'incidents' | 'files' | 'result'
-const activeTab = ref<InspectorTab>('activity')
+const activeTab = ref<InspectorTab>('summary')
 
 const tabs = [
   { id: 'summary', label: 'Summary', icon: 'i-lucide-list-tree' },
@@ -87,7 +87,7 @@ function agentSummary(key: string): ReturnType<typeof agentState> {
   return agentState(agentIndex.value.get(key), props.run?.diagnostics.incidents)
 }
 
-watch(() => props.selectedKey, () => { activeTab.value = 'activity' })
+watch(() => props.selectedKey, () => { activeTab.value = 'summary' })
 watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
 </script>
 
@@ -142,37 +142,52 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
       <section class="property-group">
         <div class="property-row"><span>Status</span><strong class="property-value status-value" :class="status.class"><span class="status-dot" :class="status.class" />{{ status.label }}</strong></div>
         <div class="property-row"><span>Role</span><strong class="property-value"><UIcon name="i-lucide-bot" />{{ selected.agentType || 'Main session' }}</strong></div>
-        <div class="property-row"><span>Provider</span><strong class="property-value">{{ selected.source ? selected.source[0]?.toUpperCase() + selected.source.slice(1) : 'Not recorded' }}</strong></div>
         <div class="property-row"><span>Duration</span><strong class="property-value">{{ formatDuration(selected.firstTs, selected.lastTs) }}</strong></div>
-        <div class="property-row"><span>Output</span><strong class="property-value">{{ selected.tokensOut ? `${formatCount(selected.tokensOut)} tokens` : 'Not recorded' }}</strong></div>
         <div v-if="selected.current" class="property-row current-summary"><span>{{ selected.current.tool }}</span><strong>{{ selected.current.summary }}</strong></div>
       </section>
-      <section class="inspector-section">
-        <div class="inspector-section-title"><span>Agents</span><span>{{ run.lanes.length }}</span></div>
-        <div class="agent-list">
-          <button v-for="lane in run.lanes" :key="lane.key" type="button" class="agent-row" :class="{ selected: lane.key === selectedKey }" :aria-current="lane.key === selectedKey ? 'true' : undefined" @click="emit('select', lane.key)">
-            <span class="agent-avatar" :class="agentSummary(lane.key).state"><UIcon :name="lane.depth ? 'i-lucide-bot' : 'i-lucide-terminal-square'" /></span>
-            <span class="agent-copy"><strong>{{ normalizeSessionLabel(lane.label, lane.key) }}</strong><small>{{ agentSummary(lane.key).label }} · {{ lane.tools }} tools</small></span>
-            <span v-if="lane.live" class="status-dot running" />
-          </button>
+      <details class="inspector-disclosure">
+        <summary>
+          <span><UIcon name="i-lucide-users" />All agents</span>
+          <span>{{ run.lanes.length }}<UIcon class="disclosure-chevron" name="i-lucide-chevron-down" /></span>
+        </summary>
+        <section class="inspector-section disclosure-content">
+          <div class="agent-list">
+            <button v-for="lane in run.lanes" :key="lane.key" type="button" class="agent-row" :class="{ selected: lane.key === selectedKey }" :aria-current="lane.key === selectedKey ? 'true' : undefined" @click="emit('select', lane.key)">
+              <span class="agent-avatar" :class="agentSummary(lane.key).state"><UIcon :name="lane.depth ? 'i-lucide-bot' : 'i-lucide-terminal-square'" /></span>
+              <span class="agent-copy"><strong>{{ normalizeSessionLabel(lane.label, lane.key) }}</strong><small>{{ agentSummary(lane.key).label }} · {{ lane.tools }} tools</small></span>
+              <span v-if="lane.live" class="status-dot running" />
+            </button>
+          </div>
+        </section>
+      </details>
+      <details class="inspector-disclosure">
+        <summary>
+          <span><UIcon name="i-lucide-settings-2" />Technical details</span>
+          <UIcon class="disclosure-chevron" name="i-lucide-chevron-down" />
+        </summary>
+        <div class="disclosure-content">
+          <section class="inspector-section">
+            <div class="property-row compact"><span>Provider</span><strong>{{ selected.source ? selected.source[0]?.toUpperCase() + selected.source.slice(1) : 'Not recorded' }}</strong></div>
+            <div class="property-row compact"><span>Output</span><strong>{{ selected.tokensOut ? `${formatCount(selected.tokensOut)} tokens` : 'Not recorded' }}</strong></div>
+          </section>
+          <section v-if="toolMix.length" class="inspector-section"><div class="inspector-section-title"><span>Tool activity</span></div><div class="tool-list"><span v-for="[tool, count] in toolMix" :key="tool" class="tool-chip">{{ tool }} <strong>{{ count }}</strong></span></div></section>
+          <section v-if="selectedDiagnostics" class="inspector-section">
+            <div class="inspector-section-title"><span>Runtime diagnostics</span></div>
+            <div class="property-row compact"><span><UIcon name="i-lucide-cpu" />Model</span><strong>{{ selectedDiagnostics.models.join(', ') || selected.model || 'Unknown' }}</strong></div>
+            <div class="property-row compact"><span><UIcon name="i-lucide-brain-circuit" />Cache read</span><strong>{{ formatCount(selectedDiagnostics.usage.cr) }}</strong></div>
+            <div class="property-row compact"><span><UIcon name="i-lucide-git-branch" />Causal branches</span><strong>{{ selectedDiagnostics.branchPoints }}</strong></div>
+            <div v-if="selectedOutcome" class="property-row compact"><span><UIcon name="i-lucide-timer" />Native duration</span><strong>{{ formatMilliseconds(selectedOutcome.durationMs) }}</strong></div>
+            <div v-if="selected.stoppedByUser" class="property-row compact danger"><span><UIcon name="i-lucide-circle-stop" />Stopped by user</span><strong>Yes</strong></div>
+          </section>
+          <section class="inspector-section">
+            <div class="inspector-section-title"><span>Artifacts</span></div>
+            <div class="property-row compact"><span><UIcon name="i-lucide-files" />Files changed</span><strong>{{ selected.files.length }}</strong></div>
+            <div class="property-row compact"><span><UIcon name="i-lucide-square-terminal" />Commands</span><strong>{{ selected.commands.length }}</strong></div>
+            <div class="property-row compact"><span><UIcon name="i-lucide-wrench" />Tool calls</span><strong>{{ selected.tools }}</strong></div>
+            <div class="property-row compact" :class="{ danger: selected.errors }"><span><UIcon name="i-lucide-circle-alert" />Tool errors</span><strong>{{ selected.errors }}</strong></div>
+          </section>
         </div>
-      </section>
-      <section v-if="toolMix.length" class="inspector-section"><div class="inspector-section-title"><span>Tool activity</span></div><div class="tool-list"><span v-for="[tool, count] in toolMix" :key="tool" class="tool-chip">{{ tool }} <strong>{{ count }}</strong></span></div></section>
-      <section v-if="selectedDiagnostics" class="inspector-section">
-        <div class="inspector-section-title"><span>Runtime diagnostics</span></div>
-        <div class="property-row compact"><span><UIcon name="i-lucide-cpu" />Model</span><strong>{{ selectedDiagnostics.models.join(', ') || selected.model || 'Unknown' }}</strong></div>
-        <div class="property-row compact"><span><UIcon name="i-lucide-brain-circuit" />Cache read</span><strong>{{ formatCount(selectedDiagnostics.usage.cr) }}</strong></div>
-        <div class="property-row compact"><span><UIcon name="i-lucide-git-branch" />Causal branches</span><strong>{{ selectedDiagnostics.branchPoints }}</strong></div>
-        <div v-if="selectedOutcome" class="property-row compact"><span><UIcon name="i-lucide-timer" />Native duration</span><strong>{{ formatMilliseconds(selectedOutcome.durationMs) }}</strong></div>
-        <div v-if="selected.stoppedByUser" class="property-row compact danger"><span><UIcon name="i-lucide-circle-stop" />Stopped by user</span><strong>Yes</strong></div>
-      </section>
-      <section class="inspector-section">
-        <div class="inspector-section-title"><span>Artifacts</span></div>
-        <div class="property-row compact"><span><UIcon name="i-lucide-files" />Files changed</span><strong>{{ selected.files.length }}</strong></div>
-        <div class="property-row compact"><span><UIcon name="i-lucide-square-terminal" />Commands</span><strong>{{ selected.commands.length }}</strong></div>
-        <div class="property-row compact"><span><UIcon name="i-lucide-wrench" />Tool calls</span><strong>{{ selected.tools }}</strong></div>
-        <div class="property-row compact" :class="{ danger: selected.errors }"><span><UIcon name="i-lucide-circle-alert" />Tool errors</span><strong>{{ selected.errors }}</strong></div>
-      </section>
+      </details>
     </div>
 
     <div v-else-if="run && selected && activeTab === 'incidents'" class="inspector-details inspector-list-tab">

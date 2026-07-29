@@ -177,6 +177,8 @@ describe('RunSidebar', () => {
     })
 
     expect(component.text()).toContain('Loading local sessions')
+    expect(component.find('.source-statuses').exists()).toBe(false)
+    await component.get('.sidebar-filter-toggle').trigger('click')
     expect(component.text()).toContain('Codex')
     expect(component.text()).toContain('2 malformed records skipped')
 

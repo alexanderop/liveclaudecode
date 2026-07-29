@@ -50,20 +50,19 @@ function node(overrides: Partial<RunNode> = {}): RunNode {
 }
 
 describe('RunTreeNode', () => {
-  it('renders the run metadata and emits keyboard-accessible button clicks', async () => {
+  it('renders a compact title and emits keyboard-accessible button clicks', async () => {
     const component = await mountSuspended(RunTreeNode, {
       props: { node: node(), depth: 0, selectedKey: 'session' },
     })
     expect(component.text()).toContain('Ship the dashboard')
-    expect(component.text()).toContain('Claude')
-    expect(component.text()).toContain('2 tools')
+    expect(component.text()).not.toContain('2 tools')
     expect(component.get('button').classes()).toContain('selected')
     expect(component.get('button').attributes('aria-selected')).toBe('true')
     await component.get('button').trigger('click')
     expect(component.emitted('select')).toEqual([['session']])
   })
 
-  it('visibly tags Codex sessions and keeps their producer detail', async () => {
+  it('identifies Codex sessions without adding visible row metadata', async () => {
     const component = await mountSuspended(RunTreeNode, {
       props: {
         node: node({
@@ -76,11 +75,12 @@ describe('RunTreeNode', () => {
       },
     })
 
-    expect(component.text()).toContain('Codex')
-    expect(component.text()).toContain('Codex Desktop')
+    expect(component.get('.tree-status').classes()).toContain('codex')
+    expect(component.get('.tree-status').attributes('title')).toContain('Codex Desktop')
+    expect(component.text()).not.toContain('Codex Desktop')
   })
 
-  it('visibly tags Copilot sessions and keeps their VS Code mode detail', async () => {
+  it('identifies Copilot sessions without adding visible row metadata', async () => {
     const component = await mountSuspended(RunTreeNode, {
       props: {
         node: node({
@@ -93,11 +93,12 @@ describe('RunTreeNode', () => {
       },
     })
 
-    expect(component.text()).toContain('Copilot')
-    expect(component.text()).toContain('VS Code Insiders · agent')
+    expect(component.get('.tree-status').classes()).toContain('copilot')
+    expect(component.get('.tree-status').attributes('title')).toContain('VS Code Insiders · agent')
+    expect(component.text()).not.toContain('VS Code Insiders · agent')
   })
 
-  it('renders current activity for a live worker', async () => {
+  it('shows live worker status without exposing the current command', async () => {
     const component = await mountSuspended(RunTreeNode, {
       props: {
         node: node({
@@ -110,9 +111,9 @@ describe('RunTreeNode', () => {
         selectedKey: null,
       },
     })
-    expect(component.text()).toContain('implementation-worker')
     expect(component.text()).toContain('running')
-    expect(component.text()).toContain('Bash pnpm test')
+    expect(component.get('.tree-status').attributes('title')).toContain('implementation-worker')
+    expect(component.text()).not.toContain('Bash pnpm test')
   })
 
   it('toggles nested agents when a parent row is clicked', async () => {

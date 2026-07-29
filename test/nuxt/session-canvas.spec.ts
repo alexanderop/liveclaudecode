@@ -93,6 +93,7 @@ const CanvasStub = defineComponent({
   emits: ['select', 'deselect'],
   template: `
     <div class="canvas-stub" :data-selected="selectedKey || ''">
+      <slot name="actions" />
       <button class="canvas-node" type="button" @click="$emit('select', 'review')">Review</button>
       <button class="canvas-empty" type="button" @click="$emit('deselect')">Empty space</button>
     </div>
@@ -149,7 +150,7 @@ describe('persistent session canvas', () => {
     expect(window.localStorage.getItem('liveclaudecode:sidebar-width')).toBe('332')
 
     await sidebarHandle.trigger('dblclick')
-    await component.get('.view-tabs button').trigger('click')
+    await component.get('.view-actions button[aria-pressed]').trigger('click')
     const panelHandle = component.get('button[aria-label="Resize details panel"]')
     expect(panelHandle.attributes('aria-valuenow')).toBe('380')
 
@@ -253,7 +254,7 @@ describe('persistent session canvas', () => {
     })
     const originalCanvas = component.get('.canvas-stub').element
 
-    await component.findAll('.view-tabs button')[1]!.trigger('click')
+    await component.get('.view-actions button[aria-pressed]').trigger('click')
 
     expect(component.get('.session-panel').attributes('aria-label')).toBe('Activity panel')
     expect(component.get('.canvas-stub').element).toBe(originalCanvas)

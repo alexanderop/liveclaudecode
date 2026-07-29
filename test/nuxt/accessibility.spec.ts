@@ -102,11 +102,8 @@ describe('accessibility', () => {
       await flushPromises()
       await expectNoViolations(component.element)
 
-      for (const label of ['Activity', 'Guide', 'Diagnostics', 'Changes', 'Ask']) {
-        const button = component.findAll('.view-tabs button')
-          .find(candidate => candidate.text().includes(label))
-        expect(button, `Missing ${label} view button`).toBeDefined()
-        await button!.trigger('click')
+      for (const shortcut of ['a', 'g', 'i', 'd', 'q']) {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: shortcut }))
         await flushPromises()
         await expectNoViolations(component.element)
       }

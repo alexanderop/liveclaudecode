@@ -17,7 +17,7 @@ describe('session view controls', () => {
       global: {
         stubs: {
           EventFeed: true,
-          RunCanvas: true,
+          RunCanvas: { template: '<div><slot name="actions" /></div>' },
           RunChanges: true,
           RunDiagnostics: true,
           RunHero: true,
@@ -27,7 +27,7 @@ describe('session view controls', () => {
         },
       },
     })
-    await component.findAll('.view-tabs button')[1]!.trigger('click')
+    await component.get('.view-actions button[aria-pressed]').trigger('click')
     const density = component.get('[role="group"][aria-label="Event detail"]')
     const buttons = density.findAll('button')
 

@@ -38,6 +38,9 @@ describe('run canvas', () => {
       },
     })
 
+    expect(component.find('.canvas-options').exists()).toBe(false)
+    await component.get('button[aria-controls="canvas-display-options"]').trigger('click')
+
     const overview = component.get('button[title="Group nested agents into readable workstreams"]')
     const allAgents = component.get('button[title="Show every individual agent"]')
 

@@ -146,19 +146,21 @@ describe('run inspector', () => {
     })
 
     expect(component.get('.inspector-title').text()).toContain('Review accessibility')
-    expect(component.get('[role="tab"][aria-selected="true"]').text()).toContain('Activity')
-    expect(component.get('.event').text()).toContain('Reviewed the accessibility flow.')
-
-    await component.findAll('[role="tab"]')[0]!.trigger('mousedown', { button: 0 })
+    expect(component.get('[role="tab"][aria-selected="true"]').text()).toContain('Summary')
     expect(component.get('.status-value').text()).toBe('Thinking')
     expect(component.text()).toContain('Claude')
     expect(component.text()).toContain('Read 2')
 
+    await component.findAll('.agent-row')[0]!.trigger('click')
+    expect(component.emitted('select')?.[0]).toEqual(['root'])
+
+    await component.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
+    expect(component.findAll('.event')).toHaveLength(1)
+
     await component.get('.inspector-close').trigger('click')
     expect(component.emitted('close')).toHaveLength(1)
 
-    await component.findAll('.agent-row')[0]!.trigger('click')
-    expect(component.emitted('select')?.[0]).toEqual(['root'])
   })
 
   it('shows a loading state while switching to another agent activity stream', async () => {
@@ -179,6 +181,8 @@ describe('run inspector', () => {
     })
     await flushPromises()
 
+    await component.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
     expect(component.get('.inspector-activity-loading').text()).toContain('Loading agent activity')
     expect(component.find('.feed').exists()).toBe(false)
   })

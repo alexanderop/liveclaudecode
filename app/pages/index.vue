@@ -64,7 +64,6 @@ const workspaceStyle = computed(() => ({
 }))
 
 let widthsHydrated = false
-let openedInitialNow = false
 
 function clampWidth(width: number, min: number, max: number): number {
   return Math.round(Math.min(Math.max(width, min), max))
@@ -146,6 +145,14 @@ const searchGroups = computed(() => [{
     },
   })),
 }])
+const viewMenuItems = computed(() => [views.map(view => ({
+  label: view.label,
+  icon: view.icon,
+  kbds: [view.shortcut],
+  disabled: !live.selectedRoot.value,
+  checked: activePanel.value === view.id,
+  onSelect: () => openSessionPanel(view.id),
+}))])
 const activityEvents = computed<TranscriptEvent[]>(() => {
   const root = live.selectedRoot.value
   const base = live.sessionEvents.value.length
@@ -221,7 +228,6 @@ async function selectSession(project: string, key: string): Promise<void> {
   closePanel()
   contextKey.value = null
   await live.select(key, project)
-  activePanel.value = 'now'
 }
 
 function handleShortcut(event: KeyboardEvent): void {
@@ -260,10 +266,6 @@ watch(
     closePanel()
     activityAgentKey.value = 'all'
     contextKey.value = null
-    if (!openedInitialNow && value !== '\0') {
-      activePanel.value = 'now'
-      openedInitialNow = true
-    }
   },
 )
 
@@ -376,32 +378,6 @@ onUnmounted(() => {
         :style="workspaceStyle"
       >
         <section class="session-primary">
-          <UDashboardToolbar class="view-bar canvas-view-bar">
-            <div class="canvas-view-identity">
-              <UIcon name="i-lucide-workflow" />
-              <span>
-                <strong>Session canvas</strong>
-                <small>Pan, zoom, and select a node to inspect it</small>
-              </span>
-            </div>
-            <nav class="view-tabs" aria-label="Supporting session views">
-              <UButton
-                v-for="view in views"
-                :key="view.id"
-                type="button"
-                color="neutral"
-                variant="ghost"
-                :class="{ selected: activePanel === view.id }"
-                :aria-pressed="activePanel === view.id"
-                @click="openSessionPanel(view.id)"
-              >
-                <UIcon :name="view.icon" />
-                {{ view.label }}
-                <UKbd :value="view.shortcut" />
-              </UButton>
-            </nav>
-          </UDashboardToolbar>
-
           <RunCanvas
             :run="live.run.value"
             :root="live.selectedRoot.value"
@@ -413,7 +389,33 @@ onUnmounted(() => {
             @inspect-incident="inspectIncident"
             @focus-time="focusTime"
             @focus-file="focusFile"
-          />
+          >
+            <template #actions>
+              <nav class="view-actions" aria-label="Supporting session views">
+                <UButton
+                  type="button"
+                  color="neutral"
+                  variant="ghost"
+                  icon="i-lucide-activity"
+                  label="Activity"
+                  :class="{ selected: activePanel === 'activity' }"
+                  :aria-pressed="activePanel === 'activity'"
+                  @click="openSessionPanel('activity')"
+                />
+                <UDropdownMenu :items="viewMenuItems" :content="{ align: 'end' }">
+                  <UButton
+                    type="button"
+                    color="neutral"
+                    variant="ghost"
+                    trailing-icon="i-lucide-chevron-down"
+                    :disabled="!live.selectedRoot.value"
+                    :label="activePanel && activePanel !== 'activity' && activePanel !== 'inspector' ? views.find(view => view.id === activePanel)?.label : 'More'"
+                    aria-label="More session views"
+                  />
+                </UDropdownMenu>
+              </nav>
+            </template>
+          </RunCanvas>
         </section>
 
         <PanelResizeHandle

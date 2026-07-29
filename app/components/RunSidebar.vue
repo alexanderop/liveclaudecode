@@ -23,10 +23,18 @@ const emit = defineEmits<{
 }>()
 const organization = ref<'project' | 'list'>('project')
 const collapsedProjects = ref(new Set<string>())
+const filtersOpen = ref(false)
 
 const allRoots = computed(() => props.allProjects.flatMap(project => project.roots))
 const liveCount = computed(() => allRoots.value.filter(root => root.subLive).length)
 const attentionCount = computed(() => allRoots.value.filter(root => root.subErrors && !root.subLive).length)
+const unhealthySources = computed(() => props.sources.filter(source => source.state !== 'ready'))
+const activeFilterCount = computed(() => [
+  sourceFilter.value !== 'all',
+  projectFilter.value !== 'all',
+  liveOnly.value,
+  hideIdle.value,
+].filter(Boolean).length)
 const recentRoots = computed(() => props.projects
   .flatMap(project => project.roots.map(root => ({ project: project.id, root })))
   .sort((a, b) => (b.root.subLast || '').localeCompare(a.root.subLast || '')))
@@ -181,45 +189,62 @@ function organizeBy(value: 'project' | 'list'): void {
         placeholder="Filter sessions…"
         aria-label="Filter runs"
       />
-      <div class="source-filters" aria-label="Session source filter">
-        <UButton
-          v-for="option in sourceOptions"
-          :key="option.value"
-          type="button"
-          color="neutral"
-          variant="ghost"
-          :class="{ selected: sourceFilter === option.value }"
-          :aria-pressed="sourceFilter === option.value"
-          @click="sourceFilter = option.value"
-        >{{ option.label }}</UButton>
-      </div>
-      <label class="project-filter">
-        <span>Project</span>
-        <USelectMenu
-          v-model="projectFilter"
-          :items="projectSelectOptions"
-          value-key="value"
-          label-key="label"
-          size="xs"
-          aria-label="Filter by project"
-          :search-input="{ placeholder: 'Find project…' }"
-        />
-      </label>
-      <div class="filters">
-        <UCheckbox v-model="liveOnly" class="toggle" label="Live only" />
-        <UCheckbox v-model="hideIdle" class="toggle" label="Hide empty" />
-      </div>
-      <div v-if="sources.some(source => source.state !== 'ready')" class="source-statuses" aria-live="polite">
-        <UAlert
-          v-for="source in sources.filter(source => source.state !== 'ready')"
-          :key="source.source"
-          :class="source.state"
-          :color="source.state === 'degraded' ? 'warning' : 'error'"
-          variant="soft"
-          :title="source.source === 'claude' ? 'Claude' : source.source === 'codex' ? 'Codex' : 'Copilot'"
-          :description="source.message"
-          icon="i-lucide-triangle-alert"
-        />
+      <button
+        type="button"
+        class="sidebar-filter-toggle"
+        :class="{ warning: unhealthySources.length }"
+        :aria-expanded="filtersOpen"
+        aria-controls="session-filters"
+        @click="filtersOpen = !filtersOpen"
+      >
+        <span><UIcon name="i-lucide-list-filter" />Filters</span>
+        <span class="sidebar-filter-summary">
+          <b v-if="activeFilterCount">{{ activeFilterCount }} active</b>
+          <b v-if="unhealthySources.length" class="warning"><UIcon name="i-lucide-triangle-alert" />{{ unhealthySources.length }}</b>
+          <UIcon class="disclosure-chevron" name="i-lucide-chevron-down" />
+        </span>
+      </button>
+      <div v-if="filtersOpen" id="session-filters" class="sidebar-filter-panel">
+        <div class="source-filters" aria-label="Session source filter">
+          <UButton
+            v-for="option in sourceOptions"
+            :key="option.value"
+            type="button"
+            color="neutral"
+            variant="ghost"
+            :class="{ selected: sourceFilter === option.value }"
+            :aria-pressed="sourceFilter === option.value"
+            @click="sourceFilter = option.value"
+          >{{ option.label }}</UButton>
+        </div>
+        <label class="project-filter">
+          <span>Project</span>
+          <USelectMenu
+            v-model="projectFilter"
+            :items="projectSelectOptions"
+            value-key="value"
+            label-key="label"
+            size="xs"
+            aria-label="Filter by project"
+            :search-input="{ placeholder: 'Find project…' }"
+          />
+        </label>
+        <div class="filters">
+          <UCheckbox v-model="liveOnly" class="toggle" label="Live only" />
+          <UCheckbox v-model="hideIdle" class="toggle" label="Hide empty" />
+        </div>
+        <div v-if="unhealthySources.length" class="source-statuses" aria-live="polite">
+          <UAlert
+            v-for="source in unhealthySources"
+            :key="source.source"
+            :class="source.state"
+            :color="source.state === 'degraded' ? 'warning' : 'error'"
+            variant="soft"
+            :title="source.source === 'claude' ? 'Claude' : source.source === 'codex' ? 'Codex' : 'Copilot'"
+            :description="source.message"
+            icon="i-lucide-triangle-alert"
+          />
+        </div>
       </div>
       <nav class="run-tree" aria-label="Claude, Codex, and Copilot sessions">
         <div v-if="loading" class="sidebar-skeleton" aria-live="polite" aria-label="Loading local sessions…">
