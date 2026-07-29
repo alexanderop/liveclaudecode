@@ -2,6 +2,8 @@
 import type { RunNode, RunResponse, TranscriptEvent } from '#shared/types/run'
 import type { FeedDensity } from '~/composables/useLiveRuns'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import { flattenRunTree } from '~/utils/execution-analysis'
+import { agentState } from '~/utils/session-state'
 
 const props = defineProps<{
   run: RunResponse | null
@@ -38,18 +40,15 @@ const tabs = [
 ] as const
 
 const status = computed(() => {
-  if (!props.selected) return { label: 'Inactive', class: 'inactive' }
-  if (props.selected.live) return { label: 'Active', class: 'active' }
-  if (props.selected.spawnState === 'running') return { label: 'Blocked', class: 'blocked' }
-  if (props.selected.errors) return { label: 'Failed', class: 'failed' }
-  if (!props.selected.firstTs && !props.selected.lastTs && !props.selected.tools) return { label: 'Inactive', class: 'inactive' }
-  return { label: 'Completed', class: 'completed' }
+  const summary = agentState(props.selected, props.run?.diagnostics.incidents)
+  return { label: summary.label, class: summary.state }
 })
 const displayLabel = computed(() => normalizeSessionLabel(props.selected?.label || '', 'Details'))
 const toolMix = computed(() => Object.entries(props.selected?.toolCounts || {}).sort((a, b) => b[1] - a[1]).slice(0, 6))
 const selectedDiagnostics = computed(() => props.run?.diagnostics.agents.find(agent => agent.key === props.selectedKey) || null)
 const selectedOutcome = computed(() => props.run?.diagnostics.outcomes.find(outcome => outcome.childKey === props.selectedKey) || null)
 const selectedIncidents = computed(() => (props.run?.diagnostics.incidents || []).filter(incident => incident.key === props.selectedKey))
+const agentIndex = computed(() => new Map(flattenRunTree(props.root).map(node => [node.key, node])))
 const selectedChanges = computed(() => (props.run?.diagnostics.changes || []).filter(change => change.key === props.selectedKey))
 const selectedFiles = computed(() => {
   const files = new Map<string, { path: string, ops: number, added: number, removed: number }>()
@@ -75,6 +74,10 @@ function focusIncident(index: number): void {
 
 function focusEventTime(timestamp: number | null, line: number): void {
   emit('focus-time', timestamp, line)
+}
+
+function agentSummary(key: string): ReturnType<typeof agentState> {
+  return agentState(agentIndex.value.get(key), props.run?.diagnostics.incidents)
 }
 
 watch(() => props.selectedKey, () => { activeTab.value = 'activity' })
@@ -135,8 +138,8 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
         <div class="inspector-section-title"><span>Agents</span><span>{{ run.lanes.length }}</span></div>
         <div class="agent-list">
           <button v-for="lane in run.lanes" :key="lane.key" type="button" class="agent-row" :class="{ selected: lane.key === selectedKey }" :aria-current="lane.key === selectedKey ? 'true' : undefined" @click="emit('select', lane.key)">
-            <span class="agent-avatar" :class="{ live: lane.live, error: lane.errors }"><UIcon :name="lane.depth ? 'i-lucide-bot' : 'i-lucide-terminal-square'" /></span>
-            <span class="agent-copy"><strong>{{ normalizeSessionLabel(lane.label, lane.key) }}</strong><small>{{ lane.live ? 'Active now' : lane.spawnState === 'running' ? 'Blocked or waiting' : lane.errors ? `${lane.errors} errors` : `${lane.tools} tools` }}</small></span>
+            <span class="agent-avatar" :class="agentSummary(lane.key).state"><UIcon :name="lane.depth ? 'i-lucide-bot' : 'i-lucide-terminal-square'" /></span>
+            <span class="agent-copy"><strong>{{ normalizeSessionLabel(lane.label, lane.key) }}</strong><small>{{ agentSummary(lane.key).label }} · {{ lane.tools }} tools</small></span>
             <span v-if="lane.live" class="status-dot running" />
           </button>
         </div>
@@ -155,7 +158,7 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
         <div class="property-row compact"><span><UIcon name="i-lucide-files" />Files changed</span><strong>{{ selected.files.length }}</strong></div>
         <div class="property-row compact"><span><UIcon name="i-lucide-square-terminal" />Commands</span><strong>{{ selected.commands.length }}</strong></div>
         <div class="property-row compact"><span><UIcon name="i-lucide-wrench" />Tool calls</span><strong>{{ selected.tools }}</strong></div>
-        <div class="property-row compact" :class="{ danger: selected.errors }"><span><UIcon name="i-lucide-circle-alert" />Errors</span><strong>{{ selected.errors }}</strong></div>
+        <div class="property-row compact" :class="{ danger: selected.errors }"><span><UIcon name="i-lucide-circle-alert" />Tool errors</span><strong>{{ selected.errors }}</strong></div>
       </section>
     </div>
 

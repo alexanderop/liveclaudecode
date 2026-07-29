@@ -19,6 +19,8 @@ const props = defineProps<{
   followOutput: boolean
   selectedLine?: number | null
   asOf?: number | null
+  sessionWide?: boolean
+  truncated?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +37,7 @@ const visibleEvents = computed(() => props.events.filter((event) => {
     if (Number.isFinite(timestamp) && timestamp > props.asOf) return false
   }
   if (props.errorsOnly) return Boolean(event.error)
+  if (event.error) return true
   if (props.density === 'raw') return true
   if (props.density === 'compact') {
     return event.kind !== 'thinking'
@@ -91,7 +94,7 @@ function labelFor(event: TranscriptEvent): string {
   if (event.kind === 'text') return 'Assistant'
   if (event.kind === 'thinking') return 'Reasoning'
   if (event.kind === 'tool_result') return event.error ? `${event.tool || 'Action'} failed` : `${event.tool || 'Action'} result`
-  if (event.kind !== 'tool_use') return 'System'
+  if (event.kind !== 'tool_use') return event.summary || (event.error ? 'Incident' : 'System')
 
   const labels: Record<string, string> = {
     Read: 'Read file',
@@ -139,7 +142,8 @@ function resultSummary(event: TranscriptEvent): string {
 }
 
 function focusEvent(event: TranscriptEvent): void {
-  if (event.childKey) emit('select', event.childKey)
+  if (event.agentKey) emit('select', event.agentKey)
+  else if (event.childKey) emit('select', event.childKey)
   emit('focus-time', event.ts ? Date.parse(event.ts) : null, event.line)
 }
 
@@ -160,6 +164,11 @@ function updatePinnedState(): void {
   const element = feed.value
   if (!element) return
   pinnedToBottom.value = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD
+}
+
+function resumeFollowing(): void {
+  pinnedToBottom.value = true
+  void scrollToBottom()
 }
 
 watch(
@@ -188,7 +197,10 @@ watch(() => props.selectedLine, async line => {
 </script>
 
 <template>
-  <div ref="feed" class="feed" aria-live="polite" @scroll.passive="updatePinnedState">
+  <div ref="feed" class="feed" @scroll.passive="updatePinnedState">
+    <div v-if="truncated" class="feed-notice" role="status">
+      <UIcon name="i-lucide-history" /> Showing the latest {{ formatCount(events.length) }} session events
+    </div>
     <div v-if="!visibleEvents.length" class="empty-state feed-empty">
       <span class="empty-state-icon"><UIcon name="i-lucide-activity" /></span>
       <h2>{{ emptyState.title }}</h2>
@@ -207,6 +219,7 @@ watch(() => props.selectedLine, async line => {
         <span class="compact-icon"><UIcon :name="iconFor(event)" /></span>
         <span class="compact-text">
           <b>{{ labelFor(event) }}</b>
+          <i v-if="sessionWide && event.agentLabel">{{ event.agentLabel }}</i>
           {{ event.kind === 'tool_result'
             ? `— ${(event.body || '').split('\n')[0]?.slice(0, 180)}`
             : event.kind === 'tool_use'
@@ -228,6 +241,13 @@ watch(() => props.selectedLine, async line => {
         <div class="event-content">
           <header>
             <strong>{{ labelFor(event) }}</strong>
+            <button
+              v-if="sessionWide && event.agentKey"
+              type="button"
+              class="event-agent"
+              :title="event.agentLabel"
+              @click.stop="emit('select', event.agentKey)"
+            ><UIcon name="i-lucide-bot" />{{ event.agentLabel || event.agentType }}</button>
             <button type="button" class="event-time-button" @click="focusEvent(event)">{{ formatTime(event.ts) }}</button>
             <span v-if="event.model" class="event-model">{{ event.model }}</span>
           </header>
@@ -281,5 +301,11 @@ watch(() => props.selectedLine, async line => {
         </div>
       </article>
     </template>
+    <button
+      v-if="followOutput && !pinnedToBottom"
+      type="button"
+      class="feed-resume"
+      @click="resumeFollowing"
+    ><UIcon name="i-lucide-arrow-down" /> New activity · jump to latest</button>
   </div>
 </template>

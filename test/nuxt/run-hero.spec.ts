@@ -52,4 +52,22 @@ describe('RunHero', () => {
     expect(copy.text()).toContain('Copied')
     expect(copy.attributes('aria-label')).toBe('JSONL file path copied')
   })
+
+  it('distinguishes a successful result with recovered tool errors from failure', async () => {
+    const root = runNode({ finalText: 'The requested audit is complete.', errors: 2, subErrors: 2 })
+    const component = await mountSuspended(RunHero, {
+      props: {
+        root,
+        selected: root,
+        fileCount: 0,
+        transcriptPath: '',
+        sidebarVisible: true,
+        followActive: false,
+      },
+    })
+
+    expect(component.get('.pill').text()).toContain('Complete with warnings')
+    expect(component.get('.status-line').text()).toContain('completed with 2 recovered tool errors')
+    expect(component.text()).not.toContain('Session ended with errors')
+  })
 })

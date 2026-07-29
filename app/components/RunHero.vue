@@ -41,7 +41,8 @@ function flatten(node: RunNode, output: RunNode[] = []): RunNode[] {
 }
 
 const busy = computed(() => props.root ? flatten(props.root).filter(node => node.live) : [])
-const lead = computed(() => busy.value.filter(node => node.current).at(-1) || null)
+const waiting = computed(() => props.root ? flatten(props.root).filter(node => !node.live && node.spawnState === 'running') : [])
+const leads = computed(() => busy.value.filter(node => node.current).slice(-3).reverse())
 const sourceLabel = computed(() => {
   const source = props.root?.source
   return source === 'claude' ? 'Claude' : source === 'codex' ? 'Codex' : source === 'copilot' ? 'Copilot' : 'Local'
@@ -51,6 +52,13 @@ const status = computed(() => {
   if (!root) return { label: 'No session selected', class: 'done', icon: 'i-lucide-circle' }
   if (root.subLive) return { label: 'Running', class: 'running', icon: 'i-lucide-loader-circle' }
   if (root.subErrors) {
+    if (root.finalText) {
+      return {
+        label: 'Complete with warnings',
+        class: 'warning',
+        icon: 'i-lucide-circle-alert',
+      }
+    }
     return {
       label: 'Needs attention',
       class: 'failed',
@@ -67,7 +75,7 @@ const kpis = computed(() => {
     { label: 'agents', value: root.subAgents + 1 },
     { label: 'tools run', value: root.subTools },
     { label: 'files changed', value: props.fileCount, class: 'warning' },
-    { label: 'errors', value: root.subErrors, class: root.subErrors ? 'bad' : '' },
+    { label: 'tool errors', value: root.subErrors, class: root.subErrors ? 'bad' : '' },
     { label: 'out tokens', value: formatCount(root.tokensOut) },
     { label: 'elapsed', value: formatDuration(root.firstTs, root.subLast) },
   ]
@@ -146,20 +154,21 @@ onUnmounted(() => {
           <template v-if="busy.length">
             <span class="status-dot running" />
             <strong>
-              {{ busy.length === 1
-                ? (busy[0]?.agentType ? busy[0].label : 'Main session')
-                : `${busy.length} agents working` }}
+              {{ busy.length }} {{ busy.length === 1 ? 'agent' : 'agents' }} active
             </strong>
-            <template v-if="lead?.current">
+            <span v-if="waiting.length" class="muted-separator">·</span>
+            <span v-if="waiting.length">{{ waiting.length }} waiting</span>
+            <template v-if="leads[0]?.current">
               <span class="muted-separator">·</span>
-              <span>{{ lead.current.tool }}</span>
-              <span class="muted">{{ lead.current.summary.replace(/\s+/g, ' ').slice(0, 96) }}</span>
+              <span>{{ leads[0].label }}</span>
+              <span class="muted">{{ leads[0].current?.tool }} · {{ leads[0].current?.summary.replace(/\s+/g, ' ').slice(0, 76) }}</span>
+              <span v-if="leads.length > 1" class="muted">+{{ leads.length - 1 }} more current {{ leads.length === 2 ? 'action' : 'actions' }}</span>
             </template>
             <span v-else class="muted">Thinking…</span>
           </template>
           <template v-else-if="root">
-            <span class="status-dot" :class="{ failed: root.subErrors }" />
-            <span>{{ root.subErrors ? 'Session ended with errors' : 'Session completed' }}</span>
+            <span class="status-dot" :class="root.subErrors ? root.finalText ? 'warning' : 'failed' : 'completed'" />
+            <span>{{ root.subErrors ? root.finalText ? `Session completed with ${root.subErrors} recovered tool ${root.subErrors === 1 ? 'error' : 'errors'}` : 'Session needs attention' : 'Session completed' }}</span>
             <span v-if="selected?.finalText || root.finalText" class="muted last-message">
               {{ (selected?.finalText || root.finalText || '').split('\n')[0]?.slice(0, 110) }}
             </span>

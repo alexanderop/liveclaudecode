@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { $fetch, fetch, setup } from '@nuxt/test-utils/e2e'
-import type { EventsResponse, RunResponse, TreeResponse } from '#shared/types/run'
+import type { EventsResponse, RunResponse, SessionEventsResponse, TreeResponse } from '#shared/types/run'
 import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import * as fixture from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
@@ -160,6 +160,7 @@ describe('read-only API', async () => {
       '/api/tree',
       `/api/run?key=${SESSION}`,
       `/api/events?key=${SESSION}&since=0`,
+      `/api/session-events?key=${SESSION}`,
       `/api/chat?project=${encodeURIComponent(directory)}&key=${SESSION}&since=0&revision=0`,
     ]
 
@@ -195,6 +196,25 @@ describe('read-only API', async () => {
       expect.objectContaining({ source: 'codex', state: 'degraded', sessions: 1, malformed: 1 }),
       expect.objectContaining({ source: 'copilot', state: 'ready', sessions: 1 }),
     ])
+  })
+
+  it('merges root and subagent transcripts into one chronological activity stream', async () => {
+    const response = await $fetch<SessionEventsResponse>(`/api/session-events?key=${SESSION}`)
+
+    expect(response.key).toBe(SESSION)
+    expect(response.truncated).toBe(false)
+    expect(new Set(response.events.map(event => event.agentKey))).toEqual(new Set([
+      SESSION,
+      `${SESSION}/agent-a`,
+    ]))
+    expect(response.events.find(event => event.agentKey === `${SESSION}/agent-a`)).toMatchObject({
+      agentLabel: 'slice A',
+      agentType: 'implementation-worker',
+      agentDepth: 1,
+    })
+    expect(response.events.map(event => event.ts || '')).toEqual(
+      [...response.events].sort((left, right) => (left.ts || '').localeCompare(right.ts || '')).map(event => event.ts || ''),
+    )
   })
 
   it('describes the whole run for a selected worker', async () => {

@@ -34,7 +34,8 @@ describe('dashboard supporting views', () => {
 
     expect(component.text()).toContain('1 agent across 2m0s')
     expect(component.text()).toContain('1 of 2 complete')
-    expect(component.text()).toContain('Current: Validation')
+    expect(component.text()).toContain('Latest: Validation')
+    expect(component.text()).toContain('Session narrative')
     expect(component.text()).toContain('The dashboard is ready for review.')
     expect(component.get('.lane').attributes('aria-current')).toBe('true')
 

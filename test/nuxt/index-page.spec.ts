@@ -27,7 +27,7 @@ describe('session view controls', () => {
         },
       },
     })
-    await component.get('.view-tabs button').trigger('click')
+    await component.findAll('.view-tabs button')[1]!.trigger('click')
     const density = component.get('[role="group"][aria-label="Event detail"]')
     const buttons = density.findAll('button')
 

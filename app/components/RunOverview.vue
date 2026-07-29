@@ -7,6 +7,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ select: [key: string] }>()
+const now = ref(Date.now())
+let timer: ReturnType<typeof setInterval> | undefined
 
 const timeline = computed(() => {
   const lanes = props.run?.lanes || []
@@ -15,13 +17,13 @@ const timeline = computed(() => {
     lane.lastTs ? new Date(lane.lastTs).getTime() : 0,
   ]).filter(Boolean)
   const start = values.length ? Math.min(...values) : 0
-  const end = values.length ? Math.max(...values) : 0
+  const end = values.length ? Math.max(...values, props.run?.root.subLive ? now.value : 0) : 0
   return { lanes, start, end, span: Math.max(end - start, 1_000) }
 })
 
 function laneStyle(lane: TimelineLane): { left: string, width: string } {
   const start = lane.firstTs ? new Date(lane.firstTs).getTime() : timeline.value.start
-  const end = lane.lastTs ? new Date(lane.lastTs).getTime() : start
+  const end = lane.live ? timeline.value.end : lane.lastTs ? new Date(lane.lastTs).getTime() : start
   return {
     left: `${((start - timeline.value.start) / timeline.value.span) * 100}%`,
     width: `${Math.max(((end - start) / timeline.value.span) * 100, 0.8)}%`,
@@ -33,6 +35,41 @@ const completedTodos = computed(() =>
 )
 
 const currentPhase = computed(() => props.run?.phases.at(-1) || null)
+const sessionStory = computed(() => {
+  if (!props.run) return []
+  const childLanes = props.run.lanes.filter(lane => lane.depth > 0)
+  const firstChild = childLanes.map(lane => lane.firstTs).filter(Boolean).sort()[0] || null
+  const returned = childLanes.filter(lane => lane.spawnState === 'returned' || (!lane.live && lane.lastTs))
+  const lastReturn = returned.map(lane => lane.lastTs).filter(Boolean).sort().at(-1) || null
+  const steps = [{
+    title: 'Coordinator started',
+    detail: props.run.root.label,
+    ts: props.run.root.firstTs,
+    state: 'completed',
+  }]
+  if (childLanes.length) steps.push({
+    title: `Fan-out to ${childLanes.length} ${childLanes.length === 1 ? 'agent' : 'agents'}`,
+    detail: 'Parallel workstreams began',
+    ts: firstChild,
+    state: returned.length === childLanes.length ? 'completed' : 'active',
+  })
+  if (returned.length) steps.push({
+    title: `${returned.length} of ${childLanes.length} results returned`,
+    detail: returned.length === childLanes.length ? 'All delegated work was collected' : 'The coordinator is still collecting results',
+    ts: lastReturn,
+    state: returned.length === childLanes.length ? 'completed' : 'active',
+  })
+  if (props.run.root.finalText) steps.push({
+    title: 'Final synthesis returned',
+    detail: props.run.root.subErrors ? `Completed with ${props.run.root.subErrors} recovered tool ${props.run.root.subErrors === 1 ? 'error' : 'errors'}` : 'Completed successfully',
+    ts: props.run.root.lastTs,
+    state: props.run.root.subErrors ? 'warning' : 'completed',
+  })
+  return steps
+})
+
+onMounted(() => { timer = setInterval(() => { now.value = Date.now() }, 10_000) })
+onUnmounted(() => { if (timer) clearInterval(timer) })
 </script>
 
 <template>
@@ -53,6 +90,21 @@ const currentPhase = computed(() => props.run?.phases.at(-1) || null)
         </p>
       </section>
 
+      <section class="content-section session-story">
+        <div class="section-heading">
+          <div>
+            <h3>Session narrative</h3>
+            <p>Inferred from native agent start, return, and completion events</p>
+          </div>
+        </div>
+        <div class="story-steps">
+          <div v-for="step in sessionStory" :key="`${step.title}-${step.ts}`" class="story-step" :class="step.state">
+            <span><UIcon :name="step.state === 'warning' ? 'i-lucide-circle-alert' : step.state === 'active' ? 'i-lucide-loader-circle' : 'i-lucide-check'" /></span>
+            <div><strong>{{ step.title }}</strong><small>{{ step.detail }}<template v-if="step.ts"> · {{ formatTime(step.ts, false) }}</template></small></div>
+          </div>
+        </div>
+      </section>
+
       <section class="content-section execution-section">
         <div class="section-heading">
           <div>
@@ -66,7 +118,7 @@ const currentPhase = computed(() => props.run?.phases.at(-1) || null)
         </div>
 
         <div class="timeline-ruler" aria-hidden="true">
-          <span>Start</span><span>Session timeline</span><span>Now</span>
+          <span>Start</span><span>Session timeline</span><span>{{ run.root.subLive ? 'Live' : 'End' }}</span>
         </div>
         <div class="timeline-list">
           <button
@@ -123,8 +175,8 @@ const currentPhase = computed(() => props.run?.phases.at(-1) || null)
         <section class="content-section phase-card">
           <div class="section-heading">
             <div>
-              <h3>Phases</h3>
-              <p>{{ currentPhase ? `Current: ${currentPhase.title}` : 'No phase announcements' }}</p>
+              <h3>Provider milestones</h3>
+              <p>{{ currentPhase ? `Latest: ${currentPhase.title}` : 'No provider milestones' }}</p>
             </div>
           </div>
           <div v-if="run.phases.length" class="phase-list">
@@ -141,7 +193,7 @@ const currentPhase = computed(() => props.run?.phases.at(-1) || null)
               </div>
             </div>
           </div>
-          <p v-else class="empty-note">Phases will appear when the assistant announces meaningful work stages.</p>
+          <p v-else class="empty-note">No explicit provider milestones were emitted. The inferred lifecycle above remains available.</p>
         </section>
       </div>
 

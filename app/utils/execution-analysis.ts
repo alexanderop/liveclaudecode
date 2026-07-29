@@ -72,6 +72,11 @@ export function analyzeCoordination(
   const collisionKeys = new Set<string>()
   const bottleneckKeys = new Set<string>()
   const fileAgents = new Map<string, string[]>()
+  const activeDurations = nodes.filter(node => node.live).map(node => runNodeDuration(node, now)).sort((a, b) => a - b)
+  const activeMedian = activeDurations.length
+    ? activeDurations[Math.floor(activeDurations.length / 2)]!
+    : 0
+  const longRunningThreshold = Math.max(5 * 60_000, activeMedian * 2)
 
   for (const node of nodes) {
     for (const file of node.files) {
@@ -136,13 +141,15 @@ export function analyzeCoordination(
         durationMs,
       })
     }
-    if (node.live && durationMs >= 60_000) {
+    if (node.live && durationMs >= longRunningThreshold) {
       findings.push({
         id: `run:${node.key}`,
         kind: 'run-hotspot',
         severity: 'info',
         title: `${node.label} is a long-running agent`,
-        detail: node.current ? `${node.current.tool}: ${node.current.summary}` : 'No current tool is recorded.',
+        detail: node.current
+          ? `${node.current.tool}: ${node.current.summary}`
+          : 'This agent has been active substantially longer than its peers without a current tool signal.',
         keys: [node.key],
         durationMs,
       })
@@ -154,12 +161,14 @@ export function analyzeCoordination(
         kind: 'bottleneck',
         severity: 'info',
         title: `${node.label} coordinates ${node.children.length} branches`,
-        detail: 'A wide fan-out can make completion depend on a single slow or failed branch.',
+        detail: 'The coordinator owns result collection across this fan-out; inspect branches that stop reporting activity.',
         keys: [node.key, ...node.children.map(child => child.key)],
       })
     }
     for (const child of node.children) {
-      if (child.spawnState === 'returned' && child.finalText && node.live) {
+      const returnedAt = timestamp(child.lastTs)
+      if (child.spawnState === 'returned' && child.finalText && node.live
+        && returnedAt !== null && now - returnedAt >= 30_000) {
         findings.push({
           id: `consume:${child.key}`,
           kind: 'unconsumed-result',

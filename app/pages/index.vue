@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import type { RunNode } from '#shared/types/run'
+import type { RunNode, TranscriptEvent } from '#shared/types/run'
+import { flattenRunTree } from '~/utils/execution-analysis'
 
 const live = useLiveRuns()
 const densities = ['compact', 'normal', 'raw'] as const
 const views = [
+  { id: 'now', label: 'Now', icon: 'i-lucide-gauge', shortcut: 'N' },
   { id: 'activity', label: 'Activity', icon: 'i-lucide-activity', shortcut: 'A' },
   { id: 'guide', label: 'Guide', icon: 'i-lucide-map', shortcut: 'G' },
   { id: 'diagnostics', label: 'Diagnostics', icon: 'i-lucide-stethoscope', shortcut: 'I' },
@@ -14,9 +16,11 @@ type SessionPanel = typeof views[number]['id']
 
 const activePanel = ref<SessionPanel | 'inspector' | null>(null)
 const inspectedKey = ref<string | null>(null)
+const contextKey = ref<string | null>(null)
 const canvasTime = ref<number | null>(null)
 const focusedLine = ref<number | null>(null)
 const focusedFile = ref<string | null>(null)
+const activityAgentKey = ref('all')
 const sidebarVisible = ref(true)
 const viewportWidth = ref(1440)
 const sidebarWidth = ref(272)
@@ -60,6 +64,7 @@ const workspaceStyle = computed(() => ({
 }))
 
 let widthsHydrated = false
+let openedInitialNow = false
 
 function clampWidth(width: number, min: number, max: number): number {
   return Math.round(Math.min(Math.max(width, min), max))
@@ -103,6 +108,39 @@ const inspectedNode = computed(() => {
   return visit(live.selectedRoot.value)
 })
 
+const activityAgents = computed(() => flattenRunTree(live.selectedRoot.value))
+const activityEvents = computed<TranscriptEvent[]>(() => {
+  const root = live.selectedRoot.value
+  const base = live.sessionEvents.value.length
+    ? live.sessionEvents.value
+    : live.events.value.map(event => ({
+        ...event,
+        agentKey: root?.key,
+        agentLabel: root?.label,
+        agentType: root?.agentType || 'Main session',
+        agentDepth: 0,
+      }))
+  const eventKeys = new Set(base.filter(event => event.error).map(event => `${event.agentKey || ''}:${event.line}`))
+  const incidentEvents: TranscriptEvent[] = (live.run.value?.diagnostics.incidents || [])
+    .filter(incident => incident.severity !== 'info' && !eventKeys.has(`${incident.key || ''}:${incident.line}`))
+    .map(incident => ({
+      role: 'system',
+      kind: 'system',
+      ts: incident.ts,
+      line: incident.line,
+      body: incident.detail,
+      summary: incident.title,
+      tool: incident.tool,
+      error: incident.severity === 'error',
+      agentKey: incident.key,
+      agentLabel: activityAgents.value.find(agent => agent.key === incident.key)?.label || incident.who || 'Session',
+      agentType: activityAgents.value.find(agent => agent.key === incident.key)?.agentType || 'Diagnostic incident',
+    }))
+  return [...base, ...incidentEvents]
+    .filter(event => activityAgentKey.value === 'all' || event.agentKey === activityAgentKey.value)
+    .sort((left, right) => (left.ts || '').localeCompare(right.ts || '') || left.line - right.line)
+})
+
 function closePanel(): void {
   activePanel.value = null
   inspectedKey.value = null
@@ -113,6 +151,7 @@ function closePanel(): void {
 
 function inspectCanvasNode(key: string): void {
   inspectedKey.value = key
+  contextKey.value = key
   activePanel.value = 'inspector'
   void live.inspect(key)
 }
@@ -143,7 +182,9 @@ function openSessionPanel(panel: SessionPanel): void {
 
 async function selectSession(project: string, key: string): Promise<void> {
   closePanel()
+  contextKey.value = null
   await live.select(key, project)
+  activePanel.value = 'now'
 }
 
 function handleShortcut(event: KeyboardEvent): void {
@@ -164,6 +205,7 @@ function handleShortcut(event: KeyboardEvent): void {
   }
 
   const shortcuts: Record<string, SessionPanel> = {
+    n: 'now',
     a: 'activity',
     g: 'guide',
     i: 'diagnostics',
@@ -177,7 +219,15 @@ function handleShortcut(event: KeyboardEvent): void {
 
 watch(
   () => `${live.selectedProject.value || ''}\0${live.selectedKey.value || ''}`,
-  () => closePanel(),
+  value => {
+    closePanel()
+    activityAgentKey.value = 'all'
+    contextKey.value = null
+    if (!openedInitialNow && value !== '\0') {
+      activePanel.value = 'now'
+      openedInitialNow = true
+    }
+  },
 )
 
 watch(inspectedNode, node => {
@@ -349,6 +399,13 @@ onUnmounted(() => {
             </button>
           </header>
           <div v-if="activePanel === 'activity'" class="session-panel-controls">
+            <label class="activity-agent-filter">
+              <span>Agent</span>
+              <select v-model="activityAgentKey" aria-label="Filter activity by agent">
+                <option value="all">Whole session</option>
+                <option v-for="agent in activityAgents" :key="agent.key" :value="agent.key">{{ agent.label }}</option>
+              </select>
+            </label>
             <div class="segments" role="group" aria-label="Event detail">
               <button
                 v-for="option in densities"
@@ -368,28 +425,50 @@ onUnmounted(() => {
             >
               <UIcon name="i-lucide-circle-alert" />Errors
             </button>
+            <button
+              type="button"
+              class="quiet-action"
+              :class="{ active: live.followOutput.value }"
+              :aria-pressed="live.followOutput.value"
+              @click="live.followOutput.value = !live.followOutput.value"
+            >
+              <UIcon name="i-lucide-arrow-down-to-line" />Follow
+            </button>
           </div>
+          <RunNowBoard
+            v-if="activePanel === 'now'"
+            :root="live.selectedRoot.value"
+            :run="live.run.value"
+            @select="inspectCanvasNode"
+          />
           <EventFeed
-            v-if="activePanel === 'activity'"
-            :events="live.events.value"
+            v-else-if="activePanel === 'activity'"
+            :events="activityEvents"
             :density="live.density.value"
             :errors-only="live.errorsOnly.value"
             :follow-output="live.followOutput.value"
+            :truncated="live.sessionEventsTruncated.value"
+            session-wide
             @select="inspectCanvasNode"
           />
           <RunOverview
             v-else-if="activePanel === 'guide'"
             :run="live.run.value"
-            :selected-key="inspectedKey"
+            :selected-key="contextKey"
             @select="inspectCanvasNode"
           />
           <RunDiagnostics
             v-else-if="activePanel === 'diagnostics'"
             :run="live.run.value"
-            :selected-key="inspectedKey"
+            :selected-key="contextKey"
             @select="inspectCanvasNode"
           />
-          <RunChanges v-else-if="activePanel === 'changes'" :run="live.run.value" />
+          <RunChanges
+            v-else-if="activePanel === 'changes'"
+            :run="live.run.value"
+            :root="live.selectedRoot.value"
+            :selected-key="contextKey"
+          />
           <ChatPanel
             v-else-if="activePanel === 'chat'"
             :project="live.selectedProject.value || ''"

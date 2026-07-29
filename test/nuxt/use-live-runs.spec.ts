@@ -123,6 +123,7 @@ describe('useLiveRuns', () => {
     const fetch = vi.fn(async (url: string) => {
       if (url === '/api/tree') return tree(root)
       if (url.startsWith('/api/run')) return runResponse({ key: child.key, node: child, root })
+      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
       if (url.startsWith('/api/events')) return events(child.key, 'Working')
       throw new Error(`Unexpected URL: ${url}`)
     })
@@ -155,6 +156,7 @@ describe('useLiveRuns', () => {
     const fetch = vi.fn(async (url: string) => {
       if (url === '/api/tree') return tree(root)
       if (url.startsWith('/api/run')) return runResponse({ root, node: root })
+      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
       if (url.startsWith('/api/events')) {
         eventPoll += 1
         return eventPoll === 1
@@ -194,6 +196,7 @@ describe('useLiveRuns', () => {
       if (url.includes('/api/run') && url.includes('key=second')) {
         return runResponse({ key: second.key, root, node: second })
       }
+      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
       if (url.startsWith('/api/events')) {
         const key = url.includes('key=second') ? second.key : root.key
         return events(key, '')
@@ -229,6 +232,7 @@ describe('useLiveRuns', () => {
         return tree(root)
       }
       if (url.startsWith('/api/run')) return runResponse({ root, node: root })
+      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
       if (url.startsWith('/api/events')) return events(root.key, '')
       throw new Error(`Unexpected URL: ${url}`)
     })

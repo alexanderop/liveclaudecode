@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TimelineLane } from '../../shared/types/run'
 import { buildExecutionGraph } from '../../app/utils/execution-graph'
+import { runNode } from '../fixtures/runs'
 
 function lane(
   key: string,
@@ -57,6 +58,54 @@ describe('execution graph layout', () => {
     expect(graph.nodes.find(node => node.id === 'completed')?.data?.state).toBe('completed')
     expect(graph.nodes.find(node => node.id === 'inactive')?.data?.state).toBe('inactive')
     expect(graph.edges.find(edge => edge.target === 'live')?.animated).toBe(true)
+  })
+
+  it('shows a recovered tool failure as completed with warnings without double counting it', () => {
+    const child = runNode({
+      key: 'worker',
+      kind: 'subagent',
+      errors: 1,
+      subErrors: 1,
+      finalText: 'Recovered and returned a result.',
+      children: [],
+    })
+    const root = runNode({ key: 'root', errors: 0, subErrors: 1, children: [child] })
+    const graph = buildExecutionGraph(
+      [lane('root', 0), lane('worker', 1, { errors: 1, tools: 3 })],
+      new Map(),
+      'left-to-right',
+      'all-agents',
+      {
+        root,
+        diagnostics: {
+          incidents: [{
+            id: 'tool-error',
+            severity: 'error',
+            category: 'tool',
+            title: 'Bash failed',
+            detail: 'Recovered later',
+            ts: null,
+            line: 3,
+            key: 'worker',
+          }],
+          turns: [],
+          compactions: [],
+          outcomes: [],
+          changes: [],
+          git: [],
+          agents: [],
+          environment: { cwd: '', gitBranch: '', version: '', entrypoint: '', permissionMode: '' },
+          causal: { records: 0, recordsWithUuid: 0, branchPoints: 0, sidechainRecords: 0, interruptions: 0 },
+          usage: { in: 0, out: 0, cr: 0, cw: 0 },
+        },
+      },
+    )
+
+    expect(graph.nodes.find(node => node.id === 'worker')?.data).toMatchObject({
+      state: 'completed',
+      displayState: 'warning',
+      issues: 1,
+    })
   })
 
   it('preserves positions after a user drags an agent', () => {

@@ -3,6 +3,7 @@ import type {
   ProjectRuns,
   RunNode,
   RunResponse,
+  SessionEventsResponse,
   SessionSourceStatus,
   TranscriptEvent,
   TreeResponse,
@@ -29,6 +30,8 @@ export function useLiveRuns() {
   const selectedKey = ref<string | null>(null)
   const run = ref<RunResponse | null>(null)
   const events = ref<TranscriptEvent[]>([])
+  const sessionEvents = ref<TranscriptEvent[]>([])
+  const sessionEventsTruncated = ref(false)
   const inspectedKey = ref<string | null>(null)
   const inspectedEvents = ref<TranscriptEvent[]>([])
   const inspectedEventsLoading = ref(false)
@@ -50,10 +53,12 @@ export function useLiveRuns() {
   let treeTimer: ReturnType<typeof setInterval> | undefined
   let eventTimer: ReturnType<typeof setInterval> | undefined
   let runTimer: ReturnType<typeof setInterval> | undefined
+  let sessionEventTimer: ReturnType<typeof setInterval> | undefined
   let treePending = false
   let eventPendingKey: string | null = null
   let inspectedEventPendingKey: string | null = null
   let runPendingKey: string | null = null
+  let sessionEventPendingKey: string | null = null
 
   const nodeIndex = computed(() => {
     const map = new Map<string, { node: RunNode, parent: string | null }>()
@@ -175,6 +180,25 @@ export function useLiveRuns() {
     }
   }
 
+  async function pollSessionEvents(): Promise<void> {
+    const key = selectedRoot.value?.key || selectedKey.value
+    const project = selectedProject.value
+    if (!key || !project) return
+    const requestKey = `${project}\0${key}`
+    if (sessionEventPendingKey === requestKey) return
+    sessionEventPendingKey = requestKey
+    try {
+      const response = await request<SessionEventsResponse>(
+        `/api/session-events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&limit=800`,
+      )
+      if (!response || (selectedRoot.value?.key || selectedKey.value) !== key || selectedProject.value !== project) return
+      sessionEvents.value = response.events
+      sessionEventsTruncated.value = response.truncated
+    } finally {
+      if (sessionEventPendingKey === requestKey) sessionEventPendingKey = null
+    }
+  }
+
   async function pollInspectedEvents(): Promise<void> {
     const key = inspectedKey.value
     const project = selectedProject.value
@@ -227,8 +251,10 @@ export function useLiveRuns() {
     since.value = 0
     eventRevision.value = 0
     events.value = []
+    sessionEvents.value = []
+    sessionEventsTruncated.value = false
     run.value = null
-    await Promise.all([pollEvents(), loadRun()])
+    await Promise.all([pollEvents(), loadRun(), pollSessionEvents()])
   }
 
   onMounted(() => {
@@ -239,12 +265,14 @@ export function useLiveRuns() {
       void pollInspectedEvents()
     }, 2_000)
     runTimer = setInterval(loadRun, 6_000)
+    sessionEventTimer = setInterval(pollSessionEvents, 4_000)
   })
 
   onUnmounted(() => {
     if (treeTimer) clearInterval(treeTimer)
     if (eventTimer) clearInterval(eventTimer)
     if (runTimer) clearInterval(runTimer)
+    if (sessionEventTimer) clearInterval(sessionEventTimer)
   })
 
   return {
@@ -259,6 +287,8 @@ export function useLiveRuns() {
     selectedRoot,
     run,
     events,
+    sessionEvents,
+    sessionEventsTruncated,
     inspectedEvents,
     inspectedEventsLoading,
     offline,

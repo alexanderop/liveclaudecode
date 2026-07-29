@@ -16,10 +16,12 @@ const data: ExecutionNodeData = {
   depth: 1,
   root: false,
   state: 'active',
+  displayState: 'running',
   overview: false,
   agents: 1,
   errors: 0,
   incidents: 0,
+  issues: 0,
   changes: 1,
   workstream: 1,
   memberKeys: ['explore'],
@@ -63,7 +65,7 @@ describe('execution agent node', () => {
     const node = component.get('.sketch-node')
     expect(node.classes()).toContain('active')
     expect(node.attributes('aria-current')).toBe('true')
-    expect(node.attributes('aria-label')).toContain('Explore agent, Active')
+    expect(node.attributes('aria-label')).toContain('Explore agent, Running')
 
     await node.trigger('keydown', { key: 'Enter' })
     expect(selectNode).toHaveBeenCalledWith('explore')

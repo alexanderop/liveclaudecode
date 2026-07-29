@@ -53,6 +53,11 @@ export interface TranscriptEvent {
   sidechain?: boolean
   stopReason?: string | null
   effort?: string
+  /** Present when events are returned as a merged, session-wide activity stream. */
+  agentKey?: string
+  agentLabel?: string
+  agentType?: string
+  agentDepth?: number
 }
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info'
@@ -335,4 +340,11 @@ export interface EventsResponse {
   revision: number
   reset: boolean
   node: PublicRunNode
+}
+
+export interface SessionEventsResponse {
+  key: string
+  events: TranscriptEvent[]
+  total: number
+  truncated: boolean
 }

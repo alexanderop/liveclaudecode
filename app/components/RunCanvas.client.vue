@@ -123,6 +123,26 @@ const replayValue = computed(() => replayAt.value ?? replayRange.value.end)
 const replayLabel = computed(() => replayAt.value === null
   ? 'Live tail'
   : new Date(replayAt.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+const replayMarkers = computed(() => {
+  const markers = [
+    ...(props.run?.diagnostics.incidents || []).map(incident => ({
+      ts: parsedTime(incident.ts),
+      label: incident.title,
+      kind: incident.severity === 'error' ? 'error' : 'warning',
+      incident,
+    })),
+    ...(props.run?.phases || []).map(phase => ({
+      ts: parsedTime(phase.ts),
+      label: phase.title,
+      kind: 'phase',
+      incident: null,
+    })),
+  ].filter(marker => marker.ts !== null).slice(-40)
+  return markers.map(marker => ({
+    ...marker,
+    left: `${((marker.ts! - replayRange.value.start) / Math.max(1, replayRange.value.end - replayRange.value.start)) * 100}%`,
+  }))
+})
 
 const rootNodes = computed(() => flattenRunTree(props.root || null))
 const nodeIndex = computed(() => new Map(rootNodes.value.map(node => [node.key, node])))
@@ -324,7 +344,7 @@ async function syncSelection(): Promise<void> {
   if (target && !target.selected) addSelectedNodes([target])
   await bringSelectionIntoView()
 }
-watch([() => props.selectedKey, graph], () => void syncSelection(), { flush: 'post' })
+watch(() => props.selectedKey, () => void syncSelection(), { flush: 'post' })
 
 function navigateIncident(direction: 1 | -1): void {
   if (!issues.value.length) return
@@ -367,6 +387,10 @@ function handleCanvasKeydown(event: KeyboardEvent): void {
 function setReplayTime(value: number | null): void {
   replayAt.value = value
   emit('focus-time', value)
+}
+function jumpToMarker(marker: typeof replayMarkers.value[number]): void {
+  setReplayTime(marker.ts)
+  if (marker.incident) emit('inspect-incident', marker.incident)
 }
 function onReplayInput(event: Event): void {
   stopPlayback()
@@ -528,8 +552,21 @@ onBeforeUnmount(() => {
       <div v-if="replayRange.start" class="replay-bar">
         <button type="button" :aria-label="playing ? 'Pause replay' : 'Play replay'" @click="togglePlayback"><UIcon :name="playing ? 'i-lucide-pause' : 'i-lucide-play'" /></button>
         <span>{{ new Date(replayRange.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span>
-        <input :value="replayValue" type="range" :min="replayRange.start" :max="replayRange.end" :step="Math.max(1, Math.round((replayRange.end - replayRange.start) / 500))" aria-label="Replay session timeline" @input="onReplayInput" />
-        <span>{{ replayLabel }}</span>
+        <div class="replay-track">
+          <input :value="replayValue" type="range" :min="replayRange.start" :max="replayRange.end" :step="Math.max(1, Math.round((replayRange.end - replayRange.start) / 500))" aria-label="Replay session timeline" @input="onReplayInput" />
+          <button
+            v-for="(marker, index) in replayMarkers"
+            :key="`${marker.kind}-${marker.ts}-${index}`"
+            type="button"
+            class="replay-marker"
+            :class="marker.kind"
+            :style="{ left: marker.left }"
+            :title="marker.label"
+            :aria-label="`${marker.label} at ${new Date(marker.ts!).toLocaleTimeString()}`"
+            @click="jumpToMarker(marker)"
+          />
+        </div>
+        <span>{{ replayAt === null ? new Date(replayRange.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : replayLabel }}</span>
         <button type="button" class="live-tail" :class="{ selected: replayAt === null }" @click="stopPlayback(); setReplayTime(null)"><i />Live tail</button>
       </div>
     </template>

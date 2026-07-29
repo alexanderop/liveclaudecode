@@ -1,12 +1,30 @@
 <script setup lang="ts">
-import type { RunResponse } from '#shared/types/run'
+import type { RunNode, RunResponse } from '#shared/types/run'
+import { flattenRunTree } from '~/utils/execution-analysis'
 
-const props = defineProps<{ run: RunResponse | null }>()
+const props = defineProps<{ run: RunResponse | null, root?: RunNode | null, selectedKey?: string | null }>()
+const scope = ref<'session' | 'agent'>('session')
 
-const successfulCommands = computed(() => props.run?.node.commands.filter(command => command.ok === true).length || 0)
-const failedCommands = computed(() => props.run?.node.commands.filter(command => command.ok === false).length || 0)
-const patchChanges = computed(() => [...(props.run?.diagnostics.changes || [])].reverse())
-const gitEvents = computed(() => [...(props.run?.diagnostics.git || [])].reverse())
+const sessionNodes = computed(() => {
+  const nodes = flattenRunTree(props.root || null)
+  return nodes.length ? nodes : props.run?.node ? [props.run.node] : []
+})
+const selectedNode = computed(() => sessionNodes.value.find(node => node.key === (props.selectedKey || props.run?.node.key)) || props.run?.node || null)
+const commands = computed(() => scope.value === 'session'
+  ? sessionNodes.value.flatMap(node => node.commands)
+  : selectedNode.value?.commands || [])
+const files = computed<Array<[string, number]>>(() => scope.value === 'session'
+  ? props.run?.files || []
+  : (selectedNode.value?.files || []).map(file => [file.path, file.ops]))
+const successfulCommands = computed(() => commands.value.filter(command => command.ok === true).length)
+const failedCommands = computed(() => commands.value.filter(command => command.ok === false).length)
+const patchChanges = computed(() => [...(props.run?.diagnostics.changes || [])]
+  .filter(change => scope.value === 'session' || change.key === selectedNode.value?.key)
+  .reverse())
+const gitEvents = computed(() => [...(props.run?.diagnostics.git || [])]
+  .filter(event => scope.value === 'session' || event.key === selectedNode.value?.key)
+  .reverse())
+const scopeLabel = computed(() => scope.value === 'session' ? 'Whole session' : 'Selected agent')
 </script>
 
 <template>
@@ -22,11 +40,15 @@ const gitEvents = computed(() => [...(props.run?.diagnostics.git || [])].reverse
         <div>
           <span class="section-eyebrow">Session output</span>
           <h2>Changes and validation</h2>
-          <p>Concrete artifacts produced by the session, separated from its conversational activity.</p>
+          <p>Concrete artifacts and validation outcomes scoped consistently to {{ scopeLabel.toLowerCase() }}.</p>
+        </div>
+        <div class="segments change-scope" role="group" aria-label="Changes scope">
+          <button type="button" :class="{ selected: scope === 'session' }" :aria-pressed="scope === 'session'" @click="scope = 'session'">Whole session</button>
+          <button type="button" :class="{ selected: scope === 'agent' }" :aria-pressed="scope === 'agent'" @click="scope = 'agent'">Selected agent</button>
         </div>
         <div class="change-totals">
-          <div><strong>{{ run.files.length }}</strong><span>Files</span></div>
-          <div><strong>{{ run.node.commands.length }}</strong><span>Commands</span></div>
+          <div><strong>{{ files.length }}</strong><span>Files</span></div>
+          <div><strong>{{ commands.length }}</strong><span>Commands</span></div>
           <div class="success"><strong>{{ successfulCommands }}</strong><span>Passed</span></div>
           <div :class="{ failure: failedCommands }"><strong>{{ failedCommands }}</strong><span>Failed</span></div>
         </div>
@@ -37,12 +59,12 @@ const gitEvents = computed(() => [...(props.run?.diagnostics.git || [])].reverse
           <div class="section-heading">
             <div>
               <h3>Files changed</h3>
-              <p>Across the entire session and its subagents</p>
+              <p>{{ scopeLabel }}</p>
             </div>
-            <span class="section-count">{{ run.files.length }}</span>
+            <span class="section-count">{{ files.length }}</span>
           </div>
-          <div v-if="run.files.length" class="artifact-list">
-            <div v-for="[path, operations] in run.files" :key="path" class="artifact-row">
+          <div v-if="files.length" class="artifact-list">
+            <div v-for="[path, operations] in files" :key="path" class="artifact-row">
               <span class="artifact-icon changed"><UIcon name="i-lucide-file-pen-line" /></span>
               <span class="artifact-copy">
                 <strong :title="path">{{ path.split('/').at(-1) }}</strong>
@@ -58,12 +80,12 @@ const gitEvents = computed(() => [...(props.run?.diagnostics.git || [])].reverse
           <div class="section-heading">
             <div>
               <h3>Commands</h3>
-              <p>Validation and repository operations from this agent</p>
+              <p>{{ scopeLabel }}</p>
             </div>
-            <span class="section-count">{{ run.node.commands.length }}</span>
+            <span class="section-count">{{ commands.length }}</span>
           </div>
-          <div v-if="run.node.commands.length" class="command-list">
-            <div v-for="command in [...run.node.commands].reverse()" :key="command.tid" class="command-row">
+          <div v-if="commands.length" class="command-list">
+            <div v-for="command in [...commands].reverse()" :key="`${command.tid}-${command.ts}`" class="command-row">
               <span class="command-state" :class="command.ok === null ? 'pending' : command.ok ? 'ok' : 'failed'">
                 <UIcon :name="command.ok === null ? 'i-lucide-loader-circle' : command.ok ? 'i-lucide-check' : 'i-lucide-x'" />
               </span>

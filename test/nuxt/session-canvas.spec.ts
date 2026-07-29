@@ -253,7 +253,7 @@ describe('persistent session canvas', () => {
     })
     const originalCanvas = component.get('.canvas-stub').element
 
-    await component.get('.view-tabs button').trigger('click')
+    await component.findAll('.view-tabs button')[1]!.trigger('click')
 
     expect(component.get('.session-panel').attributes('aria-label')).toBe('Activity panel')
     expect(component.get('.canvas-stub').element).toBe(originalCanvas)

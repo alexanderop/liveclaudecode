@@ -16,6 +16,15 @@ const slowTurns = computed(() => [...(props.run?.diagnostics.turns || [])]
   .sort((a, b) => b.durationMs - a.durationMs)
   .slice(0, 10))
 const longestTurn = computed(() => slowTurns.value[0]?.durationMs || 1)
+const health = computed(() => {
+  if (errorCount.value) {
+    return props.run?.root?.finalText
+      ? { class: 'warning', label: `${errorCount.value} recovered ${errorCount.value === 1 ? 'error' : 'errors'}` }
+      : { class: 'failed', label: `${errorCount.value} ${errorCount.value === 1 ? 'error' : 'errors'}` }
+  }
+  if (warningCount.value) return { class: 'warning', label: `${warningCount.value} ${warningCount.value === 1 ? 'warning' : 'warnings'}` }
+  return { class: 'healthy', label: 'No incidents' }
+})
 
 function incidentIcon(incident: DiagnosticIncident): string {
   if (incident.category === 'permission') return 'i-lucide-shield-alert'
@@ -47,9 +56,9 @@ function turnWidth(turn: TurnTiming): string {
           <h2>Why the session behaved this way</h2>
           <p>Native provider events, timing, context usage, and causal signals across the full agent tree.</p>
         </div>
-        <span class="diagnostic-health" :class="errorCount ? 'failed' : warningCount ? 'warning' : 'healthy'">
+        <span class="diagnostic-health" :class="health.class">
           <UIcon :name="errorCount ? 'i-lucide-circle-alert' : warningCount ? 'i-lucide-triangle-alert' : 'i-lucide-circle-check'" />
-          {{ errorCount ? `${errorCount} errors` : warningCount ? `${warningCount} warnings` : 'No incidents' }}
+          {{ health.label }}
         </span>
       </section>
 
@@ -81,7 +90,7 @@ function turnWidth(turn: TurnTiming): string {
           <div class="section-heading">
             <div>
               <h3>Incidents</h3>
-              <p>Explicit failures and interruption signals, not text heuristics</p>
+              <p>Provider and parser incident signals across the whole session</p>
             </div>
             <span class="section-count">{{ incidents.length }}</span>
           </div>

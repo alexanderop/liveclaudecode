@@ -8,6 +8,7 @@ import type {
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import type { CoordinationAnalysis } from '~/utils/execution-analysis'
 import { flattenRunTree } from '~/utils/execution-analysis'
+import { canonicalIssueCount, type AgentDisplayState } from '~/utils/session-state'
 
 export type ExecutionNodeState = 'active' | 'blocked' | 'completed' | 'failed' | 'inactive'
 export type ExecutionDirection = 'left-to-right' | 'top-to-bottom'
@@ -26,10 +27,12 @@ export interface ExecutionNodeData {
   depth: number
   root: boolean
   state: ExecutionNodeState
+  displayState: AgentDisplayState
   overview: boolean
   agents: number
   errors: number
   incidents: number
+  issues: number
   changes: number
   workstream: number
   memberKeys: string[]
@@ -84,11 +87,13 @@ interface AggregateStats {
   completed: boolean
   errors: number
   incidents: number
+  issues: number
   changes: number
   files: number
   firstTs: TimelineLane['firstTs']
   lastTs: TimelineLane['lastTs']
   live: boolean
+  failed: boolean
   memberKeys: string[]
   tools: number
   tokens: number
@@ -124,6 +129,7 @@ function stateFor(
   lane: TimelineLane,
   incidents: DiagnosticIncident[] = [],
   asOf: number | null = null,
+  node?: RunNode,
 ): ExecutionNodeState {
   const laneIncidents = relevantIncidents(lane.key, incidents, asOf)
   if (asOf !== null) {
@@ -137,7 +143,9 @@ function stateFor(
   }
   if (lane.live) return 'active'
   if (lane.spawnState === 'running') return 'blocked'
-  if (lane.errors || laneIncidents.some(incident => incident.severity === 'error')) return 'failed'
+  if (lane.errors || laneIncidents.some(incident => incident.severity === 'error')) {
+    return node?.finalText ? 'completed' : 'failed'
+  }
   if (!lane.firstTs && !lane.lastTs && !lane.tools) return 'inactive'
   return 'completed'
 }
@@ -186,21 +194,25 @@ function aggregate(
   const changes = context.diagnostics?.changes || []
   const starts = entries.map(item => item.lane.firstTs).filter(value => value !== null).sort()
   const ends = entries.map(item => item.lane.lastTs).filter(value => value !== null).sort()
-  const states = entries.map(item => stateFor(item.lane, incidents, context.asOf ?? null))
+  const states = entries.map(item => stateFor(item.lane, incidents, context.asOf ?? null, nodeByKey.get(item.lane.key)))
   return {
     agents: entries.length,
     blocked: states.includes('blocked'),
     completed: states.includes('completed'),
-    errors: entries.reduce((total, item) => total + item.lane.errors
-      + relevantIncidents(item.lane.key, incidents, context.asOf ?? null)
-        .filter(incident => incident.severity === 'error').length, 0),
-    incidents: entries.reduce((total, item) => total + relevantIncidents(item.lane.key, incidents, context.asOf ?? null).length, 0),
+    errors: entries.reduce((total, item) => total + item.lane.errors, 0),
+    incidents: entries.reduce((total, item) => total + relevantIncidents(item.lane.key, incidents, context.asOf ?? null)
+      .filter(incident => incident.severity !== 'info').length, 0),
+    issues: entries.reduce((total, item) => total + canonicalIssueCount(
+      item.lane.errors,
+      relevantIncidents(item.lane.key, incidents, context.asOf ?? null),
+    ), 0),
     changes: changes.filter(change => change.key && entries.some(item => item.lane.key === change.key)
       && (context.asOf == null || time(change.ts) === null || time(change.ts)! <= context.asOf)).length,
     files: entries.reduce((total, item) => total + item.lane.files, 0),
     firstTs: starts[0] || null,
     lastTs: ends.at(-1) || null,
     live: states.includes('active'),
+    failed: states.includes('failed'),
     memberKeys: entries.map(item => item.lane.key),
     tools: entries.reduce((total, item) => total + item.lane.tools, 0),
     tokens: entries.reduce((total, item) => total + (nodeByKey.get(item.lane.key)?.tokensOut || 0), 0),
@@ -210,7 +222,7 @@ function aggregate(
 function aggregateState(stats: AggregateStats): ExecutionNodeState {
   if (stats.live) return 'active'
   if (stats.blocked) return 'blocked'
-  if (stats.errors) return 'failed'
+  if (stats.failed) return 'failed'
   if (stats.completed) return 'completed'
   return 'inactive'
 }
@@ -248,6 +260,12 @@ function summaryFor(
   if (state === 'active' && node?.current) {
     return { summary: node.current.summary.replace(/\s+/g, ' ').slice(0, 110), tool: node.current.tool }
   }
+  if (state === 'active' && node) {
+    return {
+      summary: node.tools ? `Working through the session · ${node.tools} tool calls recorded` : 'Thinking before the next action',
+      tool: '',
+    }
+  }
   if (state === 'blocked') {
     return { summary: pendingChildren ? `Waiting for ${pendingChildren} child ${pendingChildren === 1 ? 'agent' : 'agents'}` : 'Waiting for a child result', tool: '' }
   }
@@ -257,7 +275,7 @@ function summaryFor(
     if (first) return { summary: first.replace(/\s+/g, ' ').slice(0, 110), tool: '' }
   }
   if (state === 'completed') return { summary: replaying ? 'Completed by replay cursor' : 'Returned to parent', tool: '' }
-  return { summary: 'No recorded activity', tool: '' }
+  return { summary: node?.tools ? `${node.tools} tool calls recorded` : 'No activity recorded yet', tool: '' }
 }
 
 export function buildExecutionGraph(
@@ -285,14 +303,14 @@ export function buildExecutionGraph(
 
   for (const entry of allEntries) {
     const lane = entry.lane
-    const state = stateFor(lane, incidents, asOf)
     const node = nodeByKey.get(lane.key)
+    const state = stateFor(lane, incidents, asOf, node)
     const laneIncidents = relevantIncidents(lane.key, incidents, asOf)
     const laneChanges = changes.filter(change => change.key === lane.key
       && (asOf === null || time(change.ts) === null || time(change.ts)! <= asOf))
     const lensMatch = lens === 'all'
       || (lens === 'active' && (state === 'active' || state === 'blocked'))
-      || (lens === 'problems' && (state === 'failed' || laneIncidents.length > 0))
+      || (lens === 'problems' && (state === 'failed' || lane.errors > 0 || laneIncidents.some(incident => incident.severity !== 'info')))
       || (lens === 'files' && (lane.files > 0 || laneChanges.length > 0))
       || (lens === 'coordination' && coordinationKeys.has(lane.key))
     const label = normalizeSessionLabel(lane.label, lane.key).toLowerCase()
@@ -362,7 +380,7 @@ export function buildExecutionGraph(
     if (!context.collapsedKeys?.has(entry.lane.key)) return false
     if (lens === 'problems') {
       const stats = aggregate(entry, context, nodeByKey)
-      if (stats.errors || stats.incidents) return false
+      if (stats.issues) return false
     }
     return true
   }
@@ -384,21 +402,34 @@ export function buildExecutionGraph(
       stats.tools = lane.tools
       stats.firstTs = lane.firstTs
       stats.lastTs = lane.lastTs
-      stats.live = stateFor(lane, incidents, asOf) === 'active'
-      stats.blocked = stateFor(lane, incidents, asOf) === 'blocked'
-      stats.completed = stateFor(lane, incidents, asOf) === 'completed'
-      stats.incidents = relevantIncidents(lane.key, incidents, asOf).length
+      const laneState = stateFor(lane, incidents, asOf, nodeByKey.get(lane.key))
+      const laneIncidents = relevantIncidents(lane.key, incidents, asOf)
+      stats.live = laneState === 'active'
+      stats.blocked = laneState === 'blocked'
+      stats.completed = laneState === 'completed'
+      stats.failed = laneState === 'failed'
+      stats.incidents = laneIncidents.filter(incident => incident.severity !== 'info').length
+      stats.issues = canonicalIssueCount(lane.errors, laneIncidents)
       stats.changes = changes.filter(change => change.key === lane.key
         && (asOf === null || time(change.ts) === null || time(change.ts)! <= asOf)).length
       stats.tokens = nodeByKey.get(lane.key)?.tokensOut || 0
     }
-    const state = aggregateNode ? aggregateState(stats) : stateFor(lane, incidents, asOf)
+    const state = aggregateNode ? aggregateState(stats) : stateFor(lane, incidents, asOf, nodeByKey.get(lane.key))
     const memberKeys = overview && lane.depth === 0 ? [lane.key] : stats.memberKeys
     const node = nodeByKey.get(lane.key)
     const laneIncidents = relevantIncidents(lane.key, incidents, asOf)
     const lastIncident = laneIncidents.at(-1)
     const pendingChildren = node?.children.filter(child => child.live || child.spawnState === 'running').length || 0
     const semantic = summaryFor(node, state, lastIncident, pendingChildren, asOf !== null)
+    const displayState: AgentDisplayState = state === 'active'
+      ? node?.current ? 'running' : 'thinking'
+      : state === 'blocked'
+        ? 'waiting'
+        : state === 'failed'
+          ? 'failed'
+          : state === 'completed' && stats.issues
+            ? 'warning'
+            : state === 'completed' ? 'completed' : 'inactive'
     const matched = memberKeys.some(key => contextualMatches.has(key))
     const focusedFile = Boolean(context.focusedFile && memberKeys.some(key => {
       const member = nodeByKey.get(key)
@@ -434,10 +465,12 @@ export function buildExecutionGraph(
         depth: lane.depth,
         root: lane.depth === 0,
         state,
+        displayState,
         overview: aggregateNode,
         agents: stats.agents,
         errors: stats.errors,
         incidents: stats.incidents,
+        issues: stats.issues,
         changes: stats.changes,
         workstream: workstreamByKey.get(lane.key) || 0,
         memberKeys,
@@ -458,7 +491,7 @@ export function buildExecutionGraph(
 
     for (const child of children) {
       const childStats = (overview || isCollapsed(child)) ? aggregate(child, context, nodeByKey) : null
-      const childState = childStats ? aggregateState(childStats) : stateFor(child.lane, incidents, asOf)
+      const childState = childStats ? aggregateState(childStats) : stateFor(child.lane, incidents, asOf, nodeByKey.get(child.lane.key))
       const childDuration = duration(child.lane.firstTs, child.lane.lastTs, asOf ?? now)
       const interrupted = relevantIncidents(child.lane.key, incidents, asOf)
         .some(incident => incident.category === 'interruption')

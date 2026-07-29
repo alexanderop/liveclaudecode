@@ -154,4 +154,46 @@ describe('EventFeed', () => {
     await flushPromises()
     expect(feedElement.scrollTop).toBe(1_000)
   })
+
+  it('identifies and opens the responsible agent in a session-wide stream', async () => {
+    const component = await mountSuspended(EventFeed, {
+      props: {
+        events: [{
+          ...textEvent('Worker result'),
+          agentKey: 'worker',
+          agentLabel: 'Timeline audit',
+          agentType: 'Explore',
+        }],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+        sessionWide: true,
+      },
+    })
+
+    expect(component.get('.event-agent').text()).toContain('Timeline audit')
+    await component.get('.event-agent').trigger('click')
+    expect(component.emitted('select')).toEqual([['worker']])
+  })
+
+  it('keeps synthesized diagnostic incidents visible in the error filter', async () => {
+    const component = await mountSuspended(EventFeed, {
+      props: {
+        events: [{
+          role: 'system',
+          kind: 'system',
+          ts: '2026-07-25T18:00:00.000Z',
+          line: 7,
+          summary: 'Permission denied',
+          body: 'The user denied this operation.',
+          error: true,
+        }],
+        density: 'normal',
+        errorsOnly: true,
+        followOutput: false,
+      },
+    })
+
+    expect(component.get('.event').text()).toContain('Permission denied')
+  })
 })

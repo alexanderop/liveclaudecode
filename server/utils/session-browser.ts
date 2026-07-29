@@ -34,6 +34,7 @@ import type {
   ProjectRuns,
   RunNode,
   RunResponse,
+  SessionEventsResponse,
   SessionSourceStatus,
   TreeResponse,
 } from '#shared/types/run'
@@ -464,4 +465,54 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
     reset: false,
     node: stripNode(node),
   }
+})
+
+export const getSessionActivity = Effect.fn('getSessionActivity')(function*(
+  projectInput: string,
+  hours: number,
+  project: string,
+  key: string,
+  limit: number,
+) {
+  const catalog = yield* loadSessionCatalog(projectInput, hours)
+  const locator = findLocator(catalog, project, key)
+  if (!locator) return yield* new UnknownRun({ key })
+  const root = rootOf(locator.tree.roots, key)
+  if (!root) return yield* new UnknownRun({ key })
+
+  const nodes: Array<{ node: RunNode, depth: number }> = []
+  const gather = (node: RunNode, depth: number): void => {
+    nodes.push({ node, depth })
+    node.children.forEach(child => gather(child, depth + 1))
+  }
+  gather(root, 0)
+
+  const responses = yield* Effect.forEach(
+    nodes,
+    ({ node }) => getSessionEvents(projectInput, hours, project, node.key, 0, 0),
+    { concurrency: FILE_CONCURRENCY },
+  )
+  const events = responses.flatMap((response, index) => {
+    const entry = nodes[index]!
+    return response.events.map(event => ({
+      ...event,
+      agentKey: entry.node.key,
+      agentLabel: entry.node.label,
+      agentType: entry.node.agentType || (entry.depth ? 'Subagent' : 'Main session'),
+      agentDepth: entry.depth,
+    }))
+  }).sort((left, right) => {
+    const byTime = (left.ts || '').localeCompare(right.ts || '')
+    if (byTime) return byTime
+    const byDepth = (left.agentDepth || 0) - (right.agentDepth || 0)
+    return byDepth || left.line - right.line
+  })
+  const selected = events.slice(-limit)
+
+  return {
+    key: root.key,
+    events: selected,
+    total: events.length,
+    truncated: selected.length < events.length,
+  } satisfies SessionEventsResponse
 })
