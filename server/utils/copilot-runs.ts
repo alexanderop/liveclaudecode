@@ -7,6 +7,7 @@ import { FILE_CONCURRENCY } from './runs'
 import { CopilotScanCache, VsCodeUserDataDirectories } from './services'
 import { parseCopilotWorkspace } from '#shared/schemas/copilot'
 import type { RunNode, TranscriptStats } from '#shared/types/run'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 export interface CopilotSessionLocation {
   path: string
@@ -256,7 +257,7 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
       key,
       kind: 'session',
       sid: id,
-      label: item.scan.title || id.slice(0, 8),
+      label: normalizeSessionLabel(item.scan.title, id.slice(0, 8)),
       agentType: '',
       toolUseId: null,
       model: item.scan.model,

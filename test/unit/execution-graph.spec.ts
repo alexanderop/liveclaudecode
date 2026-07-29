@@ -151,17 +151,96 @@ describe('execution graph layout', () => {
     })
   })
 
-  it('puts non-zero tool and file metrics on edges', () => {
+  it('puts causal spawn and return timing on edges', () => {
     const graph = buildExecutionGraph([
       lane('root', 0),
-      lane('worker', 1, { tools: 2, files: 1 }),
+      lane('worker', 1, {
+        tools: 2,
+        files: 1,
+        firstTs: '2026-07-28T10:00:00.000Z',
+        lastTs: '2026-07-28T10:00:05.000Z',
+        spawnState: 'returned',
+      }),
       lane('silent', 1),
     ])
 
     expect(graph.edges.find(edge => edge.target === 'worker')).toMatchObject({
       interactionWidth: 40,
-      label: '2 tools · 1 file',
+      data: { durationMs: 5_000, relation: 'returned' },
     })
+    expect(graph.edges.find(edge => edge.target === 'worker')?.label).toContain('returned 5s')
     expect(graph.edges.find(edge => edge.target === 'silent')?.label).toBe('')
+  })
+
+  it('replays the graph at a historical cursor and hides future agents', () => {
+    const graph = buildExecutionGraph(
+      [
+        lane('root', 0, { firstTs: '2026-07-28T10:00:00.000Z', lastTs: '2026-07-28T10:01:00.000Z' }),
+        lane('active-then', 1, { firstTs: '2026-07-28T10:00:05.000Z', lastTs: '2026-07-28T10:00:30.000Z' }),
+        lane('future', 1, { firstTs: '2026-07-28T10:00:40.000Z', lastTs: '2026-07-28T10:00:50.000Z' }),
+      ],
+      new Map(),
+      'left-to-right',
+      'all-agents',
+      { asOf: Date.parse('2026-07-28T10:00:15.000Z') },
+    )
+
+    expect(graph.nodes.map(node => node.id)).toEqual(['active-then', 'root'])
+    expect(graph.nodes.find(node => node.id === 'active-then')?.data?.state).toBe('active')
+    expect(graph.edges.find(edge => edge.target === 'active-then')?.data?.relation).toBe('running')
+  })
+
+  it('dims non-matching agents while retaining their ancestors for investigation context', () => {
+    const graph = buildExecutionGraph(
+      [lane('root', 0), lane('healthy', 1, { tools: 2 }), lane('failed', 1, { errors: 1 })],
+      new Map(),
+      'left-to-right',
+      'all-agents',
+      { lens: 'problems' },
+    )
+
+    expect(graph.nodes.find(node => node.id === 'root')?.data?.muted).toBe(false)
+    expect(graph.nodes.find(node => node.id === 'failed')?.data?.muted).toBe(false)
+    expect(graph.nodes.find(node => node.id === 'healthy')?.data?.muted).toBe(true)
+  })
+
+  it('highlights the selected causal branch in both directions', () => {
+    const graph = buildExecutionGraph(
+      [lane('root', 0), lane('parent', 1), lane('selected', 2), lane('child', 3), lane('sibling', 1)],
+      new Map(),
+      'left-to-right',
+      'all-agents',
+      { selectedKey: 'selected' },
+    )
+
+    expect(graph.nodes.filter(node => node.data?.onPath).map(node => node.id)).toEqual([
+      'child',
+      'selected',
+      'parent',
+      'root',
+    ])
+    expect(graph.edges.filter(edge => edge.data?.onPath).map(edge => edge.id)).toEqual([
+      'selected->child',
+      'parent->selected',
+      'root->parent',
+    ])
+  })
+
+  it('collapses a subtree into a rollup card and preserves all member keys', () => {
+    const graph = buildExecutionGraph(
+      [lane('root', 0), lane('group', 1, { tools: 2 }), lane('worker', 2, { tools: 4 }), lane('sibling', 1)],
+      new Map(),
+      'left-to-right',
+      'all-agents',
+      { collapsedKeys: new Set(['group']) },
+    )
+
+    expect(graph.nodes.map(node => node.id)).toEqual(['group', 'sibling', 'root'])
+    expect(graph.nodes.find(node => node.id === 'group')?.data).toMatchObject({
+      agents: 2,
+      collapsed: true,
+      memberKeys: ['group', 'worker'],
+      tools: 6,
+    })
   })
 })

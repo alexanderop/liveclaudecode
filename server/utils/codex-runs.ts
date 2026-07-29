@@ -13,6 +13,7 @@ import type {
   TranscriptStats,
   Usage,
 } from '#shared/types/run'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 interface CodexCollectedItem {
   id: string
@@ -125,9 +126,10 @@ export const buildCodexTree = Effect.fn('buildCodexTree')(function*(hours: numbe
     const meta = item.scan.metadata
     const key = `codex:${item.id}`
     const isSubagent = Boolean(meta.parentThreadId)
-    const label = isSubagent
+    const rawLabel = isSubagent
       ? meta.agentNickname || meta.agentPath.split('/').filter(Boolean).at(-1) || meta.agentRole || item.id.slice(0, 8)
       : item.scan.firstPrompt || item.id.slice(0, 8)
+    const label = normalizeSessionLabel(rawLabel, item.id.slice(0, 8))
     const node: RunNode = {
       ...item.stats,
       source: 'codex',

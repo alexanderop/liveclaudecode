@@ -17,14 +17,23 @@ const props = defineProps<{
   density: FeedDensity
   errorsOnly: boolean
   followOutput: boolean
+  selectedLine?: number | null
+  asOf?: number | null
 }>()
 
-const emit = defineEmits<{ select: [key: string] }>()
+const emit = defineEmits<{
+  select: [key: string]
+  'focus-time': [timestamp: number | null, line: number]
+}>()
 const feed = useTemplateRef('feed')
 const pinnedToBottom = ref(true)
 const BOTTOM_THRESHOLD = 32
 
 const visibleEvents = computed(() => props.events.filter((event) => {
+  if (props.asOf != null && event.ts) {
+    const timestamp = Date.parse(event.ts)
+    if (Number.isFinite(timestamp) && timestamp > props.asOf) return false
+  }
   if (props.errorsOnly) return Boolean(event.error)
   if (props.density === 'raw') return true
   if (props.density === 'compact') {
@@ -129,6 +138,11 @@ function resultSummary(event: TranscriptEvent): string {
   return `${first.slice(0, 170) || '(empty)'} · ${formatCount(event.full || 0)} chars`
 }
 
+function focusEvent(event: TranscriptEvent): void {
+  if (event.childKey) emit('select', event.childKey)
+  emit('focus-time', event.ts ? Date.parse(event.ts) : null, event.line)
+}
+
 async function scrollToBottom(): Promise<void> {
   await nextTick()
   const stick = (): void => {
@@ -165,6 +179,12 @@ watch(
   },
   { immediate: true },
 )
+
+watch(() => props.selectedLine, async line => {
+  if (line == null) return
+  await nextTick()
+  feed.value?.querySelector<HTMLElement>(`[data-event-line="${line}"]`)?.scrollIntoView({ block: 'center' })
+})
 </script>
 
 <template>
@@ -178,10 +198,10 @@ watch(
       <button
         v-if="isCompact(event)"
         class="compact-row"
-        :class="{ write: event.write, error: event.error, spawn: event.spawn, prose: event.kind === 'text' }"
-        :disabled="!event.childKey"
+        :class="{ write: event.write, error: event.error, spawn: event.spawn, prose: event.kind === 'text', selected: selectedLine === event.line }"
+        :data-event-line="event.line"
         type="button"
-        @click="event.childKey && emit('select', event.childKey)"
+        @click="focusEvent(event)"
       >
         <span class="time">{{ formatTime(event.ts, false) }}</span>
         <span class="compact-icon"><UIcon :name="iconFor(event)" /></span>
@@ -195,7 +215,12 @@ watch(
         </span>
       </button>
 
-      <article v-else class="event" :class="eventClass(event)">
+      <article
+        v-else
+        class="event"
+        :class="[eventClass(event), { selected: selectedLine === event.line }]"
+        :data-event-line="event.line"
+      >
         <div class="event-rail">
           <span class="event-icon"><UIcon :name="iconFor(event)" /></span>
           <span class="event-line" />
@@ -203,7 +228,7 @@ watch(
         <div class="event-content">
           <header>
             <strong>{{ labelFor(event) }}</strong>
-            <span>{{ formatTime(event.ts) }}</span>
+            <button type="button" class="event-time-button" @click="focusEvent(event)">{{ formatTime(event.ts) }}</button>
             <span v-if="event.model" class="event-model">{{ event.model }}</span>
           </header>
           <template v-if="event.kind === 'tool_use'">

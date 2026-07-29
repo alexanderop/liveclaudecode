@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RunNode } from '#shared/types/run'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 const props = defineProps<{
   node: RunNode
@@ -10,6 +11,7 @@ const props = defineProps<{
 const emit = defineEmits<{ select: [key: string] }>()
 const expanded = ref(true)
 const hasChildren = computed(() => props.node.children.length > 0)
+const displayLabel = computed(() => normalizeSessionLabel(props.node.label, props.node.key))
 const sourceLabel = computed(() =>
   props.node.source === 'claude' ? 'Claude' : props.node.source === 'codex' ? 'Codex' : 'Copilot',
 )
@@ -46,7 +48,7 @@ function handleClick(): void {
       </span>
       <span class="tree-content">
         <span class="tree-title-row">
-          <span class="tree-title">{{ node.label || node.key }}</span>
+          <span class="tree-title">{{ displayLabel }}</span>
           <span class="source-tag" :class="node.source">
             {{ sourceLabel }}
           </span>

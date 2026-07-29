@@ -14,6 +14,9 @@ type SessionPanel = typeof views[number]['id']
 
 const activePanel = ref<SessionPanel | 'inspector' | null>(null)
 const inspectedKey = ref<string | null>(null)
+const canvasTime = ref<number | null>(null)
+const focusedLine = ref<number | null>(null)
+const focusedFile = ref<string | null>(null)
 const sidebarVisible = ref(true)
 const viewportWidth = ref(1440)
 const sidebarWidth = ref(272)
@@ -103,6 +106,8 @@ const inspectedNode = computed(() => {
 function closePanel(): void {
   activePanel.value = null
   inspectedKey.value = null
+  focusedLine.value = null
+  focusedFile.value = null
   live.clearInspection()
 }
 
@@ -110,6 +115,21 @@ function inspectCanvasNode(key: string): void {
   inspectedKey.value = key
   activePanel.value = 'inspector'
   void live.inspect(key)
+}
+
+function inspectIncident(incident: { key?: string, line: number, ts: string | null }): void {
+  if (incident.key) inspectCanvasNode(incident.key)
+  focusedLine.value = incident.line
+  canvasTime.value = incident.ts ? Date.parse(incident.ts) : null
+}
+
+function focusTime(timestamp: number | null, line: number | null = null): void {
+  canvasTime.value = timestamp
+  focusedLine.value = line
+}
+
+function focusFile(path: string | null): void {
+  focusedFile.value = path
 }
 
 function openSessionPanel(panel: SessionPanel): void {
@@ -273,9 +293,15 @@ onUnmounted(() => {
 
           <RunCanvas
             :run="live.run.value"
+            :root="live.selectedRoot.value"
             :selected-key="inspectedKey"
+            :inspector-open="activePanel === 'inspector'"
+            :focused-file="focusedFile"
             @select="inspectCanvasNode"
             @deselect="closePanel"
+            @inspect-incident="inspectIncident"
+            @focus-time="focusTime"
+            @focus-file="focusFile"
           />
         </section>
 
@@ -301,8 +327,13 @@ onUnmounted(() => {
           :density="live.density.value"
           :errors-only="live.errorsOnly.value"
           :follow-output="live.followOutput.value"
+          :current-time="canvasTime"
+          :focused-line="focusedLine"
+          :focused-file="focusedFile"
           @select="inspectCanvasNode"
           @close="closePanel"
+          @focus-time="focusTime"
+          @focus-file="focusFile"
           @update:density="live.density.value = $event"
           @update:errors-only="live.errorsOnly.value = $event"
         />

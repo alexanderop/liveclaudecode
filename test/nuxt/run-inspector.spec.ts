@@ -149,7 +149,7 @@ describe('run inspector', () => {
     expect(component.get('[role="tab"][aria-selected="true"]').text()).toContain('Activity')
     expect(component.get('.event').text()).toContain('Reviewed the accessibility flow.')
 
-    await component.findAll('[role="tab"]')[1]!.trigger('click')
+    await component.findAll('[role="tab"]')[0]!.trigger('click')
     expect(component.get('.status-value').text()).toBe('Active')
     expect(component.text()).toContain('Claude')
     expect(component.text()).toContain('Read 2')
