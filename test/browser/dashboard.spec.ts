@@ -53,8 +53,6 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
     const results = await window.axe.run(document, {
       resultTypes: ['violations'],
       rules: {
-        // The existing dark palette needs a dedicated visual-design pass.
-        'color-contrast': { enabled: false },
         // The keyboard-operable resize separator sits between the sidebar and main landmarks.
         'region': { enabled: false },
       },

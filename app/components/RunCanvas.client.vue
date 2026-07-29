@@ -323,7 +323,7 @@ async function bringSelectionIntoView(): Promise<void> {
   const { x, y, zoom } = getViewport()
   const width = container.clientWidth
   const height = container.clientHeight
-  const padding = { top: 120, right: 24, bottom: 100, left: 24 }
+  const padding = { top: props.inspectorOpen ? 170 : 130, right: 24, bottom: 100, left: 24 }
   const left = target.computedPosition.x * zoom + x
   const top = target.computedPosition.y * zoom + y
   const right = left + target.dimensions.width * zoom
