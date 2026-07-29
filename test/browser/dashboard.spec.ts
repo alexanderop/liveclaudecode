@@ -91,3 +91,32 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
   expect(hydrationErrors).toEqual([])
   expect(externalRequests).toEqual([])
 })
+
+test('keeps selected-agent activity inside a scrollable viewport', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'networkidle' })
+  await page.locator('.sketch-node').first().click()
+  await page.getByRole('tab', { name: 'Activity' }).click()
+
+  const feed = page.locator('.inspector-activity > .feed')
+  await expect(feed).toBeVisible()
+
+  const dimensions = await feed.evaluate((element) => {
+    const main = document.querySelector<HTMLElement>('.main-content')
+    const workspace = document.querySelector<HTMLElement>('.session-workspace')
+    return {
+      feedClientHeight: element.clientHeight,
+      feedScrollHeight: element.scrollHeight,
+      mainBottom: main?.getBoundingClientRect().bottom,
+      workspaceBottom: workspace?.getBoundingClientRect().bottom,
+      viewportHeight: window.innerHeight,
+    }
+  })
+
+  expect(dimensions.feedScrollHeight).toBeGreaterThan(dimensions.feedClientHeight)
+  expect(dimensions.mainBottom).toBeLessThanOrEqual(dimensions.viewportHeight)
+  expect(dimensions.workspaceBottom).toBeLessThanOrEqual(dimensions.viewportHeight)
+
+  await feed.hover()
+  await page.mouse.wheel(0, 500)
+  await expect.poll(() => feed.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+})
