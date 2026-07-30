@@ -26,19 +26,24 @@ describe('dashboard supporting views', () => {
     })
   })
 
-  it('renders the calm completed Overview and discloses technical details', async () => {
+  it('renders a task-led Overview with clickable metrics, agents, and technical details', async () => {
     const run = runResponse()
     const component = await mountSuspended(RunOverview, {
       props: { run, selectedKey: run.key },
     })
 
-    expect(component.get('[data-workspace-heading]').text()).toBe('Completed with warnings')
+    expect(component.get('[data-workspace-heading]').text()).toBe('Ship the dashboard')
+    expect(component.get('.overview-status-pill').text()).toBe('Completed with warnings')
     expect(component.text()).toContain('The dashboard is ready for review.')
-    expect(component.find('.overview-current-action').exists()).toBe(false)
+    expect(component.findAll('.overview-metrics button')).toHaveLength(4)
+    expect(component.get('.overview-agent-row').text()).toContain('Main session')
     expect(component.findAll('.overview-actions button')).toHaveLength(2)
     expect(component.get('.run-details').attributes('open')).toBeUndefined()
     expect(component.get('.run-details-content').text()).toContain('Output tokens')
     expect(component.get('.run-details-content').text()).toContain(run.transcriptPath)
+
+    await component.findAll('.overview-metrics button')[1]!.trigger('click')
+    expect(component.emitted('open')).toEqual([['activity']])
   })
 })
 

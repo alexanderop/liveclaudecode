@@ -30,9 +30,8 @@ describe('session view controls', () => {
         },
       },
     })
-    await vi.waitFor(() => expect(component.get('.open-view-trigger').attributes('disabled')).toBeUndefined())
-    await component.get('.open-view-trigger').trigger('click')
-    await component.get('[role="menuitem"][data-destination="activity"]').trigger('click')
+    await vi.waitFor(() => expect(component.get('[data-destination="activity"]').attributes('disabled')).toBeUndefined())
+    await component.get('[data-destination="activity"]').trigger('click')
     const density = component.get('[role="group"][aria-label="Event detail"]')
     const buttons = density.findAll('button')
 

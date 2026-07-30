@@ -55,14 +55,14 @@ describe('RunTreeNode', () => {
       props: { node: node(), depth: 0, selectedKey: 'session' },
     })
     expect(component.text()).toContain('Ship the dashboard')
-    expect(component.text()).not.toContain('2 tools')
+    expect(component.get('.tree-meta').text()).toContain('Claude')
     expect(component.get('button').classes()).toContain('selected')
     expect(component.get('button').attributes('aria-selected')).toBe('true')
     await component.get('button').trigger('click')
     expect(component.emitted('select')).toEqual([['session']])
   })
 
-  it('identifies Codex sessions without adding visible row metadata', async () => {
+  it('identifies Codex sessions and includes scannable provider metadata', async () => {
     const component = await mountSuspended(RunTreeNode, {
       props: {
         node: node({
@@ -77,10 +77,10 @@ describe('RunTreeNode', () => {
 
     expect(component.get('.tree-status').classes()).toContain('codex')
     expect(component.get('.tree-status').attributes('title')).toContain('Codex Desktop')
-    expect(component.text()).not.toContain('Codex Desktop')
+    expect(component.get('.tree-meta').text()).toContain('Codex')
   })
 
-  it('identifies Copilot sessions without adding visible row metadata', async () => {
+  it('identifies Copilot sessions and includes scannable provider metadata', async () => {
     const component = await mountSuspended(RunTreeNode, {
       props: {
         node: node({
@@ -95,7 +95,7 @@ describe('RunTreeNode', () => {
 
     expect(component.get('.tree-status').classes()).toContain('copilot')
     expect(component.get('.tree-status').attributes('title')).toContain('VS Code Insiders · agent')
-    expect(component.text()).not.toContain('VS Code Insiders · agent')
+    expect(component.get('.tree-meta').text()).toContain('Copilot')
   })
 
   it('shows live worker status without exposing the current command', async () => {

@@ -51,6 +51,7 @@ const emit = defineEmits<{
   'inspect-incident': [incident: DiagnosticIncident]
   'focus-time': [timestamp: number | null]
   'focus-file': [path: string | null]
+  'open-activity': []
 }>()
 
 const canvasView = ref<HTMLElement | null>(null)
@@ -101,6 +102,7 @@ const nodeDataById = computed<Record<string, ExecutionNodeData>>(() =>
   Object.fromEntries(nodes.value.map(node => [node.id, node.data!])),
 )
 const sessionLive = computed(() => Boolean(props.run?.root?.live || props.run?.root?.subLive))
+const agentCount = computed(() => props.run?.lanes?.length || 0)
 const issues = computed(() => (props.run?.diagnostics?.incidents || [])
   .filter(incident => incident.severity !== 'info')
   .sort((a, b) => (a.ts || '').localeCompare(b.ts || '')))
@@ -446,7 +448,7 @@ onBeforeUnmount(() => {
           <span>
             <strong>Execution graph</strong>
             <small>
-              {{ run?.lanes?.length || 0 }} agents<template v-if="nodes.length !== (run?.lanes?.length || 0)"> · {{ nodes.length }} visible</template>
+              {{ agentCount }} {{ agentCount === 1 ? 'agent' : 'agents' }}<template v-if="nodes.length !== agentCount"> · {{ nodes.length }} visible</template>
             </small>
           </span>
         </div>
@@ -505,6 +507,11 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="canvas-stage">
+      <div v-if="agentCount === 1" class="single-agent-guidance">
+        <UIcon name="i-lucide-info" />
+        <span>This run used one agent. The activity timeline is usually easier to inspect.</span>
+        <button type="button" @click="emit('open-activity')">Open activity <UIcon name="i-lucide-arrow-right" /></button>
+      </div>
       <div v-if="breadcrumb.length > 1" class="canvas-breadcrumb" aria-label="Selected agent path">
         <button v-for="(item, index) in breadcrumb" :key="item.key" type="button" @click="emit('select', item.key)">
           <UIcon v-if="index" name="i-lucide-chevron-right" />{{ item.label }}

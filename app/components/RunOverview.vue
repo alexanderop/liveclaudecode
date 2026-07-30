@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RunNode, RunResponse } from '#shared/types/run'
-import { normalizeSessionLabel } from '#shared/utils/session-label'
+import { normalizeSessionLabel, normalizeSessionSummary } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import { agentState } from '~/utils/session-state'
 import type { PrimaryWorkspaceKind } from '~/utils/workspace-state'
@@ -10,11 +10,13 @@ const props = withDefaults(defineProps<{
   run: RunResponse | null
   loading?: boolean
   sourceIncomplete?: boolean
+  sourceMessage?: string
   selectedKey?: string | null
 }>(), {
   root: null,
   loading: false,
   sourceIncomplete: false,
+  sourceMessage: '',
   selectedKey: null,
 })
 
@@ -31,85 +33,86 @@ const overviewRoot = computed<RunNode | null>(() => {
   return { ...props.run.root, children: [], subFiles: {} }
 })
 const agents = computed(() => flattenRunTree(overviewRoot.value))
-const activeAgents = computed(() => agents.value
-  .filter(node => node.live || node.current)
-  .sort((left, right) => (right.mtime || 0) - (left.mtime || 0)))
-const primaryAgent = computed(() => activeAgents.value.find(node => node.current) || activeAgents.value[0] || overviewRoot.value)
 const incidents = computed(() => (props.run?.diagnostics.incidents || [])
   .filter(incident => incident.severity === 'warning' || incident.severity === 'error'))
 const warningCount = computed(() => incidents.value.filter(incident => incident.severity === 'warning').length)
 const errorCount = computed(() => incidents.value.filter(incident => incident.severity === 'error').length)
 const attentionCount = computed(() => warningCount.value + errorCount.value)
-const agentStatuses = computed(() => agents.value.map(node => agentState(node, props.run?.diagnostics.incidents)))
-const stateCounts = computed(() => agentStatuses.value.reduce<Record<string, number>>((counts, state) => {
-  counts[state.state] = (counts[state.state] || 0) + 1
+const agentSummaries = computed(() => agents.value.map(node => ({
+  node,
+  state: agentState(node, props.run?.diagnostics.incidents),
+})))
+const visibleAgentSummaries = computed(() => agentSummaries.value.slice(0, 6))
+const hiddenAgentCount = computed(() => Math.max(0, agentSummaries.value.length - visibleAgentSummaries.value.length))
+const stateCounts = computed(() => agentSummaries.value.reduce<Record<string, number>>((counts, item) => {
+  counts[item.state.state] = (counts[item.state.state] || 0) + 1
   return counts
 }, {}))
 
 const displayState = computed(() => {
   const root = overviewRoot.value
   if (!root) return { kind: 'inactive', label: 'No recorded activity', icon: 'i-lucide-circle' }
-  if (root.subLive) return { kind: 'running', label: 'Session running', icon: 'i-lucide-radio' }
-  if (root.stoppedByUser) {
-    return {
-      kind: root.finalText ? 'stopped' : 'warning',
-      label: 'Session stopped',
-      icon: 'i-lucide-circle-stop',
-    }
-  }
+  if (root.subLive) return { kind: 'running', label: 'Running', icon: 'i-lucide-radio' }
+  if (root.stoppedByUser) return { kind: 'failed', label: 'Stopped', icon: 'i-lucide-circle-stop' }
   if ((errorCount.value || root.subErrors) && !root.finalText) {
-    return { kind: 'failed', label: 'Session failed', icon: 'i-lucide-circle-x' }
+    return { kind: 'failed', label: 'Failed', icon: 'i-lucide-circle-x' }
   }
   if (attentionCount.value || root.subErrors) {
     return { kind: 'warning', label: 'Completed with warnings', icon: 'i-lucide-triangle-alert' }
   }
-  if (root.finalText || root.lastTs) {
-    return { kind: 'completed', label: 'Session completed', icon: 'i-lucide-circle-check' }
-  }
-  return { kind: 'inactive', label: 'No recorded activity', icon: 'i-lucide-circle' }
+  if (root.finalText || root.lastTs) return { kind: 'completed', label: 'Completed', icon: 'i-lucide-circle-check' }
+  return { kind: 'inactive', label: 'No activity', icon: 'i-lucide-circle' }
 })
 
-const attentionMessage = computed(() => {
-  if (props.sourceIncomplete) return 'Session data may be incomplete'
-  if (!attentionCount.value && !overviewRoot.value?.subErrors) return ''
-  const total = attentionCount.value || overviewRoot.value?.subErrors || 0
-  if (displayState.value.kind === 'failed') {
-    return `${total} recorded ${total === 1 ? 'failure needs' : 'failures need'} review`
-  }
-  return `${total} recovered ${total === 1 ? 'incident may' : 'incidents may'} affect the result`
-})
-
+const sessionTitle = computed(() => normalizeSessionLabel(
+  overviewRoot.value?.label || '',
+  'Untitled coding session',
+))
 const finalExcerpt = computed(() => {
-  const value = overviewRoot.value?.finalText?.replace(/\s+/g, ' ').trim() || ''
-  if (!value) {
-    if (displayState.value.kind === 'failed') return 'The session ended without a usable final response.'
-    if (overviewRoot.value?.stoppedByUser) return 'The session stopped before a final response was recorded.'
-    return ''
+  const value = normalizeSessionSummary(overviewRoot.value?.finalText || '')
+  if (value) return value
+  if (displayState.value.kind === 'failed') return 'The session ended without a usable final response.'
+  if (overviewRoot.value?.stoppedByUser) return 'The session stopped before a final response was recorded.'
+  return 'No final summary was recorded for this session.'
+})
+const providerLabel = computed(() => overviewRoot.value?.sourceDetail || overviewRoot.value?.source || 'Unknown provider')
+const branchLabel = computed(() => props.run?.diagnostics.environment.gitBranch || '')
+const sessionMetadata = computed(() => [
+  providerLabel.value,
+  overviewRoot.value?.model || '',
+  branchLabel.value ? `Branch ${branchLabel.value}` : '',
+  overviewRoot.value?.firstTs ? formatTime(overviewRoot.value.firstTs, false) : '',
+].filter(Boolean))
+const attentionTitle = computed(() => {
+  if (props.sourceIncomplete) return 'Session data may be incomplete'
+  const total = attentionCount.value || overviewRoot.value?.subErrors || 0
+  return `${total} ${total === 1 ? 'incident needs' : 'incidents need'} review`
+})
+const attentionDetail = computed(() => {
+  if (props.sourceIncomplete) {
+    return props.sourceMessage || `${providerLabel.value} could not be read completely, so some counts may be missing.`
   }
-  return value.length > 240 ? `${value.slice(0, 237)}…` : value
+  if (displayState.value.kind === 'failed') return 'The session ended without a successful final result.'
+  return 'The session recovered, but these warnings may have affected its result.'
+})
+const showAttention = computed(() => props.sourceIncomplete || attentionCount.value > 0 || Boolean(overviewRoot.value?.subErrors))
+const metrics = computed<Array<{ label: string, value: string | number, icon: string, destination: PrimaryWorkspaceKind }>>(() => {
+  const root = overviewRoot.value
+  if (!root) return []
+  return [
+    { label: agents.value.length === 1 ? 'Agent' : 'Agents', value: agents.value.length, icon: 'i-lucide-bot', destination: 'map' },
+    { label: 'Tool calls', value: root.subTools, icon: 'i-lucide-wrench', destination: 'activity' },
+    { label: props.run?.files.length === 1 ? 'File changed' : 'Files changed', value: props.run?.files.length || 0, icon: 'i-lucide-files', destination: 'changes' },
+    { label: 'Elapsed', value: formatDuration(root.firstTs, root.subLast), icon: 'i-lucide-timer', destination: 'activity' },
+  ]
 })
 
-const actions = computed<Array<{ destination: PrimaryWorkspaceKind | 'ask', label: string, icon: string }>>(() => {
-  if (overviewRoot.value?.subLive) {
-    return attentionCount.value || props.sourceIncomplete
-      ? [
-          { destination: 'diagnostics', label: 'Review diagnostics', icon: 'i-lucide-stethoscope' },
-          { destination: 'map', label: 'View live agents', icon: 'i-lucide-workflow' },
-        ]
-      : [
-          { destination: 'map', label: 'View live agents', icon: 'i-lucide-workflow' },
-          { destination: 'activity', label: 'Read activity', icon: 'i-lucide-activity' },
-        ]
-  }
-  const result: Array<{ destination: PrimaryWorkspaceKind | 'ask', label: string, icon: string }> = []
-  if (props.run?.files.length) result.push({ destination: 'changes', label: 'Review changes', icon: 'i-lucide-files' })
-  if (attentionCount.value || props.sourceIncomplete || overviewRoot.value?.subErrors) {
-    result.push({ destination: 'diagnostics', label: 'Review diagnostics', icon: 'i-lucide-stethoscope' })
-  }
-  if (result.length < 2) result.push({ destination: 'ask', label: 'Ask about run', icon: 'i-lucide-message-square' })
-  if (result.length < 2) result.push({ destination: 'activity', label: 'Read activity', icon: 'i-lucide-activity' })
-  return result.slice(0, 2)
-})
+function stateIcon(state: string): string {
+  if (state === 'running' || state === 'thinking') return 'i-lucide-radio'
+  if (state === 'warning' || state === 'waiting') return 'i-lucide-triangle-alert'
+  if (state === 'failed') return 'i-lucide-circle-x'
+  return 'i-lucide-circle-check'
+}
 
 async function copyTranscriptPath(): Promise<void> {
   if (!props.run?.transcriptPath) return
@@ -120,20 +123,14 @@ async function copyTranscriptPath(): Promise<void> {
     toast.add({ title: 'Could not copy transcript path', icon: 'i-lucide-copy-x', color: 'error' })
   }
 }
-
-function openAction(destination: PrimaryWorkspaceKind | 'ask'): void {
-  if (destination === 'ask') emit('ask')
-  else emit('open', destination)
-}
 </script>
 
 <template>
   <div class="overview-workspace">
     <div v-if="loading && !overviewRoot" class="overview-skeleton" aria-label="Loading selected session">
-      <USkeleton class="h-5 w-36" />
-      <USkeleton class="h-9 w-64" />
-      <USkeleton class="h-16 w-full" />
-      <USkeleton class="h-10 w-48" />
+      <USkeleton class="h-7 w-72" />
+      <USkeleton class="h-20 w-full" />
+      <USkeleton class="h-24 w-full" />
     </div>
 
     <div v-else-if="!overviewRoot" class="empty-library">
@@ -143,74 +140,95 @@ function openAction(destination: PrimaryWorkspaceKind | 'ask'): void {
     </div>
 
     <template v-else>
-      <section class="overview-summary" :class="displayState.kind">
-        <span class="overview-status-icon"><UIcon :name="displayState.icon" /></span>
-        <p v-if="overviewRoot.subLive" class="overview-agent-count">
-          {{ activeAgents.length || overviewRoot.subRunning || 1 }}
-          {{ (activeAgents.length || overviewRoot.subRunning || 1) === 1 ? 'agent active' : 'agents active' }}
-        </p>
-        <h1 data-workspace-heading tabindex="-1">{{ displayState.label }}</h1>
+      <header class="overview-header">
+        <div class="overview-title-block">
+          <span class="overview-status-icon" :class="displayState.kind"><UIcon :name="displayState.icon" /></span>
+          <div>
+            <span class="section-eyebrow">Session overview</span>
+            <h1 data-workspace-heading tabindex="-1">{{ sessionTitle }}</h1>
+            <p class="overview-metadata">
+              <span v-for="item in sessionMetadata" :key="item">{{ item }}</span>
+            </p>
+          </div>
+        </div>
+        <span class="overview-status-pill" :class="displayState.kind">{{ displayState.label }}</span>
+      </header>
 
+      <section class="overview-outcome" aria-labelledby="overview-outcome-heading">
+        <div>
+          <span class="section-eyebrow">Outcome</span>
+          <h2 id="overview-outcome-heading">What happened</h2>
+        </div>
+        <p>{{ finalExcerpt }}</p>
+      </section>
+
+      <section class="overview-metrics" aria-label="Session metrics">
         <button
-          v-if="overviewRoot.subLive && primaryAgent"
+          v-for="metric in metrics"
+          :key="metric.label"
           type="button"
-          class="overview-current-action"
-          @click="emit('select', primaryAgent.key)"
+          @click="emit('open', metric.destination)"
         >
-          <span>
-            <strong>{{ normalizeSessionLabel(primaryAgent.label, primaryAgent.key) }}</strong>
-            <small>{{ primaryAgent.current?.tool || 'Working' }}</small>
-          </span>
-          <p>{{ primaryAgent.current?.summary || 'Active work is recorded for this agent.' }}</p>
-          <UIcon name="i-lucide-chevron-right" />
+          <UIcon :name="metric.icon" />
+          <span><strong>{{ metric.value }}</strong><small>{{ metric.label }}</small></span>
+          <UIcon class="metric-arrow" name="i-lucide-arrow-up-right" />
         </button>
+      </section>
 
-        <details v-if="activeAgents.length > 1" class="overview-more-agents">
-          <summary>{{ activeAgents.length - 1 }} more active {{ activeAgents.length === 2 ? 'agent' : 'agents' }}</summary>
-          <button
-            v-for="agent in activeAgents.slice(1)"
-            :key="agent.key"
-            type="button"
-            @click="emit('select', agent.key)"
-          >
-            <span>{{ normalizeSessionLabel(agent.label, agent.key) }}</span>
-            <small>{{ agent.current?.tool || 'Working' }} · {{ agent.current?.summary || 'Active' }}</small>
+      <button
+        v-if="showAttention"
+        type="button"
+        class="overview-attention"
+        :class="{ failed: displayState.kind === 'failed' }"
+        @click="emit('open', 'diagnostics')"
+      >
+        <UIcon :name="displayState.kind === 'failed' ? 'i-lucide-circle-x' : 'i-lucide-triangle-alert'" />
+        <span><strong>{{ attentionTitle }}</strong><small>{{ attentionDetail }}</small></span>
+        <UIcon name="i-lucide-chevron-right" />
+      </button>
+
+      <section class="overview-agents" aria-labelledby="overview-agents-heading">
+        <header>
+          <div>
+            <span class="section-eyebrow">Execution</span>
+            <h2 id="overview-agents-heading">Agent activity</h2>
+          </div>
+          <button type="button" class="overview-section-link" @click="emit('open', 'map')">
+            View agent map <UIcon name="i-lucide-arrow-right" />
           </button>
-        </details>
-
-        <p v-if="!overviewRoot.subLive && finalExcerpt" class="overview-result">{{ finalExcerpt }}</p>
-
-        <button
-          v-if="attentionMessage"
-          type="button"
-          class="overview-attention"
-          :class="{ failed: displayState.kind === 'failed' }"
-          @click="emit('open', 'diagnostics')"
-        >
-          <UIcon :name="displayState.kind === 'failed' ? 'i-lucide-circle-x' : 'i-lucide-triangle-alert'" />
-          <span>{{ attentionMessage }}</span>
-          <UIcon name="i-lucide-chevron-right" />
-        </button>
-        <p v-else-if="run && !sourceIncomplete" class="overview-clear">
-          <UIcon name="i-lucide-circle-check" /> No recorded warnings or errors
-        </p>
-
-        <div class="overview-actions">
-          <UButton
-            v-for="action in actions"
-            :key="action.destination"
+        </header>
+        <div class="overview-agent-list">
+          <button
+            v-for="({ node, state }, index) in visibleAgentSummaries"
+            :key="node.key"
             type="button"
-            :color="action === actions[0] ? 'primary' : 'neutral'"
-            :variant="action === actions[0] ? 'solid' : 'outline'"
-            :icon="action.icon"
-            @click="openAction(action.destination)"
-          >{{ action.label }}</UButton>
+            class="overview-agent-row"
+            @click="emit('select', node.key)"
+          >
+            <span class="agent-state-icon" :class="state.state"><UIcon :name="stateIcon(state.state)" /></span>
+            <span class="agent-identity">
+              <strong>{{ normalizeSessionLabel(node.label, node.key) }}</strong>
+              <small>{{ index === 0 ? 'Main session' : node.agentType || 'Subagent' }}</small>
+            </span>
+            <span class="agent-work"><strong>{{ node.subTools || node.tools }}</strong><small>tools</small></span>
+            <span class="agent-status" :class="state.state"><strong>{{ state.label }}</strong><small>{{ state.detail }}</small></span>
+            <UIcon class="agent-row-arrow" name="i-lucide-chevron-right" />
+          </button>
+          <button v-if="hiddenAgentCount" type="button" class="overview-more-agents-link" @click="emit('open', 'map')">
+            View {{ hiddenAgentCount }} more {{ hiddenAgentCount === 1 ? 'agent' : 'agents' }}
+            <UIcon name="i-lucide-arrow-right" />
+          </button>
         </div>
       </section>
 
+      <div class="overview-actions">
+        <UButton type="button" color="primary" icon="i-lucide-activity" @click="emit('open', 'activity')">View full activity</UButton>
+        <UButton type="button" color="neutral" variant="outline" icon="i-lucide-message-square" @click="emit('ask')">Ask about run</UButton>
+      </div>
+
       <details class="run-details">
         <summary>
-          <span><UIcon name="i-lucide-list-collapse" /> Run details</span>
+          <span><UIcon name="i-lucide-list-collapse" /> Technical details</span>
           <UIcon class="disclosure-chevron" name="i-lucide-chevron-down" />
         </summary>
         <div class="run-details-content">
@@ -230,7 +248,7 @@ function openAction(destination: PrimaryWorkspaceKind | 'ask'): void {
             <h2>Session</h2>
             <dl>
               <div><dt>Session ID</dt><dd><code>{{ overviewRoot.sid }}</code></dd></div>
-              <div><dt>Provider</dt><dd>{{ overviewRoot.sourceDetail || overviewRoot.source }}</dd></div>
+              <div><dt>Provider</dt><dd>{{ providerLabel }}</dd></div>
               <div><dt>Model</dt><dd>{{ overviewRoot.model || 'Not recorded' }}</dd></div>
               <div><dt>Output tokens</dt><dd>{{ formatCount(run?.diagnostics.usage.out || overviewRoot.tokensOut) }}</dd></div>
               <div><dt>Cache read</dt><dd>{{ formatCount(run?.diagnostics.usage.cr || 0) }}</dd></div>
@@ -238,27 +256,18 @@ function openAction(destination: PrimaryWorkspaceKind | 'ask'): void {
               <div><dt>Last event</dt><dd>{{ formatTime(overviewRoot.subLast) }}</dd></div>
             </dl>
           </section>
-          <section v-if="run?.phases.length || overviewRoot.finalText" class="run-details-narrative">
-            <h2>Narrative and phases</h2>
-            <ol v-if="run?.phases.length">
+          <section v-if="run?.phases.length" class="run-details-narrative">
+            <h2>Recorded phases</h2>
+            <ol>
               <li v-for="phase in run.phases" :key="`${phase.ts}-${phase.title}`">
                 <strong>{{ phase.title }}</strong><span>{{ formatTime(phase.ts, false) }}</span>
               </li>
             </ol>
-            <p v-if="overviewRoot.finalText">{{ overviewRoot.finalText }}</p>
           </section>
           <div v-if="run?.transcriptPath" class="run-details-path">
             <UIcon name="i-lucide-file-json" />
             <code :title="run.transcriptPath">{{ run.transcriptPath }}</code>
-            <UButton
-              type="button"
-              color="neutral"
-              variant="ghost"
-              size="xs"
-              icon="i-lucide-copy"
-              aria-label="Copy transcript JSONL path"
-              @click="copyTranscriptPath"
-            >Copy</UButton>
+            <UButton type="button" color="neutral" variant="ghost" size="xs" icon="i-lucide-copy" aria-label="Copy transcript JSONL path" @click="copyTranscriptPath">Copy</UButton>
           </div>
         </div>
       </details>

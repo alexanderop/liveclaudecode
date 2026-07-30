@@ -3,54 +3,45 @@ import { describe, expect, it } from 'vitest'
 import OpenViewLauncher from '~/components/OpenViewLauncher.vue'
 
 describe('OpenViewLauncher', () => {
-  it('uses the accessible menu pattern and scopes destination mnemonics to the launcher', async () => {
+  it('renders persistent session navigation with useful destination counts', async () => {
     const component = await mountSuspended(OpenViewLauncher, {
       props: {
-        state: { kind: 'compact' },
         current: 'activity',
-        attentionCount: 2,
+        agentCount: 3,
+        activityCount: 18,
+        changeCount: 2,
+        attentionCount: 1,
         askActive: false,
       },
-      attachTo: document.body,
     })
 
-    const trigger = component.get('.open-view-trigger')
-    expect(trigger.attributes()).toMatchObject({
-      'aria-haspopup': 'menu',
-      'aria-expanded': 'true',
-      'aria-controls': 'open-view-menu',
-    })
-    expect(component.get('[role="menu"]').attributes('aria-label')).toBe('Open a session view')
+    expect(component.get('nav').attributes('aria-label')).toBe('Session views')
+    expect(component.findAll('.session-view-tabs button')).toHaveLength(5)
     expect(component.get('[data-destination="activity"]').attributes('aria-current')).toBe('page')
-    expect(component.get('[data-destination="diagnostics"] .launcher-attention').text()).toBe('2')
+    expect(component.get('[data-destination="map"] .session-view-count').text()).toBe('3')
+    expect(component.get('[data-destination="changes"] .session-view-count').text()).toBe('2')
+    expect(component.get('[data-destination="diagnostics"] .session-view-count').text()).toBe('1')
 
-    await component.get('[role="menu"]').trigger('keydown', { key: 'd' })
+    await component.get('[data-destination="changes"]').trigger('click')
     expect(component.emitted('select')).toEqual([['changes']])
-
-    component.unmount()
   })
 
-  it('renders expanded mode as workspace navigation rather than a modal', async () => {
+  it('keeps Ask separate from inspection views and exposes its active state', async () => {
     const component = await mountSuspended(OpenViewLauncher, {
       props: {
-        state: {
-          kind: 'expanded',
-          previousWorkspace: 'map',
-          suspendedContext: { kind: 'closed' },
-        },
-        current: 'map',
+        current: 'overview',
+        agentCount: 1,
+        activityCount: 9,
+        changeCount: 0,
         attentionCount: 0,
         askActive: true,
       },
     })
 
-    expect(component.get('nav').attributes('aria-labelledby')).toBe('open-view-heading')
-    expect(component.find('[role="dialog"]').exists()).toBe(false)
-    expect(component.find('[aria-modal]').exists()).toBe(false)
-    expect(component.findAll('.expanded-launcher-list button')).toHaveLength(6)
-    expect(component.get('[data-destination="ask"]').text()).toContain('Active')
+    expect(component.get('.session-ask-action').attributes('aria-pressed')).toBe('true')
+    expect(component.get('.session-ask-indicator').attributes('aria-label')).toBe('Ask conversation active')
 
-    await component.get('.launcher-back').trigger('click')
-    expect(component.emitted('back')).toEqual([[]])
+    await component.get('.session-ask-action').trigger('click')
+    expect(component.emitted('select')).toEqual([['ask']])
   })
 })

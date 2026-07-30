@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { RunNode } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import { formatTime } from '~/utils/format'
 
 const props = defineProps<{
   node: RunNode
@@ -28,6 +29,15 @@ function statusLabel(node: RunNode): string {
   if (node.spawnState === 'running' || node.subLive || (node.live && node.kind === 'subagent')) return 'running'
   if (node.subErrors) return `${node.subErrors} err`
   return ''
+}
+
+function metadata(node: RunNode): string {
+  const agentCount = Math.max(1, node.subAgents + 1)
+  return [
+    sourceLabel(node),
+    formatTime(node.subLast || node.lastTs, false),
+    agentCount > 1 ? `${agentCount} agents` : '',
+  ].filter(Boolean).join(' · ')
 }
 
 function toItem(node: RunNode): RunTreeItem {
@@ -76,6 +86,7 @@ const selectedItem = computed(() => {
         <span class="tree-title-row">
           <span class="tree-title">{{ item.label }}</span>
         </span>
+        <span class="tree-meta">{{ metadata(item.node) }}</span>
       </span>
       <span class="tree-trailing">
         <span

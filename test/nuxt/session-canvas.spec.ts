@@ -157,9 +157,8 @@ function sessionFetch(): ReturnType<typeof vi.fn> {
 }
 
 async function openMap(component: Awaited<ReturnType<typeof mountSuspended>>): Promise<void> {
-  await vi.waitFor(() => expect(component.get('.open-view-trigger').attributes('disabled')).toBeUndefined())
-  await component.get('.open-view-trigger').trigger('click')
-  await component.get('[role="menuitem"][data-destination="map"]').trigger('click')
+  await vi.waitFor(() => expect(component.get('[data-destination="map"]').attributes('disabled')).toBeUndefined())
+  await component.get('[data-destination="map"]').trigger('click')
 }
 
 describe('persistent session canvas', () => {
@@ -264,14 +263,12 @@ describe('persistent session canvas', () => {
     await openMap(component)
     const originalCanvas = component.get('.canvas-stub').element
 
-    await component.get('.open-view-trigger').trigger('click')
-    await component.get('[role="menuitem"][data-destination="activity"]').trigger('click')
+    await component.get('[data-destination="activity"]').trigger('click')
 
     expect(component.get('[data-workspace-heading]').text()).toBe('Activity')
     expect(component.find('.canvas-stub').exists()).toBe(false)
 
-    await component.get('.open-view-trigger').trigger('click')
-    await component.get('[role="menuitem"][data-destination="map"]').trigger('click')
+    await component.get('[data-destination="map"]').trigger('click')
 
     expect(component.get('.canvas-stub').element).toBe(originalCanvas)
   })

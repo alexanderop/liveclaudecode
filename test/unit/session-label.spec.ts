@@ -1,5 +1,5 @@
 import { assert, describe, it } from '@effect/vitest'
-import { normalizeSessionLabel } from '#shared/utils/session-label'
+import { normalizeSessionLabel, normalizeSessionSummary } from '#shared/utils/session-label'
 
 describe('session label normalization', () => {
   it('removes injected plugin and environment context before keeping the user intent', () => {
@@ -16,6 +16,17 @@ describe('session label normalization', () => {
     assert.strictEqual(
       normalizeSessionLabel('<recommended_plugins>- Slack</recommended_plugins>', 'abc123'),
       'abc123',
+    )
+  })
+
+  it('removes attachment metadata and internal UI directives from summaries', () => {
+    assert.strictEqual(
+      normalizeSessionSummary(`
+        # Files mentioned by the user:
+        ## screenshot.png: /var/folders/example/screenshot.png
+        The dashboard is ready for review. ::codex-inline-vis{file="preview.html"}
+      `),
+      'The dashboard is ready for review.',
     )
   })
 })

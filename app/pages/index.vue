@@ -3,13 +3,10 @@ import type { RunNode, TranscriptEvent } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import {
-  cancelExpandedLauncher,
   closeContext,
-  expandLauncher,
   initialWorkspaceState,
   openAgentDetails,
   openAsk,
-  openCompactLauncher,
   openPrimary,
   switchSelectedSession,
   type PrimaryWorkspaceKind,
@@ -22,7 +19,7 @@ const router = useRouter()
 const densities = ['compact', 'normal', 'raw'] as const
 const primaryViews = [
   { id: 'overview', label: 'Overview', icon: 'i-lucide-layout-dashboard', shortcut: 'N' },
-  { id: 'map', label: 'Agent map', icon: 'i-lucide-workflow', shortcut: 'M' },
+  { id: 'map', label: 'Agents', icon: 'i-lucide-workflow', shortcut: 'M' },
   { id: 'activity', label: 'Activity', icon: 'i-lucide-activity', shortcut: 'A' },
   { id: 'changes', label: 'Changes', icon: 'i-lucide-files', shortcut: 'D' },
   { id: 'diagnostics', label: 'Diagnostics', icon: 'i-lucide-stethoscope', shortcut: 'I' },
@@ -70,9 +67,7 @@ const selectedSessionKey = computed(() => live.selectedRoot.value?.key || null)
 const sessionIdentity = computed(() => live.selectedProject.value && selectedSessionKey.value
   ? `${live.selectedProject.value}/${selectedSessionKey.value}`
   : '')
-const selectedContextVisible = computed(() =>
-  workspaceState.value.context.kind !== 'closed'
-  && workspaceState.value.launcher.kind !== 'expanded')
+const selectedContextVisible = computed(() => workspaceState.value.context.kind !== 'closed')
 const contextUsesModal = computed(() => {
   if (viewportWidth.value <= 680) return true
   const browserWidth = sidebarVisible.value ? sidebarWidth.value + 7 : 0
@@ -84,8 +79,16 @@ const sourceIncomplete = computed(() => {
   if (!source) return false
   return live.sources.value.some(status => status.source === source && status.state !== 'ready')
 })
+const selectedSourceMessage = computed(() => {
+  const source = live.selectedRoot.value?.source
+  if (!source) return ''
+  return live.sources.value.find(status => status.source === source && status.state !== 'ready')?.message || ''
+})
 const attentionCount = computed(() => (live.run.value?.diagnostics.incidents || [])
   .filter(incident => incident.severity !== 'info').length)
+const sessionAgentCount = computed(() => flattenRunTree(live.selectedRoot.value).length)
+const sessionActivityCount = computed(() => live.sessionEvents.value.length || live.selectedRoot.value?.subTools || 0)
+const sessionChangeCount = computed(() => live.run.value?.files.length || 0)
 const activityAgentKey = computed({
   get: () => activityAgentBySession[sessionIdentity.value] || 'all',
   set: value => {
@@ -137,19 +140,6 @@ function fitPanelsToViewport(): void {
     sidebarWidth.value = clampWidth(sidebarWidth.value, SIDEBAR_MIN, sidebarMax.value)
   }
 }
-function updateModalInertness(): void {
-  if (!import.meta.client) return
-  const compactSheetOpen = workspaceState.value.launcher.kind === 'compact' && viewportWidth.value <= 680
-  const targets = document.querySelectorAll<HTMLElement>(
-    '.dashboard-session-sidebar, .compact-hero, .session-primary > :not(.open-view-launcher)',
-  )
-  targets.forEach((target) => {
-    if (compactSheetOpen) target.setAttribute('inert', '')
-    else target.removeAttribute('inert')
-  })
-  document.body.classList.toggle('modal-layer-open', compactSheetOpen)
-}
-
 const inspectedNode = computed(() => {
   if (!inspectedKey.value || !live.selectedRoot.value) return null
   const visit = (node: RunNode): RunNode | null => {
@@ -215,7 +205,7 @@ const searchGroups = computed(() => [{
   }))),
 }, {
   id: 'views',
-  label: 'Open view',
+  label: 'Session views',
   items: launcherViews.map(view => ({
     id: view.id,
     label: view.label,
@@ -287,18 +277,6 @@ function chooseDestination(destination: PrimaryWorkspaceKind | 'ask'): void {
   if (destination === 'ask') openAskPanel()
   else openWorkspace(destination)
 }
-function openCompact(): void {
-  workspaceState.value = openCompactLauncher(workspaceState.value)
-}
-function openExpanded(): void {
-  workspaceState.value = expandLauncher(workspaceState.value)
-}
-function closeLauncher(): void {
-  workspaceState.value = { ...workspaceState.value, launcher: { kind: 'closed' } }
-}
-function cancelExpanded(): void {
-  workspaceState.value = cancelExpandedLauncher(workspaceState.value)
-}
 
 async function selectSession(project: string, key: string): Promise<void> {
   const projectRuns = live.projects.value.find(entry => entry.id === project)
@@ -329,15 +307,9 @@ function handleShortcut(event: KeyboardEvent): void {
     return
   }
   if (event.key !== 'Escape') return
-  if (workspaceState.value.launcher.kind === 'compact') {
-    event.preventDefault()
-    closeLauncher()
-  } else if (selectedContextVisible.value && contextUsesModal.value) {
+  if (selectedContextVisible.value && contextUsesModal.value) {
     event.preventDefault()
     closeContextPanel()
-  } else if (workspaceState.value.launcher.kind === 'expanded') {
-    event.preventDefault()
-    cancelExpanded()
   } else if (selectedContextVisible.value) {
     event.preventDefault()
     closeContextPanel()
@@ -413,11 +385,6 @@ watch(sidebarWidth, width => persistWidth(SIDEBAR_STORAGE_KEY, width))
 watch([selectedContextVisible, sidebarCollapsed], () => {
   if (import.meta.client) fitPanelsToViewport()
 })
-watch(
-  [() => workspaceState.value.launcher.kind, viewportWidth],
-  () => nextTick(updateModalInertness),
-)
-
 onMounted(() => {
   sidebarWidth.value = clampWidth(readStoredWidth(SIDEBAR_STORAGE_KEY, SIDEBAR_DEFAULT), SIDEBAR_MIN, SIDEBAR_MAX)
   panelWidth.value = clampWidth(readStoredWidth(PANEL_STORAGE_KEY, PANEL_DEFAULT), PANEL_MIN, PANEL_MAX)
@@ -427,8 +394,6 @@ onMounted(() => {
   window.addEventListener('resize', fitPanelsToViewport)
 })
 onUnmounted(() => {
-  document.querySelectorAll<HTMLElement>('[inert]').forEach(target => target.removeAttribute('inert'))
-  document.body.classList.remove('modal-layer-open')
   window.removeEventListener('keydown', handleShortcut)
   window.removeEventListener('resize', fitPanelsToViewport)
 })
@@ -509,21 +474,19 @@ onUnmounted(() => {
         >
           <section class="session-primary" :aria-label="`${primaryViews.find(view => view.id === workspaceState.primary)?.label} workspace`">
             <OpenViewLauncher
-              :state="workspaceState.launcher"
               :current="workspaceState.primary"
+              :agent-count="sessionAgentCount"
+              :activity-count="sessionActivityCount"
+              :change-count="sessionChangeCount"
               :attention-count="attentionCount"
               :ask-active="workspaceState.context.kind === 'ask'"
               :disabled="!live.selectedRoot.value"
-              @compact="openCompact"
-              @expand="openExpanded"
-              @close="closeLauncher"
-              @back="cancelExpanded"
               @select="chooseDestination"
             />
 
             <KeepAlive :max="10">
               <RunCanvas
-                v-if="workspaceState.launcher.kind !== 'expanded' && workspaceState.primary === 'map'"
+                v-if="workspaceState.primary === 'map'"
                 :key="sessionIdentity"
                 :run="live.run.value"
                 :root="live.selectedRoot.value"
@@ -535,22 +498,23 @@ onUnmounted(() => {
                 @inspect-incident="inspectIncident"
                 @focus-time="focusTime"
                 @focus-file="focusFile"
+                @open-activity="openWorkspace('activity')"
               />
             </KeepAlive>
 
-            <template v-if="workspaceState.launcher.kind !== 'expanded'">
-              <RunOverview
+            <RunOverview
                 v-if="workspaceState.primary === 'overview'"
                 :root="live.selectedRoot.value"
                 :run="live.run.value"
                 :loading="live.loading.value"
                 :source-incomplete="sourceIncomplete"
+                :source-message="selectedSourceMessage"
                 @open="openWorkspace"
                 @ask="openAskPanel"
                 @select="inspectAgent"
-              />
+            />
 
-              <div v-if="workspaceState.primary === 'activity'" class="primary-list-workspace activity-workspace">
+            <div v-if="workspaceState.primary === 'activity'" class="primary-list-workspace activity-workspace">
                 <header class="primary-workspace-heading">
                   <div>
                     <span class="section-eyebrow">Session timeline</span>
@@ -609,24 +573,23 @@ onUnmounted(() => {
                   session-wide
                   @select="inspectAgent"
                 />
-              </div>
+            </div>
 
-              <div v-if="workspaceState.primary === 'changes'" class="primary-list-workspace">
-                <RunChanges
-                  :run="live.run.value"
-                  :root="live.selectedRoot.value"
-                  :selected-key="contextKey"
-                />
-              </div>
+            <div v-if="workspaceState.primary === 'changes'" class="primary-list-workspace">
+              <RunChanges
+                :run="live.run.value"
+                :root="live.selectedRoot.value"
+                :selected-key="contextKey"
+              />
+            </div>
 
-              <div v-if="workspaceState.primary === 'diagnostics'" class="primary-list-workspace">
-                <RunDiagnostics
-                  :run="live.run.value"
-                  :selected-key="contextKey"
-                  @select="inspectAgent"
-                />
-              </div>
-            </template>
+            <div v-if="workspaceState.primary === 'diagnostics'" class="primary-list-workspace">
+              <RunDiagnostics
+                :run="live.run.value"
+                :selected-key="contextKey"
+                @select="inspectAgent"
+              />
+            </div>
           </section>
 
           <PanelResizeHandle
