@@ -43,11 +43,11 @@ type AppServices = Layer.Success<typeof ServerLayer>
  * bridge between the h3 world and the Effect world. Domain code stays in
  * services; handlers only run an Effect and translate its typed failures.
  */
-let runtime: ManagedRuntime.ManagedRuntime<AppServices, never> | undefined
+const runtime: ManagedRuntime.ManagedRuntime<AppServices, never> = ManagedRuntime.make(ServerLayer)
 
-function getRuntime() {
-  runtime ??= ManagedRuntime.make(ServerLayer)
-  return runtime
+/** Release layer-scoped resources when Nitro shuts down. */
+export function disposeRuntime(): Promise<void> {
+  return runtime.dispose()
 }
 
 export type AppError =
@@ -89,7 +89,7 @@ function toHttpError(error: AppError) {
 export async function runRequest<A>(
   effect: Effect.Effect<A, AppError, AppServices>,
 ): Promise<A> {
-  const result = await getRuntime().runPromise(Effect.result(effect))
+  const result = await runtime.runPromise(Effect.result(effect))
   if (Result.isSuccess(result)) return result.success
   throw toHttpError(result.failure)
 }
