@@ -29,6 +29,7 @@ const data: ExecutionNodeData = {
   currentTool: 'Bash',
   idleMs: 0,
   pendingChildren: 0,
+  childCount: 0,
   collapsed: false,
   collapsible: false,
   muted: false,
@@ -69,5 +70,33 @@ describe('execution agent node', () => {
 
     await node.trigger('keydown', { key: 'Enter' })
     expect(selectNode).toHaveBeenCalledWith('explore')
+  })
+
+  it('shows a parent agent child count and exposes branch collapsing', async () => {
+    const toggleNode = vi.fn()
+    const component = mount(ExecutionAgentNode, {
+      props: {
+        id: 'explore',
+        data: { ...data, childCount: 3, collapsible: true },
+        selected: false,
+      },
+      global: {
+        provide: {
+          [ExecutionCanvasKey as symbol]: {
+            layoutDirection: ref('left-to-right'),
+            selectNode: vi.fn(),
+            toggleNode,
+          },
+        },
+        stubs: {
+          Handle: true,
+          UIcon: true,
+        },
+      },
+    })
+
+    expect(component.get('.sketch-child-count').text()).toContain('3 children')
+    await component.get('.sketch-collapse').trigger('click')
+    expect(toggleNode).toHaveBeenCalledWith('explore')
   })
 })

@@ -8,6 +8,7 @@ import type {
   TranscriptEvent,
   TreeResponse,
 } from '#shared/types/run'
+import type { SessionSort } from '~/utils/session-filter'
 
 export type FeedDensity = 'compact' | 'normal' | 'raw'
 export type SessionRangeHours = number
@@ -47,6 +48,8 @@ export function useLiveRuns() {
   const liveOnly = ref(false)
   const attentionOnly = ref(false)
   const hideIdle = ref(true)
+  const minimumSubagents = ref(0)
+  const sessionSort = ref<SessionSort>('updated')
   const followActive = ref(false)
   const followOutput = ref(true)
   const errorsOnly = ref(false)
@@ -101,6 +104,8 @@ export function useLiveRuns() {
       liveOnly: liveOnly.value,
       attentionOnly: attentionOnly.value,
       hideIdle: hideIdle.value,
+      minimumSubagents: minimumSubagents.value,
+      sort: sessionSort.value,
     })
   })
 
@@ -336,6 +341,8 @@ export function useLiveRuns() {
     liveOnly,
     attentionOnly,
     hideIdle,
+    minimumSubagents,
+    sessionSort,
     followActive,
     followOutput,
     errorsOnly,

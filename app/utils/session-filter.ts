@@ -1,5 +1,7 @@
 import type { ProjectRuns, RunNode, SessionSource } from '#shared/types/run'
 
+export type SessionSort = 'updated' | 'subagents'
+
 export interface SessionFilterOptions {
   query: string
   source: 'all' | SessionSource
@@ -7,6 +9,17 @@ export interface SessionFilterOptions {
   liveOnly: boolean
   attentionOnly: boolean
   hideIdle: boolean
+  minimumSubagents: number
+  sort: SessionSort
+}
+
+function compareRoots(left: RunNode, right: RunNode, sort: SessionSort): number {
+  const leftSubagents = left.subAgents ?? 0
+  const rightSubagents = right.subAgents ?? 0
+  if (sort === 'subagents' && leftSubagents !== rightSubagents) {
+    return rightSubagents - leftSubagents
+  }
+  return (right.subLast || '').localeCompare(left.subLast || '')
 }
 
 export function filterSessionProjects(
@@ -40,8 +53,16 @@ export function filterSessionProjects(
         ...project,
         roots: project.roots
           .map(root => filterNode(root, projectMatches))
-          .filter((root): root is RunNode => Boolean(root)),
+          .filter((root): root is RunNode => Boolean(root))
+          .filter(root => (root.subAgents ?? 0) >= options.minimumSubagents)
+          .sort((left, right) => compareRoots(left, right, options.sort)),
       }
     })
     .filter(project => !needle || project.name.toLowerCase().includes(needle) || project.roots.length > 0)
+    .sort((left, right) => {
+      if (options.sort !== 'subagents') return 0
+      const leftMost = left.roots[0]?.subAgents ?? -1
+      const rightMost = right.roots[0]?.subAgents ?? -1
+      return rightMost - leftMost
+    })
 }

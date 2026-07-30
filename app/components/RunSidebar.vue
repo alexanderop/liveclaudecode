@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ProjectRuns, SessionSourceStatus } from '#shared/types/run'
+import type { SessionSort } from '~/utils/session-filter'
 
 const props = defineProps<{
   projects: ProjectRuns[]
@@ -17,6 +18,8 @@ const projectFilter = defineModel<string>('projectFilter', { required: true })
 const liveOnly = defineModel<boolean>('liveOnly', { required: true })
 const attentionOnly = defineModel<boolean>('attentionOnly', { required: true })
 const hideIdle = defineModel<boolean>('hideIdle', { required: true })
+const minimumSubagents = defineModel<number>('minimumSubagents', { required: true })
+const sessionSort = defineModel<SessionSort>('sessionSort', { required: true })
 const hours = defineModel<number>('hours', { required: true })
 const emit = defineEmits<{
   select: [project: string, key: string]
@@ -36,11 +39,15 @@ const activeFilterCount = computed(() => [
   liveOnly.value,
   attentionOnly.value,
   hideIdle.value,
+  minimumSubagents.value > 0,
+  sessionSort.value !== 'updated',
   hours.value !== 168,
 ].filter(Boolean).length)
 const recentRoots = computed(() => props.projects
   .flatMap(project => project.roots.map(root => ({ project: project.id, root })))
-  .sort((a, b) => (b.root.subLast || '').localeCompare(a.root.subLast || '')))
+  .sort((a, b) => sessionSort.value === 'subagents'
+    ? (b.root.subAgents ?? 0) - (a.root.subAgents ?? 0) || (b.root.subLast || '').localeCompare(a.root.subLast || '')
+    : (b.root.subLast || '').localeCompare(a.root.subLast || '')))
 const sourceOptions: Array<{ value: 'all' | 'claude' | 'codex' | 'copilot', label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'claude', label: 'Claude' },
@@ -74,6 +81,17 @@ const projectSelectOptions = computed(() => [
   { label: 'All projects', value: 'all' },
   ...props.projectOptions.map(project => ({ label: project.name, value: project.id })),
 ])
+const subagentOptions = [
+  { label: 'Any number', value: 0 },
+  { label: '1 or more', value: 1 },
+  { label: '3 or more', value: 3 },
+  { label: '5 or more', value: 5 },
+  { label: '10 or more', value: 10 },
+]
+const sortOptions: Array<{ label: string, value: SessionSort }> = [
+  { label: 'Last updated', value: 'updated' },
+  { label: 'Most subagents', value: 'subagents' },
+]
 const organizeItems = computed(() => [[
   { label: 'Organize sidebar', type: 'label' as const },
   {
@@ -86,8 +104,6 @@ const organizeItems = computed(() => [[
     icon: organization.value === 'list' ? 'i-lucide-check' : undefined,
     onSelect: () => organizeBy('list'),
   },
-], [
-  { label: 'Sort by last updated', icon: 'i-lucide-arrow-down-wide-narrow', disabled: true },
 ]])
 
 function isExpanded(project: string): boolean {
@@ -263,6 +279,30 @@ function organizeBy(value: 'project' | 'list'): void {
             label-key="label"
             size="xs"
             aria-label="Filter by date range"
+            :search-input="false"
+          />
+        </label>
+        <label class="project-filter range-filter">
+          <span>Subagents</span>
+          <USelectMenu
+            v-model="minimumSubagents"
+            :items="subagentOptions"
+            value-key="value"
+            label-key="label"
+            size="xs"
+            aria-label="Filter by minimum subagents"
+            :search-input="false"
+          />
+        </label>
+        <label class="project-filter range-filter">
+          <span>Sort by</span>
+          <USelectMenu
+            v-model="sessionSort"
+            :items="sortOptions"
+            value-key="value"
+            label-key="label"
+            size="xs"
+            aria-label="Sort sessions"
             :search-input="false"
           />
         </label>

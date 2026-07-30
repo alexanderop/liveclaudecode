@@ -78,15 +78,15 @@ The following happens:
    ```text
    npx -y @agentclientprotocol/claude-agent-acp
    npx -y @agentclientprotocol/codex-acp
-   copilot --acp --stdio --available-tools=view,rg,glob
+   copilot --acp --stdio --allow-all
    ```
 
 4. The agent inherits the local environment, including the user's existing
    Claude login or Codex login/API-key configuration.
-5. The server creates a new ACP conversation and gives it a read-only
-   instruction containing the transcript path and working directory.
+5. The server creates a new ACP conversation and gives it the transcript path
+   and working directory as context.
 6. The agent reads the transcript and any relevant project files using local
-   tools, then answers the question.
+   tools, then answers the question or carries out requested coding work.
 7. Text, reasoning, and tool-status updates travel back through ACP to the Node
    server. The browser polls the local API and displays them in the chat.
 
@@ -110,8 +110,9 @@ Node server  <-- permission ask --  ACP adapter
 Node server  -- allow/reject ---->  ACP adapter
 ```
 
-This last exchange is important. The agent cannot silently assume every tool is
-allowed; the local client gets a chance to approve or reject requested actions.
+This last exchange is important. Ask deliberately approves every permission
+request so the selected coding agent can edit files, run commands, and use its
+other available tools.
 
 ## The observed session and chat are different
 
@@ -121,27 +122,26 @@ There are two separate histories:
 - The Ask conversation is a new ACP session stored in the running dashboard
   server's memory.
 
-The original transcript is never appended to or resumed. The first Ask message
-includes the transcript path as context. Later questions reuse the new ACP
-conversation, so the answering agent remembers the discussion. Clicking
+Ask never resumes or appends to the original provider session. The first Ask
+message includes its transcript path as context. Later questions reuse the new
+ACP conversation, so the answering agent remembers the discussion. Clicking
 **New** closes that agent process and discards the in-memory chat.
 
-## How read-only access works
+## How full access works
 
-The local server has the operating-system permissions of the user who launched
-it, so safety cannot come from the browser sandbox alone. `liveclaudecode`
-enforces a narrower policy for the agent:
+The local server and the agents it starts have the operating-system permissions
+of the user who launched it. Ask configures each supported agent for full
+access:
 
-- It advertises no filesystem-writing or terminal capabilities through ACP.
-- It approves only read, search, fetch, and thinking tool kinds.
-- It rejects edits, command execution, and unknown permission kinds.
-- It launches Codex in read-only mode with browser access disabled.
-- It limits Copilot CLI to file viewing, text search, and file discovery.
-- Its first prompt explicitly instructs the agent not to modify files.
+- It approves every ACP permission request.
+- It launches Codex in `agent-full-access` mode.
+- It launches Copilot CLI with `--allow-all`.
+- It tells the answering agent that edits and command execution are available.
 
-The JSONL transcript remains read-only. This is a defense-in-depth policy, but
-the server should still only be run on a trusted computer and kept bound to
-localhost.
+The client advertises no client-hosted filesystem or terminal capabilities;
+the coding agents use their own local tools instead. Full access means Ask can
+change files and run commands, so the server should only be run on a trusted
+computer and kept bound to localhost.
 
 ## Local does not necessarily mean offline
 
@@ -154,6 +154,9 @@ That means the provider may receive:
 - the new question;
 - relevant evidence from the selected transcript; and
 - contents of project files the agent reads to answer it.
+
+The agent can also change local files, execute commands, and make network
+requests when its tools support those actions.
 
 No agent process starts until the user submits a message. This keeps passive
 session browsing local while making the network boundary explicit when Ask is

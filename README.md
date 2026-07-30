@@ -10,9 +10,10 @@ plans, diagnostics, changed files, command outcomes, and event feed. Every
 session and agent is visibly tagged **Claude**, **Codex**, or **Copilot**, and the sidebar can
 filter by provider and project.
 
-The observer is read-only, binds to localhost by default, performs no telemetry,
-and needs no network access at runtime. The optional **Ask** panel launches a
-user-selected local coding agent, which may contact its configured model provider.
+The observer APIs are read-only, bind to localhost by default, perform no
+telemetry, and need no network access at runtime. The optional **Ask** panel
+launches a user-selected local coding agent with full permissions, which may
+modify local files, run commands, and contact its configured model provider.
 
 ## Run it
 
@@ -82,7 +83,7 @@ By default the server launches these local ACP agents on demand:
 ```text
 npx -y @agentclientprotocol/claude-agent-acp
 npx -y @agentclientprotocol/codex-acp
-copilot --acp --stdio --available-tools=view,rg,glob
+copilot --acp --stdio --allow-all
 ```
 
 The first Claude or Codex use can therefore download an adapter. Claude uses
@@ -94,21 +95,25 @@ installed or lives somewhere else:
 ```bash
 LCC_ACP_CLAUDE='claude-agent-acp' \
 LCC_ACP_CODEX='codex-acp' \
-LCC_ACP_COPILOT='copilot --acp --stdio --available-tools=view,rg,glob' \
+LCC_ACP_COPILOT='copilot --acp --stdio --allow-all' \
 ./bin/liveclaudecode
 ```
 
-The chat client advertises no filesystem or terminal capabilities. It allows
-read/search/fetch/thinking permission requests and rejects mutating or command
-execution requests. Codex is additionally started in its `read-only` agent
-mode. Copilot CLI only receives its `view`, `rg`, and `glob` tools. The
-observed JSONL files are never modified.
+Ask approves every ACP permission request. Codex starts in
+`agent-full-access` mode, and Copilot CLI starts with `--allow-all`. The ACP
+client still advertises no client-hosted filesystem or terminal capabilities
+because each coding agent uses its own local tools. Run Ask only on a trusted
+computer: its agents have the operating-system permissions of the dashboard
+process.
 
 ## What it shows
 
 - **Combined session browser:** recent Claude, Codex, and Copilot sessions grouped by
-  working directory, with a single recency ordering and provider/project filters.
+  working directory, with provider/project filters plus subagent-count filtering
+  and sorting.
 - **Run tree:** sessions and subagents nested by recorded spawn parentage.
+- **Agent canvas:** dimension-aware ranked branches, expandable workstream
+  summaries, direct child counts, and a minimap for dense all-agent views.
 - **Agent timeline:** a lane per agent, positioned by actual start and end time.
 - **Live status:** agents with an active task or tool call and their current tool.
 - **Plan and phases:** the latest todo state and phase markers across a run.
@@ -117,7 +122,8 @@ observed JSONL files are never modified.
 - **Changed work:** files written across the run and command outcomes per agent.
 - **Event feed:** compact, normal, and raw densities with an errors-only filter.
 - **Session chat:** follow-up questions answered by a local Claude, Codex, or
-  Copilot ACP agent with the selected transcript supplied as read-only context.
+  Copilot ACP agent with full tool permissions and the selected transcript as
+  context.
 
 Fields that a provider does not record are left empty. The viewer does not
 decrypt Codex encrypted reasoning or infer private content from unrelated stores.
@@ -249,7 +255,9 @@ fails on Vue hydration mismatches.
   Run the server on a trusted machine and keep its default localhost binding.
 - Asking a question starts the selected ACP adapter and can send the question,
   transcript evidence, and referenced file contents to that agent's configured
-  model provider. No agent process starts until a message is sent.
+  model provider. Ask agents can also modify local files and run commands with
+  the dashboard process's permissions. No agent process starts until a message
+  is sent.
 - Cloud-only chats, prompt-history indexes, Chromium caches, and generic desktop
   metadata are intentionally unsupported because they are incomplete or not a
   stable canonical session store.

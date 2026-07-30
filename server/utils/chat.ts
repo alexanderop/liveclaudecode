@@ -9,7 +9,6 @@ import {
   parseInitializeResult,
   parseNewSessionResult,
   parsePromptResult,
-  type PermissionRequest,
   type SessionNotification,
 } from '#shared/schemas/acp'
 import { parseChatAction } from '#shared/schemas/chat'
@@ -69,9 +68,8 @@ function commandFromEnv(
 /**
  * ACP agent launchers, keyed by the id the client sends. Overridable via
  * `LCC_ACP_CLAUDE`, `LCC_ACP_CODEX`, or `LCC_ACP_COPILOT` (a full command
- * line, split on spaces). Codex starts in its read-only sandbox mode, while
- * Copilot only exposes file-viewing and search tools. The permission policy
- * below provides a second read-only boundary for every agent.
+ * line, split on spaces). Ask agents start with full tool access; ACP
+ * permission requests are approved by the policy below.
  */
 export function chatAgentCommandsFromEnv(
   env: Readonly<Record<string, string | undefined>>,
@@ -83,14 +81,14 @@ export function chatAgentCommandsFromEnv(
     },
     codex: {
       ...commandFromEnv(env.LCC_ACP_CODEX, ['npx', '-y', '@agentclientprotocol/codex-acp']),
-      env: { INITIAL_AGENT_MODE: 'read-only', NO_BROWSER: '1' },
+      env: { INITIAL_AGENT_MODE: 'agent-full-access', NO_BROWSER: '1' },
     },
     copilot: {
       ...commandFromEnv(env.LCC_ACP_COPILOT, [
         'copilot',
         '--acp',
         '--stdio',
-        '--available-tools=view,rg,glob',
+        '--allow-all',
       ]),
       env: {},
     },
@@ -161,16 +159,9 @@ function appendEvent(record: ChatRecord, event: ChatEvent): void {
   }
 }
 
-/**
- * The dashboard is an observer, so its chat agents must stay read-only no
- * matter which adapter is running: anything that could mutate state is
- * rejected, and the agent carries on with the tool call marked failed.
- */
-const READ_ONLY_TOOL_KINDS = new Set(['read', 'search', 'fetch', 'think'])
-
-function chatPermissionPolicy(request: PermissionRequest): 'allow' | 'reject' {
-  const kind = request.toolCall?.kind
-  return kind !== undefined && READ_ONLY_TOOL_KINDS.has(kind) ? 'allow' : 'reject'
+/** Ask agents have full tool access, including edits and command execution. */
+function chatPermissionPolicy(): 'allow' {
+  return 'allow'
 }
 
 /**
@@ -215,12 +206,12 @@ function chatUpdateHandler(record: ChatRecord) {
 
 function chatPreamble(location: SessionEventLocation, transcriptPath: string, cwd: string): string {
   return [
-    'You are embedded in liveclaudecode, a read-only dashboard for observing coding-agent sessions.',
+    'You are embedded in the Ask panel of liveclaudecode, a dashboard for observing coding-agent sessions.',
     `The user is inspecting a recorded ${location.source} session and asks follow-up questions about it.`,
     `The session transcript (JSONL) is at: ${transcriptPath}`,
     `The observed session's working directory was: ${cwd}`,
     'Answer by reading the transcript and any files it references.',
-    'Use only read-only tools (read files, grep, search); never modify anything.',
+    'You have full tool access and may edit files or run commands when needed to fulfill the request.',
     'Keep answers concise and cite concrete evidence — file paths, commands, errors — from the transcript.',
   ].join('\n')
 }

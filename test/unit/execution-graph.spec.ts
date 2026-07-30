@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { TimelineLane } from '../../shared/types/run'
-import { buildExecutionGraph } from '../../app/utils/execution-graph'
+import {
+  buildExecutionGraph,
+  defaultExecutionDetail,
+} from '../../app/utils/execution-graph'
 import { runNode } from '../fixtures/runs'
 
 function lane(
@@ -26,6 +29,18 @@ function lane(
 }
 
 describe('execution graph layout', () => {
+  it('uses workstream overview by default only for dense nested graphs', () => {
+    const denseNested = [lane('root', 0), lane('workstream', 1)]
+    for (let index = 0; index < 11; index++) denseNested.push(lane(`worker-${index}`, 2))
+
+    expect(defaultExecutionDetail(denseNested)).toBe('overview')
+    expect(defaultExecutionDetail(denseNested.slice(0, 12))).toBe('all-agents')
+    expect(defaultExecutionDetail([
+      lane('root', 0),
+      ...Array.from({ length: 12 }, (_, index) => lane(`direct-${index}`, 1)),
+    ])).toBe('all-agents')
+  })
+
   it('connects each nested lane to its nearest parent', () => {
     const graph = buildExecutionGraph([
       lane('root', 0),
@@ -39,7 +54,11 @@ describe('execution graph layout', () => {
       ['root', 'research'],
       ['root', 'implementation'],
     ])
-    expect(graph.nodes.find(node => node.id === 'source-check')?.position.x).toBe(600)
+    expect(graph.nodes.find(node => node.id === 'root')?.data?.childCount).toBe(2)
+    expect(graph.nodes.find(node => node.id === 'research')?.data?.childCount).toBe(1)
+    expect(graph.nodes.find(node => node.id === 'source-check')!.position.x).toBeGreaterThan(
+      graph.nodes.find(node => node.id === 'research')!.position.x,
+    )
   })
 
   it('surfaces active, blocked, failed, completed, and inactive states', () => {
@@ -142,9 +161,12 @@ describe('execution graph layout', () => {
       'top-to-bottom',
     )
 
-    expect(graph.nodes.find(node => node.id === 'root')?.position.y).toBe(0)
-    expect(graph.nodes.find(node => node.id === 'research')?.position.y).toBe(180)
-    expect(graph.nodes.find(node => node.id === 'source-check')?.position.y).toBe(360)
+    expect(graph.nodes.find(node => node.id === 'research')!.position.y).toBeGreaterThan(
+      graph.nodes.find(node => node.id === 'root')!.position.y,
+    )
+    expect(graph.nodes.find(node => node.id === 'source-check')!.position.y).toBeGreaterThan(
+      graph.nodes.find(node => node.id === 'research')!.position.y,
+    )
     expect(graph.nodes.find(node => node.id === 'implementation')?.position.x).toBeGreaterThan(
       graph.nodes.find(node => node.id === 'research')?.position.x || 0,
     )
@@ -168,6 +190,11 @@ describe('execution graph layout', () => {
       ['root', 'implementation'],
       ['root', 'qa'],
     ])
+    expect(graph.edges.every(edge => edge.label === '')).toBe(true)
+    expect(graph.nodes.find(node => node.id === 'root')?.data).toMatchObject({
+      childCount: 2,
+      collapsible: false,
+    })
     expect(graph.nodes.find(node => node.id === 'implementation')?.data).toMatchObject({
       agents: 2,
       errors: 1,
@@ -176,9 +203,87 @@ describe('execution graph layout', () => {
       tools: 17,
       workstream: 1,
     })
-    expect(graph.nodes.find(node => node.id === 'qa')?.position.x).toBeGreaterThan(
-      graph.nodes.find(node => node.id === 'implementation')?.position.x || 0,
+    expect(graph.nodes.find(node => node.id === 'qa')?.position.x).toBe(
+      graph.nodes.find(node => node.id === 'implementation')?.position.x,
     )
+    expect(graph.nodes.find(node => node.id === 'qa')!.position.y).toBeGreaterThan(
+      graph.nodes.find(node => node.id === 'implementation')!.position.y,
+    )
+  })
+
+  it('expands one overview workstream while leaving its peers collapsed', () => {
+    const graph = buildExecutionGraph(
+      [
+        lane('root', 0),
+        lane('implementation', 1),
+        lane('frontend', 2),
+        lane('review', 2),
+        lane('research', 1),
+        lane('source-check', 2),
+      ],
+      new Map(),
+      'left-to-right',
+      'overview',
+      { expandedKeys: new Set(['implementation']) },
+    )
+
+    expect(graph.nodes.map(node => node.id).sort()).toEqual([
+      'frontend',
+      'implementation',
+      'research',
+      'review',
+      'root',
+    ])
+    expect(graph.nodes.find(node => node.id === 'implementation')?.data?.collapsed).toBe(false)
+    expect(graph.nodes.find(node => node.id === 'frontend')?.data?.overview).toBe(false)
+    expect(graph.nodes.find(node => node.id === 'research')?.data).toMatchObject({
+      agents: 2,
+      collapsed: true,
+      overview: true,
+    })
+  })
+
+  it('automatically opens problematic workstreams in the problems lens', () => {
+    const graph = buildExecutionGraph(
+      [
+        lane('root', 0),
+        lane('implementation', 1),
+        lane('review', 2, { errors: 1 }),
+        lane('research', 1),
+        lane('source-check', 2),
+      ],
+      new Map(),
+      'left-to-right',
+      'overview',
+      { lens: 'problems' },
+    )
+
+    expect(graph.nodes.map(node => node.id)).toContain('review')
+    expect(graph.nodes.map(node => node.id)).not.toContain('source-check')
+    expect(graph.nodes.find(node => node.id === 'implementation')?.data?.collapsed).toBe(false)
+    expect(graph.nodes.find(node => node.id === 'research')?.data?.collapsed).toBe(true)
+  })
+
+  it('keeps deep uneven subagent branches in separate, readable ranks', () => {
+    const graph = buildExecutionGraph([
+      lane('root', 0),
+      lane('research', 1),
+      lane('source-check', 2),
+      lane('citation-check', 3),
+      lane('implementation', 1),
+      lane('frontend', 2),
+      lane('qa', 2),
+    ])
+
+    const positions = Object.fromEntries(graph.nodes.map(node => [node.id, node.position]))
+    expect(positions['source-check']!.x).toBeGreaterThan(positions.research!.x)
+    expect(positions['citation-check']!.x).toBeGreaterThan(positions['source-check']!.x)
+    expect(positions.frontend!.x).toBe(positions['source-check']!.x)
+    expect(positions.qa!.x).toBe(positions.frontend!.x)
+    expect(Math.abs(positions.research!.y - positions.implementation!.y)).toBeGreaterThanOrEqual(190)
+    expect(Math.abs(positions.frontend!.y - positions.qa!.y)).toBeGreaterThanOrEqual(190)
+    expect(graph.nodes.find(node => node.id === 'root')?.data?.childCount).toBe(2)
+    expect(graph.nodes.find(node => node.id === 'implementation')?.data?.childCount).toBe(2)
   })
 
   it('keeps a nested selection visible on its collapsed overview workstream', () => {

@@ -27,6 +27,7 @@ import { ExecutionCanvasKey } from '~/composables/useExecutionCanvas'
 import {
   buildExecutionGraph,
   DEFAULT_EXECUTION_DETAIL,
+  defaultExecutionDetail,
   executionStateLabel,
   type ExecutionDirection,
   type ExecutionDetail,
@@ -55,6 +56,7 @@ const emit = defineEmits<{
 }>()
 
 const canvasView = ref<HTMLElement | null>(null)
+const canvasStage = ref<HTMLElement | null>(null)
 const layoutDirection = ref<ExecutionDirection>('left-to-right')
 const displayMode = ref<ExecutionDetail>(DEFAULT_EXECUTION_DETAIL)
 const lens = ref<ExecutionLens>('all')
@@ -65,6 +67,7 @@ const replayAt = ref<number | null>(null)
 const playing = ref(false)
 const positionOverrides = shallowRef<ReadonlyMap<string, XYPosition>>(new Map())
 const collapsedKeys = shallowRef<ReadonlySet<string>>(new Set())
+const expandedKeys = shallowRef<ReadonlySet<string>>(new Set())
 const pendingFit = ref(false)
 const canvasReady = ref(false)
 const announcement = ref('')
@@ -91,6 +94,7 @@ const graph = structuralComputed(
       selectedKey: props.selectedKey,
       focusedFile: props.focusedFile,
       collapsedKeys: collapsedKeys.value,
+      expandedKeys: expandedKeys.value,
       coordination: coordination.value,
     },
   ),
@@ -103,6 +107,7 @@ const nodeDataById = computed<Record<string, ExecutionNodeData>>(() =>
 )
 const sessionLive = computed(() => Boolean(props.run?.root?.live || props.run?.root?.subLive))
 const agentCount = computed(() => props.run?.lanes?.length || 0)
+const denseGraph = computed(() => nodes.value.length > 24)
 const issues = computed(() => (props.run?.diagnostics?.incidents || [])
   .filter(incident => incident.severity !== 'info')
   .sort((a, b) => (a.ts || '').localeCompare(b.ts || '')))
@@ -189,10 +194,19 @@ const minZoomReached = computed(() => viewport.value.zoom <= minZoom.value)
 const maxZoomReached = computed(() => viewport.value.zoom >= maxZoom.value)
 
 function toggleNode(key: string): void {
+  if (displayMode.value === 'overview') {
+    const next = new Set(expandedKeys.value)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    expandedKeys.value = next
+    void refit()
+    return
+  }
   const next = new Set(collapsedKeys.value)
   if (next.has(key)) next.delete(key)
   else next.add(key)
   collapsedKeys.value = next
+  void refit()
 }
 
 function setLens(next: ExecutionLens): void {
@@ -226,6 +240,8 @@ function setDisplayMode(mode: ExecutionDetail): void {
   rememberViewport()
   displayMode.value = mode
   positionOverrides.value = new Map()
+  collapsedKeys.value = new Set()
+  expandedKeys.value = new Set()
   void restoreViewportOrFit()
 }
 
@@ -261,7 +277,25 @@ function afterPaint(): Promise<void> {
   return new Promise(resolve => requestAnimationFrame(() => resolve()))
 }
 
-async function refit(): Promise<void> {
+async function focusReadableNeighborhood(focusKey: string | undefined): Promise<boolean> {
+  if (!focusKey) return false
+  const target = getNodes.value.find(node => (node.data as ExecutionNodeData).memberKeys.includes(focusKey))
+  const container = canvasStage.value
+  if (!target || !container) return false
+
+  const zoom = 0.78
+  const position = target.computedPosition
+  const width = target.dimensions.width || 252
+  const height = target.dimensions.height || 122
+  await setViewport({
+    x: container.clientWidth * 0.22 - (position.x + width / 2) * zoom,
+    y: container.clientHeight * 0.46 - (position.y + height / 2) * zoom,
+    zoom,
+  }, { duration: 250 })
+  return true
+}
+
+async function refit(wholeGraph = false): Promise<void> {
   if (typeof document !== 'undefined' && document.hidden) {
     fitWhenVisible = true
     return
@@ -269,16 +303,20 @@ async function refit(): Promise<void> {
   await nextTick()
   await afterPaint()
   const focusKey = props.selectedKey || props.run?.key
+  if (!wholeGraph && denseGraph.value && displayMode.value === 'all-agents' && lens.value === 'all') {
+    if (await focusReadableNeighborhood(focusKey)) {
+      canvasReady.value = true
+      return
+    }
+  }
   const focusNodes = displayMode.value === 'overview' || lens.value !== 'all'
     ? nodes.value.filter(node => !node.data?.muted).map(node => node.id)
-    : focusKey
-      ? [focusKey, ...edges.value.filter(edge => edge.target === focusKey).map(edge => edge.source).slice(0, 1), ...edges.value.filter(edge => edge.source === focusKey).map(edge => edge.target).slice(0, 4)]
-      : nodes.value.slice(0, 5).map(node => node.id)
+    : nodes.value.map(node => node.id)
   await fitView({
     nodes: [...new Set(focusNodes.length ? focusNodes : nodes.value.map(node => node.id))],
     padding: { top: '48px', right: '8%', bottom: '90px', left: '8%' },
     duration: 250,
-    minZoom: 0.45,
+    minZoom: 0.3,
     maxZoom: 1,
   })
   canvasReady.value = true
@@ -288,9 +326,10 @@ watch(() => props.run?.key, (key, previousKey) => {
   if (key === previousKey) return
   positionOverrides.value = new Map()
   collapsedKeys.value = new Set()
+  expandedKeys.value = new Set()
   storedViewports.clear()
   previousStates = new Map()
-  displayMode.value = (props.run?.lanes?.length || 0) > 4 ? 'overview' : DEFAULT_EXECUTION_DETAIL
+  displayMode.value = defaultExecutionDetail(props.run?.lanes || [])
   replayAt.value = null
   lens.value = 'all'
   searchQuery.value = ''
@@ -506,7 +545,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="canvas-stage">
+      <div ref="canvasStage" class="canvas-stage">
       <div v-if="agentCount === 1" class="single-agent-guidance">
         <UIcon name="i-lucide-info" />
         <span>This run used one agent. The activity timeline is usually easier to inspect.</span>
@@ -565,7 +604,7 @@ onBeforeUnmount(() => {
         </template>
         <Transition name="minimap">
           <MiniMap
-            v-if="nodes.length > 3 && minimapVisible && !inspectorOpen"
+            v-if="nodes.length > 3 && (minimapVisible || denseGraph) && !inspectorOpen"
             position="bottom-right"
             :node-color="miniMapColor"
             :pannable="true"
@@ -579,7 +618,7 @@ onBeforeUnmount(() => {
           <template #top>
             <button type="button" class="vue-flow__controls-button" aria-label="Zoom in" :disabled="maxZoomReached" @click="zoomCanvasIn"><UIcon name="i-lucide-plus" /></button>
             <button type="button" class="vue-flow__controls-button" aria-label="Zoom out" :disabled="minZoomReached" @click="zoomCanvasOut"><UIcon name="i-lucide-minus" /></button>
-            <button type="button" class="vue-flow__controls-button" aria-label="Fit graph to view" @click="refit"><UIcon name="i-lucide-scan" /></button>
+            <button type="button" class="vue-flow__controls-button" aria-label="Fit graph to view" @click="refit(true)"><UIcon name="i-lucide-scan" /></button>
           </template>
         </Controls>
       </VueFlow>

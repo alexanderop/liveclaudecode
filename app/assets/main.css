@@ -1380,8 +1380,11 @@ html.panel-resizing * { cursor: col-resize !important; user-select: none !import
 .sketch-overview-stats b { color: light-dark(#3c3840, #bbb6c0); font: 11px var(--mono); font-weight: 550; }
 .sketch-overview-stats .bad { border-color: light-dark(#d4cdce, #43282d); background: light-dark(#f7f6f6, #211719); color: light-dark(#933c44, #aa676d); }
 .sketch-overview-stats .bad b { color: light-dark(#8f282f, #de898f); }
-.sketch-node-actions { display: flex; justify-content: flex-end; margin-top: 7px; }
-.sketch-collapse { display: grid; width: 19px; height: 19px; margin-left: auto; place-items: center; padding: 0; border: 1px solid light-dark(#d0cdd4, #343039); border-radius: 5px; background: light-dark(#f6f6f7, #1c1a1f); color: light-dark(#544e5a, #857d8e); cursor: pointer; }
+.sketch-node-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 7px; }
+.sketch-child-count { display: inline-flex; align-items: center; gap: 4px; color: var(--text-tertiary); font: 10.5px var(--mono); }
+.sketch-child-count svg { width: 10px; height: 10px; }
+.sketch-collapse { display: grid; width: 22px; height: 22px; margin-left: auto; place-items: center; padding: 0; border: 1px solid light-dark(#d0cdd4, #343039); border-radius: 5px; background: light-dark(#f6f6f7, #1c1a1f); color: light-dark(#544e5a, #857d8e); cursor: pointer; }
+.sketch-collapse svg { width: 12px; height: 12px; }
 .sketch-collapse:hover { border-color: light-dark(#cbc8d0, #4b4357); color: light-dark(#38333e, #c1b6ce); }
 .sketch-node .vue-flow__handle { width: 6px; height: 6px; border: 1px solid light-dark(#b8b3bf, #aaa3b5); background: light-dark(#f4f3f5, #27232d); opacity: .65; }
 .execution-canvas .vue-flow__edge-path { stroke: light-dark(#59555f, #77717f); stroke-width: 1.35; stroke-dasharray: 5 3; }

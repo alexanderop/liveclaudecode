@@ -265,7 +265,7 @@ onUnmounted(stopPolling)
         class="chat-empty"
         icon="i-lucide-messages-square"
         title="Ask about this session"
-        description="The selected local coding agent can inspect the transcript and referenced files using read-only tools."
+        description="The selected local coding agent can inspect the session, edit files, and run commands with full permissions."
         variant="naked"
       />
 

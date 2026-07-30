@@ -75,15 +75,20 @@ function handleKeydown(event: KeyboardEvent): void {
     <div v-if="data.overview" class="sketch-overview-stats">
       <span><b>{{ data.agents }}</b>{{ data.agents === 1 ? 'agent' : 'agents' }}</span>
     </div>
-    <div v-if="data.collapsible" class="sketch-node-actions">
+    <div v-if="data.childCount" class="sketch-node-actions">
+      <span class="sketch-child-count">
+        <UIcon name="i-lucide-git-branch" />
+        {{ data.childCount }} {{ data.childCount === 1 ? 'child' : 'children' }}
+      </span>
       <button
+        v-if="data.collapsible"
         type="button"
         class="sketch-collapse"
         :aria-label="data.collapsed ? 'Expand workstream' : 'Collapse workstream'"
         :title="data.collapsed ? 'Expand workstream' : 'Collapse workstream'"
         @click.stop="toggleNode(id)"
       >
-        <UIcon :name="data.collapsed ? 'i-lucide-chevrons-out' : 'i-lucide-chevrons-in'" />
+        <UIcon :name="data.collapsed ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'" />
       </button>
     </div>
     <Handle

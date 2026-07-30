@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@comark/nuxt": "0.5.1",
+    "@dagrejs/dagre": "^1.1.8",
     "@effect/platform-node": "4.0.0-beta.101",
     "@iconify-json/lucide": "1.2.119",
     "@nuxt/ui": "4.10.0",

@@ -1,3 +1,4 @@
+import dagre from '@dagrejs/dagre'
 import { MarkerType, type Edge, type Node, type XYPosition } from '@vue-flow/core'
 import type {
   DiagnosticIncident,
@@ -15,6 +16,13 @@ export type ExecutionDirection = 'left-to-right' | 'top-to-bottom'
 export type ExecutionDetail = 'overview' | 'all-agents'
 export type ExecutionLens = 'all' | 'active' | 'problems' | 'files' | 'coordination'
 export const DEFAULT_EXECUTION_DETAIL: ExecutionDetail = 'all-agents'
+export const DENSE_NESTED_GRAPH_THRESHOLD = 12
+
+export function defaultExecutionDetail(lanes: TimelineLane[]): ExecutionDetail {
+  return lanes.length > DENSE_NESTED_GRAPH_THRESHOLD && lanes.some(lane => lane.depth > 1)
+    ? 'overview'
+    : DEFAULT_EXECUTION_DETAIL
+}
 
 export interface ExecutionNodeData {
   label: string
@@ -40,6 +48,7 @@ export interface ExecutionNodeData {
   currentTool: string
   idleMs: number
   pendingChildren: number
+  childCount: number
   collapsed: boolean
   collapsible: boolean
   muted: boolean
@@ -71,6 +80,7 @@ export interface ExecutionGraphContext {
   selectedKey?: string | null
   focusedFile?: string | null
   collapsedKeys?: ReadonlySet<string>
+  expandedKeys?: ReadonlySet<string>
   coordination?: CoordinationAnalysis | null
 }
 
@@ -78,7 +88,6 @@ interface LayoutEntry {
   lane: TimelineLane
   children: LayoutEntry[]
   parent: LayoutEntry | null
-  y: number
 }
 
 interface AggregateStats {
@@ -99,10 +108,91 @@ interface AggregateStats {
   tokens: number
 }
 
-const HORIZONTAL_GAP = 300
-const VERTICAL_GAP = 136
-const TOP_DOWN_LEVEL_GAP = 180
-const TOP_DOWN_BRANCH_GAP = 270
+const GRID_SIZE = 8
+const NODE_WIDTH = 252
+const OVERVIEW_NODE_WIDTH = 270
+const NODE_MIN_HEIGHT = 122
+const OVERVIEW_MIN_HEIGHT = 136
+const HORIZONTAL_RANK_GAP = 160
+const HORIZONTAL_NODE_GAP = 72
+const TOP_DOWN_RANK_GAP = 104
+const TOP_DOWN_NODE_GAP = 88
+
+function executionNodeHeight(data: ExecutionNodeData): number {
+  let height = data.overview ? OVERVIEW_MIN_HEIGHT : NODE_MIN_HEIGHT
+  if (data.issues || data.collision || data.bottleneck || data.critical) height += 25
+  if (data.overview) height += 25
+  if (data.childCount) height += 26
+  return height
+}
+
+function snapPositionByCenter(value: number, size: number): number {
+  return Math.round(value / GRID_SIZE) * GRID_SIZE - size / 2
+}
+
+/**
+ * n8n's workflow canvas lays out the visible graph with Dagre using measured
+ * node boxes, separate rank/node gaps, and center-based grid snapping. Agent
+ * cards are predictable enough to use their rendered width and an estimated
+ * content height here, which keeps nested branches from sharing space.
+ */
+function layoutExecutionNodes(
+  nodes: Array<Node<ExecutionNodeData>>,
+  edges: Array<Edge<ExecutionEdgeData>>,
+  direction: ExecutionDirection,
+  orderByKey: ReadonlyMap<string, number>,
+  positionOverrides: ReadonlyMap<string, XYPosition>,
+): Array<Node<ExecutionNodeData>> {
+  if (!nodes.length) return nodes
+
+  const graph = new dagre.graphlib.Graph()
+  graph.setGraph({
+    rankdir: direction === 'left-to-right' ? 'LR' : 'TB',
+    ranksep: direction === 'left-to-right' ? HORIZONTAL_RANK_GAP : TOP_DOWN_RANK_GAP,
+    nodesep: direction === 'left-to-right' ? HORIZONTAL_NODE_GAP : TOP_DOWN_NODE_GAP,
+    edgesep: 32,
+    marginx: 0,
+    marginy: 0,
+  })
+  graph.setDefaultEdgeLabel(() => ({}))
+
+  const dimensions = new Map<string, { width: number, height: number }>()
+  const orderedNodes = [...nodes].sort((left, right) =>
+    (orderByKey.get(left.id) ?? 0) - (orderByKey.get(right.id) ?? 0))
+  for (const node of orderedNodes) {
+    const size = {
+      width: node.data!.overview ? OVERVIEW_NODE_WIDTH : NODE_WIDTH,
+      height: executionNodeHeight(node.data!),
+    }
+    dimensions.set(node.id, size)
+    graph.setNode(node.id, size)
+  }
+
+  const visibleKeys = new Set(nodes.map(node => node.id))
+  const orderedEdges = [...edges].sort((left, right) =>
+    (orderByKey.get(left.target) ?? 0) - (orderByKey.get(right.target) ?? 0))
+  for (const edge of orderedEdges) {
+    if (visibleKeys.has(edge.source) && visibleKeys.has(edge.target)) {
+      graph.setEdge(edge.source, edge.target)
+    }
+  }
+
+  dagre.layout(graph, { disableOptimalOrderHeuristic: true })
+
+  return nodes.map((node) => {
+    const override = positionOverrides.get(node.id)
+    if (override) return { ...node, position: override }
+    const position = graph.node(node.id)
+    const size = dimensions.get(node.id)!
+    return {
+      ...node,
+      position: {
+        x: snapPositionByCenter(position.x, size.width),
+        y: snapPositionByCenter(position.y, size.height),
+      },
+    }
+  })
+}
 
 function time(value: string | null): number | null {
   if (!value) return null
@@ -165,7 +255,7 @@ function buildTree(lanes: TimelineLane[]): LayoutEntry[] {
   const stack: LayoutEntry[] = []
   for (const lane of lanes) {
     const parent = lane.depth > 0 ? stack[lane.depth - 1] || null : null
-    const entry: LayoutEntry = { lane, children: [], parent, y: 0 }
+    const entry: LayoutEntry = { lane, children: [], parent }
     if (parent) parent.children.push(entry)
     else roots.push(entry)
     stack[lane.depth] = entry
@@ -292,6 +382,7 @@ export function buildExecutionGraph(
     : lanes.filter((lane, index) => index === 0 || time(lane.firstTs) === null || time(lane.firstTs)! <= asOf)
   const roots = buildTree(visibleLanes)
   const allEntries = roots.flatMap(descendants)
+  const orderByKey = new Map(allEntries.map((entry, index) => [entry.lane.key, index]))
   const entryByKey = new Map(allEntries.map(entry => [entry.lane.key, entry]))
   const nodeByKey = new Map(flattenRunTree(context.root || null).map(node => [node.key, node]))
   const incidents = context.diagnostics?.incidents || []
@@ -343,40 +434,23 @@ export function buildExecutionGraph(
 
   const nodes: Array<Node<ExecutionNodeData>> = []
   const edges: Array<Edge<ExecutionEdgeData>> = []
-  let nextRow = 0
   const overview = detail === 'overview'
-  const branchGap = direction === 'left-to-right'
-    ? overview ? 166 : VERTICAL_GAP
-    : overview ? 300 : TOP_DOWN_BRANCH_GAP
-  const levelGap = direction === 'left-to-right'
-    ? overview ? 348 : HORIZONTAL_GAP
-    : overview ? 218 : TOP_DOWN_LEVEL_GAP
   const workstreamByKey = new Map<string, number>()
-  const overviewPositions = new Map<string, XYPosition>()
   roots.forEach(root => {
     workstreamByKey.set(root.lane.key, 0)
     root.children.forEach((child, index) => workstreamByKey.set(child.lane.key, index + 1))
-    if (!overview) return
-    if (direction === 'left-to-right') {
-      const rows = Math.max(1, Math.ceil(root.children.length / 2))
-      overviewPositions.set(root.lane.key, { x: 0, y: ((rows - 1) * branchGap) / 2 })
-      root.children.forEach((child, index) => overviewPositions.set(child.lane.key, {
-        x: (Math.floor(index / rows) + 1) * levelGap,
-        y: (index % rows) * branchGap,
-      }))
-    } else {
-      const columns = Math.max(1, Math.min(3, root.children.length))
-      overviewPositions.set(root.lane.key, { x: ((columns - 1) * branchGap) / 2, y: 0 })
-      root.children.forEach((child, index) => overviewPositions.set(child.lane.key, {
-        x: (index % columns) * branchGap,
-        y: (Math.floor(index / columns) + 1) * levelGap,
-      }))
-    }
   })
 
   const isCollapsed = (entry: LayoutEntry): boolean => {
     if (!entry.children.length) return false
-    if (overview && entry.lane.depth > 0) return true
+    if (overview && entry.lane.depth > 0) {
+      if (context.expandedKeys?.has(entry.lane.key)) return false
+      if (lens === 'problems') {
+        const stats = aggregate(entry, context, nodeByKey)
+        if (stats.issues) return false
+      }
+      return true
+    }
     if (!context.collapsedKeys?.has(entry.lane.key)) return false
     if (lens === 'problems') {
       const stats = aggregate(entry, context, nodeByKey)
@@ -385,14 +459,13 @@ export function buildExecutionGraph(
     return true
   }
 
-  const place = (entry: LayoutEntry): number => {
+  const place = (entry: LayoutEntry): void => {
     const collapsed = isCollapsed(entry)
     const children = collapsed ? [] : entry.children
-    const childRows = children.map(place)
-    entry.y = childRows.length ? (childRows[0]! + childRows.at(-1)!) / 2 : nextRow++ * branchGap
+    children.forEach(place)
 
     const lane = entry.lane
-    const aggregateNode = overview || collapsed
+    const aggregateNode = collapsed || (overview && entry.lane.depth <= 1)
     const stats = aggregateNode ? aggregate(entry, context, nodeByKey) : aggregate(entry, { ...context }, nodeByKey)
     if (!aggregateNode) {
       stats.agents = 1
@@ -445,10 +518,7 @@ export function buildExecutionGraph(
     nodes.push({
       id: lane.key,
       type: 'agent',
-      position: previousPositions.get(lane.key) || overviewPositions.get(lane.key) || {
-        x: direction === 'left-to-right' ? lane.depth * levelGap : entry.y,
-        y: direction === 'left-to-right' ? entry.y : lane.depth * levelGap,
-      },
+      position: { x: 0, y: 0 },
       width: nodeWidth,
       class: [aggregateNode ? 'overview-node' : '', muted ? 'muted-node' : '', onPath ? 'path-node' : ''].filter(Boolean).join(' '),
       connectable: false,
@@ -478,8 +548,9 @@ export function buildExecutionGraph(
         currentTool: semantic.tool,
         idleMs: Math.max(0, now - (time(lane.lastTs) ?? now)),
         pendingChildren,
+        childCount: entry.children.length,
         collapsed,
-        collapsible: entry.children.length > 0,
+        collapsible: entry.children.length > 0 && !(overview && lane.depth === 0),
         muted,
         onPath,
         collision,
@@ -518,22 +589,22 @@ export function buildExecutionGraph(
         source: lane.key,
         target: child.lane.key,
         type: 'smoothstep',
+        pathOptions: { borderRadius: 16, offset: 28 },
         animated: childState === 'active',
         selectable: false,
         focusable: false,
         interactionWidth: 40,
-        label,
+        label: overview ? '' : label,
         class: `execution-edge ${childState}${onEdgePath ? ' selected-path' : ''}`,
         data: { durationMs: childDuration, relation, onPath: onEdgePath },
         markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
       })
     }
-    return entry.y
   }
 
-  for (const root of roots) {
-    place(root)
-    nextRow += 0.45
+  roots.forEach(place)
+  return {
+    nodes: layoutExecutionNodes(nodes, edges, direction, orderByKey, previousPositions),
+    edges,
   }
-  return { nodes, edges }
 }

@@ -49,4 +49,29 @@ describe('run canvas', () => {
     expect(component.get('.canvas-title').text()).toContain('3 agents')
     expect(component.get('.canvas-title').text()).not.toContain('workstreams')
   })
+
+  it('starts a dense nested run in expandable workstream overview', async () => {
+    const denseRun = {
+      key: 'root',
+      lanes: [
+        lane('root', 0),
+        lane('outer', 1),
+        ...Array.from({ length: 11 }, (_, index) => lane(`nested-${index}`, 2)),
+      ],
+    } as RunResponse
+    const component = await mountSuspended(RunCanvas, {
+      props: {
+        run: denseRun,
+        selectedKey: null,
+      },
+    })
+
+    await component.get('button[aria-controls="canvas-display-options"]').trigger('click')
+
+    expect(component.get('button[title="Group nested agents into readable workstreams"]')
+      .attributes('aria-pressed')).toBe('true')
+    expect(component.get('button[title="Show every individual agent"]')
+      .attributes('aria-pressed')).toBe('false')
+    expect(component.get('.canvas-title').text()).toContain('13 agents · 2 visible')
+  })
 })

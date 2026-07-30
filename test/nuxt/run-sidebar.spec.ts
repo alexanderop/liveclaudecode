@@ -70,6 +70,8 @@ describe('RunSidebar', () => {
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
+        minimumSubagents: 0,
+        sessionSort: 'updated',
         hours: 168,
       },
     })
@@ -137,6 +139,8 @@ describe('RunSidebar', () => {
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
+        minimumSubagents: 0,
+        sessionSort: 'updated',
         hours: 168,
       },
     })
@@ -175,6 +179,8 @@ describe('RunSidebar', () => {
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
+        minimumSubagents: 0,
+        sessionSort: 'updated',
         hours: 168,
       },
     })
@@ -205,6 +211,22 @@ describe('RunSidebar', () => {
     await component.vm.$nextTick()
     expect(component.emitted('update:projectFilter')).toContainEqual(['/repo'])
 
+    await component.get('[aria-label="Filter by minimum subagents"]').trigger('click')
+    const minimumOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find(option => option.textContent?.includes('5 or more'))
+    expect(minimumOption).toBeDefined()
+    minimumOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await component.vm.$nextTick()
+    expect(component.emitted('update:minimumSubagents')).toContainEqual([5])
+
+    await component.get('[aria-label="Sort sessions"]').trigger('click')
+    const sortOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find(option => option.textContent?.includes('Most subagents'))
+    expect(sortOption).toBeDefined()
+    sortOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await component.vm.$nextTick()
+    expect(component.emitted('update:sessionSort')).toContainEqual(['subagents'])
+
     await component.setProps({ loading: false })
     expect(component.text()).not.toContain('Loading local sessions')
     expect(component.text()).toContain('No matching sessions')
@@ -227,6 +249,8 @@ describe('RunSidebar', () => {
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
+        minimumSubagents: 0,
+        sessionSort: 'updated',
         hours: 24,
       },
     })

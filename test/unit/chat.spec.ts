@@ -73,10 +73,10 @@ function chatLayer(prompts: unknown[], connections: AcpConnectionOptions[] = [])
     Layer.succeed(AcpConnector)(connector),
     Layer.succeed(ChatAgentCommands)({
       claude: { command: 'claude-agent-acp', args: [], env: {} },
-      codex: { command: 'codex-acp', args: [], env: { INITIAL_AGENT_MODE: 'read-only' } },
+      codex: { command: 'codex-acp', args: [], env: { INITIAL_AGENT_MODE: 'agent-full-access' } },
       copilot: {
         command: 'copilot',
-        args: ['--acp', '--stdio', '--available-tools=view,rg,glob'],
+        args: ['--acp', '--stdio', '--allow-all'],
         env: {},
       },
     }),
@@ -104,11 +104,16 @@ const waitForIdle = Effect.fn('waitForIdle')(function*(project: string, key: str
 })
 
 describe('session chat', () => {
-  it('configures Copilot CLI as a read-only ACP agent and accepts it in chat actions', () => {
+  it('configures coding agents with full permissions and accepts Copilot in chat actions', () => {
     const commands = chatAgentCommandsFromEnv({})
+    assert.deepStrictEqual(commands.codex, {
+      command: 'npx',
+      args: ['-y', '@agentclientprotocol/codex-acp'],
+      env: { INITIAL_AGENT_MODE: 'agent-full-access', NO_BROWSER: '1' },
+    })
     assert.deepStrictEqual(commands.copilot, {
       command: 'copilot',
-      args: ['--acp', '--stdio', '--available-tools=view,rg,glob'],
+      args: ['--acp', '--stdio', '--allow-all'],
       env: {},
     })
     assert.deepStrictEqual(
@@ -172,7 +177,7 @@ describe('session chat', () => {
         cwd,
       })), [{
         command: 'copilot',
-        args: ['--acp', '--stdio', '--available-tools=view,rg,glob'],
+        args: ['--acp', '--stdio', '--allow-all'],
         env: {},
         cwd: '/repo',
       }])
@@ -181,6 +186,14 @@ describe('session chat', () => {
         agent: 'copilot',
         text: 'The tests failed in setup.',
       })
+      assert.strictEqual(connections[0]!.permission({
+        sessionId: 'answer-session',
+        toolCall: { toolCallId: 'edit-1', title: 'Edit file', kind: 'edit' },
+        options: [
+          { optionId: 'yes', kind: 'allow_once' },
+          { optionId: 'no', kind: 'reject_once' },
+        ],
+      }), 'allow')
     }).pipe(Effect.provide(chatLayer(prompts, connections)))
   })
 })

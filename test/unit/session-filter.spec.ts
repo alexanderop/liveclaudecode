@@ -6,8 +6,9 @@ function run(
   key: string,
   source: SessionSource,
   label: string,
-  options: { detail?: string, live?: boolean, errors?: number } = {},
+  options: { detail?: string, live?: boolean, errors?: number, subagents?: number, last?: string } = {},
 ): RunNode {
+  const last = options.last || '2026-07-26T08:00:01.000Z'
   return {
     source,
     sourceDetail: options.detail || (source === 'claude'
@@ -32,7 +33,7 @@ function run(
     errors: options.errors || 0,
     tokensOut: 0,
     firstTs: '2026-07-26T08:00:00.000Z',
-    lastTs: '2026-07-26T08:00:01.000Z',
+    lastTs: last,
     mtime: 0,
     ago: 0,
     live: options.live || false,
@@ -44,12 +45,12 @@ function run(
     files: [],
     commands: [],
     finalText: '',
-    subAgents: 0,
+    subAgents: options.subagents || 0,
     subRunning: 0,
     subErrors: options.errors || 0,
     subTools: 0,
     subFiles: {},
-    subLast: '2026-07-26T08:00:01.000Z',
+    subLast: last,
     subLive: options.live || false,
   }
 }
@@ -80,6 +81,8 @@ describe('combined session filters', () => {
       liveOnly: false,
       attentionOnly: false,
       hideIdle: true,
+      minimumSubagents: 0,
+      sort: 'updated',
     })
     assert.strictEqual(filtered.length, 1)
     assert.deepStrictEqual(filtered[0]?.roots.map(root => root.key), ['codex:1'])
@@ -93,6 +96,8 @@ describe('combined session filters', () => {
       liveOnly: false,
       attentionOnly: false,
       hideIdle: false,
+      minimumSubagents: 0,
+      sort: 'updated',
     })
     assert.deepStrictEqual(byProject[0]?.roots.map(root => root.key), ['claude-1'])
 
@@ -103,6 +108,8 @@ describe('combined session filters', () => {
       liveOnly: false,
       attentionOnly: false,
       hideIdle: false,
+      minimumSubagents: 0,
+      sort: 'updated',
     })
     assert.deepStrictEqual(byProducer.flatMap(project => project.roots.map(root => root.key)), ['codex:1'])
   })
@@ -115,6 +122,8 @@ describe('combined session filters', () => {
       liveOnly: true,
       attentionOnly: false,
       hideIdle: true,
+      minimumSubagents: 0,
+      sort: 'updated',
     })
     assert.deepStrictEqual(filtered.map(project => project.name), ['Unassigned'])
     assert.deepStrictEqual(filtered[0]?.roots.map(root => root.key), ['codex:2'])
@@ -128,7 +137,39 @@ describe('combined session filters', () => {
       liveOnly: false,
       attentionOnly: false,
       hideIdle: true,
+      minimumSubagents: 0,
+      sort: 'updated',
     })
     assert.deepStrictEqual(filtered.flatMap(project => project.roots.map(root => root.key)), ['copilot:1'])
+  })
+
+  it('filters by minimum subagents and sorts the busiest sessions first', () => {
+    const delegated: ProjectRuns[] = [{
+      id: '/repo',
+      name: 'repo',
+      roots: [
+        run('recent', 'codex', 'Recent solo run', { last: '2026-07-29T08:00:00.000Z' }),
+        run('three', 'claude', 'Three workers', { subagents: 3, last: '2026-07-27T08:00:00.000Z' }),
+        run('eight', 'codex', 'Eight workers', { subagents: 8, last: '2026-07-26T08:00:00.000Z' }),
+        run('five', 'copilot', 'Five workers', { subagents: 5, last: '2026-07-28T08:00:00.000Z' }),
+      ],
+    }]
+
+    const filtered = filterSessionProjects(delegated, {
+      query: '',
+      source: 'all',
+      project: 'all',
+      liveOnly: false,
+      attentionOnly: false,
+      hideIdle: false,
+      minimumSubagents: 3,
+      sort: 'subagents',
+    })
+
+    assert.deepStrictEqual(filtered[0]?.roots.map(root => [root.key, root.subAgents]), [
+      ['eight', 8],
+      ['five', 5],
+      ['three', 3],
+    ])
   })
 })
