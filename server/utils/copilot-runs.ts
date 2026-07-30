@@ -5,6 +5,7 @@ import * as FileSystem from 'effect/FileSystem'
 import { FILE_CONCURRENCY } from './runs'
 import {
   CopilotScanCache,
+  type CopilotSessionLocation,
   CopilotSessionStateDirectory,
   type CopilotSessionScan,
   VsCodeUserDataDirectories,
@@ -12,13 +13,6 @@ import {
 import { parseCopilotWorkspace } from '#shared/schemas/copilot'
 import type { RunNode, TranscriptStats } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-
-export interface CopilotSessionLocation {
-  path: string
-  application: string
-  workspace: string
-  format: 'vscode' | 'cli'
-}
 
 export interface CopilotDiscovery {
   locations: CopilotSessionLocation[]
@@ -30,6 +24,7 @@ export interface CopilotTree {
   roots: RunNode[]
   byKey: Map<string, RunNode>
   pathByKey: Map<string, string>
+  locationByKey: Map<string, CopilotSessionLocation>
   scanByKey: Map<string, CopilotSessionScan>
   cwdByKey: Map<string, string>
   malformed: number
@@ -286,6 +281,7 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
   const roots: RunNode[] = []
   const byKey = new Map<string, RunNode>()
   const pathByKey = new Map<string, string>()
+  const locationByKey = new Map<string, CopilotSessionLocation>()
   const scanByKey = new Map<string, CopilotSessionScan>()
   const cwdByKey = new Map<string, string>()
   for (const [id, item] of selected) {
@@ -317,6 +313,7 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
     roots.push(node)
     byKey.set(key, node)
     pathByKey.set(key, item.location.path)
+    locationByKey.set(key, item.location)
     scanByKey.set(key, item.scan)
     cwdByKey.set(key, normalizeWorkspace(item.scan.workingDirectory || item.location.workspace))
   }
@@ -325,6 +322,7 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
     roots,
     byKey,
     pathByKey,
+    locationByKey,
     scanByKey,
     cwdByKey,
     malformed: readable.reduce(

@@ -1,37 +1,72 @@
 import { assert, describe, it } from '@effect/vitest'
 import { Effect, Layer } from 'effect'
-import { loadSessionCatalog, SessionCatalogCache } from '#server/utils/session-browser'
+import { getSessionEvents, loadSessionCatalog, SessionCatalogCache } from '#server/utils/session-browser'
+import { CopilotCliTranscriptScan } from '#server/utils/copilot-cli-transcript'
+import { CopilotTranscriptScan } from '#server/utils/copilot-transcript'
 import {
   CodexScanCache,
   CodexSessionsDirectory,
   CopilotScanCache,
+  CopilotSessionStateDirectory,
   ProjectsDirectory,
   PromptCache,
   ScanCache,
   SessionLocatorCache,
   WorkingDirectory,
   VsCodeUserDataDirectories,
+  type CopilotSessionLocation,
+  type CopilotSessionScan,
 } from '#server/utils/services'
 import * as claude from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
 import * as copilot from '../fixtures/copilot'
+import * as copilotCli from '../fixtures/copilot-cli'
 import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
 
 const CLAUDE = '/claude/projects'
 const CODEX = '/codex/sessions'
 const VSCODE = '/Library/Application Support/Code/User'
+const COPILOT_CLI = '/copilot/session-state'
 
-function layer(tree: FakeTree, denied: ReadonlyArray<string> = []) {
+function recordingCopilotCache(locations: CopilotSessionLocation[]) {
+  return Layer.effect(
+    CopilotScanCache,
+    Effect.sync(() => {
+      const scans = new Map<string, CopilotSessionScan>()
+      return CopilotScanCache.of({
+        get: Effect.fn('recordingCopilotCache.get')(function*(location) {
+          locations.push({ ...location })
+          let scan = scans.get(location.path)
+          if (!scan) {
+            scan = location.format === 'cli'
+              ? new CopilotCliTranscriptScan(location.path, location.application, location.workspace)
+              : new CopilotTranscriptScan(location.path, location.application, location.workspace)
+            scans.set(location.path, scan)
+          }
+          return yield* scan.refresh
+        }),
+        peek: path => Effect.sync(() => scans.get(path)),
+      })
+    }),
+  )
+}
+
+function layer(
+  tree: FakeTree,
+  denied: ReadonlyArray<string> = [],
+  copilotLocations?: CopilotSessionLocation[],
+) {
   return Layer.mergeAll(
     SessionCatalogCache.layer,
     ScanCache.layer,
     CodexScanCache.layer,
-    CopilotScanCache.layer,
+    copilotLocations ? recordingCopilotCache(copilotLocations) : CopilotScanCache.layer,
     SessionLocatorCache.layer,
     PromptCache.layer,
     Layer.succeed(ProjectsDirectory)(CLAUDE),
     Layer.succeed(CodexSessionsDirectory)(CODEX),
     Layer.succeed(VsCodeUserDataDirectories)([VSCODE]),
+    Layer.succeed(CopilotSessionStateDirectory)(COPILOT_CLI),
     Layer.succeed(WorkingDirectory)('/work'),
     testFileSystem(tree, { denied }),
   )
@@ -171,4 +206,39 @@ describe('unified session catalog', () => {
         copilot.initial(copilot.snapshot({ id: 'copilot-readable' })),
       ], { malformed: true }),
     }))))
+
+  it.effect('preserves exact Copilot storage metadata for targeted event refreshes', () =>
+    {
+      const locations: CopilotSessionLocation[] = []
+      return Effect.gen(function*() {
+        yield* loadSessionCatalog('', 999_999)
+        locations.length = 0
+        yield* getSessionEvents('', 999_999, '/repo', 'copilot:vscode-location', 0, 0)
+        yield* getSessionEvents('', 999_999, '/repo', 'copilot:cli-location', 0, 0)
+
+        assert.deepStrictEqual(locations, [
+          {
+            path: `${VSCODE}/profiles/team/workspaceStorage/repo/chatSessions/vscode-location.jsonl`,
+            application: 'VS Code profile',
+            workspace: '/repo',
+            format: 'vscode',
+          },
+          {
+            path: `${COPILOT_CLI}/cli-location/events.jsonl`,
+            application: 'Copilot CLI',
+            workspace: '',
+            format: 'cli',
+          },
+        ])
+      }).pipe(Effect.provide(layer({
+        [`${VSCODE}/profiles/team/workspaceStorage/repo/workspace.json`]: JSON.stringify({ folder: 'file:///repo' }),
+        [`${VSCODE}/profiles/team/workspaceStorage/repo/chatSessions/vscode-location.jsonl`]: copilot.log([
+          copilot.initial(copilot.snapshot({ id: 'vscode-location' })),
+        ]),
+        [`${COPILOT_CLI}/cli-location/events.jsonl`]: copilotCli.jsonl([
+          copilotCli.sessionStart('cli-location'),
+        ]),
+      }, [], locations)))
+    },
+  )
 })

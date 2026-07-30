@@ -397,7 +397,9 @@ export const sendChatMessage = Effect.fn('sendChatMessage')(function*(
   const location = yield* locateChatSession(projectInput, hours, project, key)
   const transcriptPath = location.source === 'claude'
     ? yield* pathFor(location.projectDirectory, key)
-    : location.transcriptPath
+    : location.source === 'codex'
+      ? location.transcriptPath
+      : location.copilotLocation.path
   const cwd = yield* resolveChatCwd(location, transcriptPath)
 
   if (record && record.agent !== agent) {

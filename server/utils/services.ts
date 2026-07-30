@@ -7,7 +7,7 @@ import { TranscriptScan } from './transcript'
 import { CodexTranscriptScan } from './codex-transcript'
 import { CopilotCliTranscriptScan } from './copilot-cli-transcript'
 import { CopilotTranscriptScan } from './copilot-transcript'
-import type { RunNode, SessionSource } from '#shared/types/run'
+import type { RunNode } from '#shared/types/run'
 
 /**
  * Root of Claude Code's transcript store.
@@ -158,14 +158,18 @@ export class CodexScanCache extends Context.Service<CodexScanCache, {
 
 export type CopilotSessionScan = CopilotTranscriptScan | CopilotCliTranscriptScan
 
+export interface CopilotSessionLocation {
+  path: string
+  application: string
+  workspace: string
+  format: 'vscode' | 'cli'
+}
+
 /** Incrementally replayed Copilot CLI and VS Code logs, keyed by session path. */
 export class CopilotScanCache extends Context.Service<CopilotScanCache, {
-  readonly get: (location: {
-    path: string
-    application: string
-    workspace: string
-    format?: 'vscode' | 'cli'
-  }) => Effect.Effect<CopilotSessionScan, PlatformError.PlatformError, FileSystem.FileSystem>
+  readonly get: (
+    location: CopilotSessionLocation,
+  ) => Effect.Effect<CopilotSessionScan, PlatformError.PlatformError, FileSystem.FileSystem>
   readonly peek: (path: string) => Effect.Effect<CopilotSessionScan | undefined>
 }>()('lcc/CopilotScanCache') {
   static readonly layer = Layer.effect(
@@ -189,14 +193,25 @@ export class CopilotScanCache extends Context.Service<CopilotScanCache, {
   )
 }
 
-export interface SessionEventLocation {
-  source: SessionSource
+interface SessionEventLocationBase {
   projectId: string
   key: string
   node: RunNode
-  projectDirectory: string
-  transcriptPath: string
 }
+
+export type SessionEventLocation =
+  | SessionEventLocationBase & {
+      source: 'claude'
+      projectDirectory: string
+    }
+  | SessionEventLocationBase & {
+      source: 'codex'
+      transcriptPath: string
+    }
+  | SessionEventLocationBase & {
+      source: 'copilot'
+      copilotLocation: CopilotSessionLocation
+    }
 
 /**
  * Lightweight locators published by the latest tree scan.

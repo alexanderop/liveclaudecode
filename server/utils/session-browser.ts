@@ -25,8 +25,10 @@ import { projectName, resolveProjectDirectories } from './project'
 import {
   CodexScanCache,
   CopilotScanCache,
+  type CopilotSessionLocation,
   ScanCache,
   SessionLocatorCache,
+  type SessionEventLocation,
   UnknownRun,
 } from './services'
 import type {
@@ -65,6 +67,7 @@ type SessionLocator =
       projectId: string
       tree: CopilotTree
       node: RunNode
+      location: CopilotSessionLocation
     }
 
 interface SessionCatalog {
@@ -234,6 +237,7 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
         projectId: project.id,
         tree,
         node,
+        location: tree.locationByKey.get(node.key)!,
       }))
     }
     if (tree.rootsPresent === 0) {
@@ -283,19 +287,20 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     return bLast.localeCompare(aLast) || a.name.localeCompare(b.name)
   })
 
-  yield* locatorCache.replace([...locators.values()].flatMap((locator) => {
-    const transcriptPath = locator.source === 'claude'
-      ? ''
-      : locator.tree.pathByKey.get(locator.node.key) || ''
-    if (locator.source !== 'claude' && !transcriptPath) return []
-    return [{
-      source: locator.source,
+  yield* locatorCache.replace([...locators.values()].flatMap((locator): SessionEventLocation[] => {
+    const base = {
       projectId: locator.projectId,
       key: locator.node.key,
       node: locator.node,
-      projectDirectory: locator.source === 'claude' ? locator.projectDirectory : '',
-      transcriptPath,
-    }]
+    }
+    if (locator.source === 'claude') {
+      return [{ ...base, source: 'claude', projectDirectory: locator.projectDirectory }]
+    }
+    if (locator.source === 'copilot') {
+      return [{ ...base, source: 'copilot' as const, copilotLocation: locator.location }]
+    }
+    const transcriptPath = locator.tree.pathByKey.get(locator.node.key) || ''
+    return transcriptPath ? [{ ...base, source: 'codex', transcriptPath }] : []
   }))
 
   return {
@@ -434,12 +439,7 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
 
   if (location.source === 'copilot') {
     const cache = yield* CopilotScanCache
-    const scan = yield* cache.get({
-      path: location.transcriptPath,
-      application: location.node.sourceDetail.split(' · ')[0] || 'VS Code',
-      workspace: location.projectId === UNASSIGNED_PROJECT ? '' : location.projectId,
-      format: /Copilot CLI/i.test(location.node.sourceDetail) ? 'cli' : 'vscode',
-    })
+    const scan = yield* cache.get(location.copilotLocation)
     const node = { ...location.node, ...(yield* scan.stats) }
     const reset = revision !== scan.eventRevision || since > scan.events.length
     return {
