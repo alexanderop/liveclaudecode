@@ -1,7 +1,7 @@
 {
   "name": "liveclaudecode",
   "version": "0.2.0",
-  "description": "Local live browser for Claude Code, OpenAI Codex, and VS Code GitHub Copilot Chat sessions",
+  "description": "Local live browser for Claude Code, OpenAI Codex, GitHub Copilot CLI, and VS Code Copilot Chat sessions",
   "type": "module",
   "private": true,
   "license": "MIT",

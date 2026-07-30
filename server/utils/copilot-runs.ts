@@ -2,9 +2,13 @@ import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Clock, Effect, Option, Result } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
-import type { CopilotTranscriptScan } from './copilot-transcript'
 import { FILE_CONCURRENCY } from './runs'
-import { CopilotScanCache, VsCodeUserDataDirectories } from './services'
+import {
+  CopilotScanCache,
+  CopilotSessionStateDirectory,
+  type CopilotSessionScan,
+  VsCodeUserDataDirectories,
+} from './services'
 import { parseCopilotWorkspace } from '#shared/schemas/copilot'
 import type { RunNode, TranscriptStats } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
@@ -13,6 +17,7 @@ export interface CopilotSessionLocation {
   path: string
   application: string
   workspace: string
+  format: 'vscode' | 'cli'
 }
 
 export interface CopilotDiscovery {
@@ -25,7 +30,7 @@ export interface CopilotTree {
   roots: RunNode[]
   byKey: Map<string, RunNode>
   pathByKey: Map<string, string>
-  scanByKey: Map<string, CopilotTranscriptScan>
+  scanByKey: Map<string, CopilotSessionScan>
   cwdByKey: Map<string, string>
   malformed: number
   unreadable: number
@@ -41,7 +46,7 @@ interface LocationResult {
 
 interface SelectedSession {
   location: CopilotSessionLocation
-  scan: CopilotTranscriptScan
+  scan: CopilotSessionScan
   stats: TranscriptStats
 }
 
@@ -103,7 +108,7 @@ const sessionFiles = Effect.fn('sessionFiles')(function*(
       onNone: () => true,
       onSome: value => value.getTime() >= cutoff,
     })
-    return fresh ? [{ path, application, workspace }] : []
+    return fresh ? [{ path, application, workspace, format: 'vscode' as const }] : []
   })), { concurrency: 'unbounded' })
   return {
     locations: results.flatMap(result => Result.isSuccess(result) ? result.success : []),
@@ -194,19 +199,54 @@ const scanUserDataRoot = Effect.fn('scanUserDataRoot')(function*(root: string, c
   }
 })
 
+const scanCopilotCliRoot = Effect.fn('scanCopilotCliRoot')(function*(root: string, cutoff: number) {
+  const fs = yield* FileSystem.FileSystem
+  const rootResult = yield* Effect.result(optionalDirectory(root))
+  if (Result.isFailure(rootResult)) {
+    return { present: false, locations: [], unreadable: 1 }
+  }
+  if (!rootResult.success.exists) {
+    return { present: false, locations: [], unreadable: 0 }
+  }
+  const results = yield* Effect.forEach(rootResult.success.names, name => Effect.result(Effect.gen(function*() {
+    const directory = join(root, name)
+    const directoryInfo = yield* fs.stat(directory)
+    if (directoryInfo.type !== 'Directory') return []
+    const path = join(directory, 'events.jsonl')
+    const infoResult = yield* Effect.result(fs.stat(path))
+    if (Result.isFailure(infoResult)) {
+      if (infoResult.failure.reason._tag === 'NotFound') return []
+      return yield* infoResult.failure
+    }
+    if (infoResult.success.type !== 'File') return []
+    const fresh = Option.match(infoResult.success.mtime, {
+      onNone: () => true,
+      onSome: value => value.getTime() >= cutoff,
+    })
+    return fresh
+      ? [{ path, application: 'Copilot CLI', workspace: '', format: 'cli' as const }]
+      : []
+  })), { concurrency: 'unbounded' })
+  return {
+    present: true,
+    locations: results.flatMap(result => Result.isSuccess(result) ? result.success : []),
+    unreadable: results.filter(Result.isFailure).length,
+  }
+})
+
 export const collectCopilotSessions = Effect.fn('collectCopilotSessions')(function*(maxAgeHours: number) {
   const roots = yield* VsCodeUserDataDirectories
+  const cliRoot = yield* CopilotSessionStateDirectory
   const now = yield* Clock.currentTimeMillis
-  const cutoff = maxAgeHours <= 0 ? Number.POSITIVE_INFINITY : now - maxAgeHours * 3_600_000
-  const results = yield* Effect.forEach(
-    roots,
-    root => scanUserDataRoot(root, cutoff),
-    { concurrency: 'unbounded' },
-  )
+  const cutoff = maxAgeHours <= 0 ? Number.NEGATIVE_INFINITY : now - maxAgeHours * 3_600_000
+  const [results, cli] = yield* Effect.all([
+    Effect.forEach(roots, root => scanUserDataRoot(root, cutoff), { concurrency: 'unbounded' }),
+    scanCopilotCliRoot(cliRoot, cutoff),
+  ], { concurrency: 'unbounded' })
   return {
-    locations: results.flatMap(result => result.locations),
-    rootsPresent: results.filter(result => result.present).length,
-    unreadable: results.reduce((total, result) => total + result.unreadable, 0),
+    locations: [...results.flatMap(result => result.locations), ...cli.locations],
+    rootsPresent: results.filter(result => result.present).length + (cli.present ? 1 : 0),
+    unreadable: results.reduce((total, result) => total + result.unreadable, 0) + cli.unreadable,
   } satisfies CopilotDiscovery
 })
 
@@ -246,7 +286,7 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
   const roots: RunNode[] = []
   const byKey = new Map<string, RunNode>()
   const pathByKey = new Map<string, string>()
-  const scanByKey = new Map<string, CopilotTranscriptScan>()
+  const scanByKey = new Map<string, CopilotSessionScan>()
   const cwdByKey = new Map<string, string>()
   for (const [id, item] of selected) {
     const key = `copilot:${id}`
@@ -301,6 +341,6 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
   } satisfies CopilotTree
 })
 
-export function copilotRunDiagnostics(scan: CopilotTranscriptScan) {
+export function copilotRunDiagnostics(scan: CopilotSessionScan) {
   return scan.diagnostics()
 }

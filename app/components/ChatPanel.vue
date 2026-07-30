@@ -12,6 +12,7 @@ import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
 const props = defineProps<{
   project: string
   sessionKey: string
+  hours: number
 }>()
 
 type ChatRow =
@@ -125,13 +126,14 @@ function errorMessage(error: unknown): string {
 async function poll(): Promise<void> {
   const project = props.project
   const key = props.sessionKey
+  const requestedHours = props.hours
   if (!project || !key || pollPending.value) return
   pollPending.value = true
   try {
     const response = await $fetch<ChatEventsResponse>(
-      `/api/chat?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${revision.value}`,
+      `/api/chat?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${revision.value}&hours=${requestedHours}`,
     )
-    if (props.project !== project || props.sessionKey !== key) return
+    if (props.project !== project || props.sessionKey !== key || props.hours !== requestedHours) return
     since.value = response.next
     revision.value = response.revision
     status.value = response.status
@@ -150,7 +152,7 @@ async function act(action: ChatAction): Promise<boolean> {
   actionPending.value = true
   requestError.value = ''
   try {
-    const response = await $fetch<{ status: ChatStatus }>('/api/chat', {
+    const response = await $fetch<{ status: ChatStatus }>(`/api/chat?hours=${props.hours}`, {
       method: 'POST',
       body: action,
     })
@@ -194,7 +196,7 @@ async function reset(): Promise<void> {
 }
 
 watch(
-  () => `${props.project}\0${props.sessionKey}`,
+  () => `${props.project}\0${props.sessionKey}\0${props.hours}`,
   () => {
     events.value = []
     since.value = 0

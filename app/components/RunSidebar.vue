@@ -17,6 +17,7 @@ const projectFilter = defineModel<string>('projectFilter', { required: true })
 const liveOnly = defineModel<boolean>('liveOnly', { required: true })
 const attentionOnly = defineModel<boolean>('attentionOnly', { required: true })
 const hideIdle = defineModel<boolean>('hideIdle', { required: true })
+const hours = defineModel<number>('hours', { required: true })
 const emit = defineEmits<{
   select: [project: string, key: string]
   collapse: []
@@ -33,7 +34,9 @@ const activeFilterCount = computed(() => [
   sourceFilter.value !== 'all',
   projectFilter.value !== 'all',
   liveOnly.value,
+  attentionOnly.value,
   hideIdle.value,
+  hours.value !== 168,
 ].filter(Boolean).length)
 const recentRoots = computed(() => props.projects
   .flatMap(project => project.roots.map(root => ({ project: project.id, root })))
@@ -44,6 +47,28 @@ const sourceOptions: Array<{ value: 'all' | 'claude' | 'codex' | 'copilot', labe
   { value: 'codex', label: 'Codex' },
   { value: 'copilot', label: 'Copilot' },
 ]
+const presetRangeOptions: Array<{ value: number, label: string }> = [
+  { value: 24, label: 'Last 24 hours' },
+  { value: 168, label: 'Last 7 days' },
+  { value: 720, label: 'Last 30 days' },
+  { value: 0, label: 'All time' },
+]
+const rangeOptions = computed(() => presetRangeOptions.some(option => option.value === hours.value)
+  ? presetRangeOptions
+  : [{ value: hours.value, label: `Last ${hours.value} hours` }, ...presetRangeOptions])
+const selectedRangeLabel = computed(() => rangeOptions.value.find(option => option.value === hours.value)?.label || 'selected range')
+const hasSessionsInRange = computed(() => props.allProjects.some(project => project.roots.length))
+const emptyDescription = computed(() => {
+  const range = selectedRangeLabel.value.toLowerCase()
+  if (sourceFilter.value === 'copilot') {
+    return hasSessionsInRange.value
+      ? `No Copilot chats match the current filters for ${range}.`
+      : `No Copilot chats were found for ${range}. Try a longer date range or confirm Copilot Chat has local history.`
+  }
+  return hasSessionsInRange.value
+    ? 'Try clearing one of the session filters.'
+    : `No local chats were found for ${range}. Try a longer date range.`
+})
 
 const projectSelectOptions = computed(() => [
   { label: 'All projects', value: 'all' },
@@ -229,6 +254,18 @@ function organizeBy(value: 'project' | 'list'): void {
             :search-input="{ placeholder: 'Find project…' }"
           />
         </label>
+        <label class="project-filter range-filter">
+          <span>Date range</span>
+          <USelectMenu
+            v-model="hours"
+            :items="rangeOptions"
+            value-key="value"
+            label-key="label"
+            size="xs"
+            aria-label="Filter by date range"
+            :search-input="false"
+          />
+        </label>
         <div class="filters">
           <UCheckbox v-model="liveOnly" class="toggle" label="Live only" />
           <UCheckbox v-model="hideIdle" class="toggle" label="Hide empty" />
@@ -281,7 +318,7 @@ function organizeBy(value: 'project' | 'list'): void {
             class="empty-sidebar"
             icon="i-lucide-search-x"
             title="No matching sessions"
-            description="Try clearing one of the session filters."
+            :description="emptyDescription"
             variant="naked"
           />
         </template>
@@ -299,6 +336,7 @@ function organizeBy(value: 'project' | 'list'): void {
             class="empty-sidebar"
             icon="i-lucide-search-x"
             title="No matching sessions"
+            :description="emptyDescription"
             variant="naked"
           />
         </template>

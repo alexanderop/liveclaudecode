@@ -330,6 +330,7 @@ html.panel-resizing * { cursor: col-resize !important; user-select: none !import
   color: var(--text-secondary);
   font-size: 12.5px;
 }
+.range-filter { grid-template-columns: 62px minmax(0, 1fr); }
 .filters { display: flex; gap: 13px; padding: 0 12px 7px; }
 .toggle { display: flex; align-items: center; gap: 5px; color: var(--text-secondary); cursor: pointer; font-size: 12.5px; user-select: none; }
 .source-statuses { display: grid; gap: 4px; padding: 0 9px 7px; }

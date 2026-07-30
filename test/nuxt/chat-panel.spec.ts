@@ -31,7 +31,7 @@ describe('ChatPanel', () => {
     vi.stubGlobal('$fetch', fetch)
 
     const component = await mountSuspended(ChatPanel, {
-      props: { project: '/repo', sessionKey: 'codex:session' },
+      props: { project: '/repo', sessionKey: 'codex:session', hours: 720 },
     })
     await flushPromises()
 
@@ -51,6 +51,7 @@ describe('ChatPanel', () => {
     await flushPromises()
 
     const post = fetch.mock.calls.find(([, options]) => options?.method === 'POST')
+    expect(post?.[0]).toBe('/api/chat?hours=720')
     expect(post?.[1]?.body).toEqual({
       action: 'send',
       project: '/repo',
@@ -59,6 +60,9 @@ describe('ChatPanel', () => {
       text: 'What should I change?',
     })
     expect(component.get('textarea').element).toHaveProperty('value', '')
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/chat?project=%2Frepo&key=codex%3Asession&since=0&revision=0&hours=720'),
+    )
 
     component.unmount()
   })

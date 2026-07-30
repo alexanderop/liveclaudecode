@@ -124,6 +124,7 @@ function sessionFetch(): ReturnType<typeof vi.fn> {
         projects: [{ id: '/workspace', name: 'workspace', roots: [root] }],
         sources: [],
         now: 0,
+        hours: 168,
       }
     }
     if (url.startsWith('/api/run')) return run

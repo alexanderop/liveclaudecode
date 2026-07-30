@@ -125,9 +125,9 @@ describe('run hierarchy', () => {
       )
     }))
 
-  it.effect('can exclude every run with the age filter', () =>
+  it.effect('uses zero hours to include all history', () =>
     buildTree(ROOT, 0).pipe(
-      Effect.map(built => assert.deepStrictEqual(built.roots, [])),
+      Effect.map(built => assert.deepStrictEqual(built.roots.map(root => root.key), [SESSION])),
       Effect.provide(TestLayer),
     ))
 

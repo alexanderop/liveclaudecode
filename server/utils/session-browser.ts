@@ -241,12 +241,17 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
         'copilot',
         0,
         0,
-        'VS Code Stable and Insiders storage unavailable',
+        'Copilot CLI and VS Code storage unavailable',
       ))
     } else {
-      const suffix = tree.duplicates
-        ? `; ${tree.duplicates} duplicate session${tree.duplicates === 1 ? '' : 's'} deduplicated`
-        : ''
+      const notes = [
+        tree.genericExcluded
+          ? `${tree.genericExcluded} non-Copilot chat session${tree.genericExcluded === 1 ? '' : 's'} excluded`
+          : '',
+        tree.duplicates
+          ? `${tree.duplicates} duplicate session${tree.duplicates === 1 ? '' : 's'} deduplicated`
+          : '',
+      ].filter(Boolean)
       const status = sourceStatus(
         'copilot',
         tree.roots.length,
@@ -255,8 +260,8 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
         tree.unreadable,
         'session file',
       )
-      statuses.push(suffix
-        ? { ...status, message: `${status.message}${suffix}`.replace(/^; /, '') }
+      statuses.push(notes.length
+        ? { ...status, message: [status.message, ...notes].filter(Boolean).join('; ') }
         : status)
     }
   } else {
@@ -360,6 +365,7 @@ export const listSessions = Effect.fn('listSessions')(function*(
     projects: catalog.projects,
     sources: catalog.sources,
     now: (yield* Clock.currentTimeMillis) / 1_000,
+    hours,
   }
 })
 
@@ -432,6 +438,7 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
       path: location.transcriptPath,
       application: location.node.sourceDetail.split(' · ')[0] || 'VS Code',
       workspace: location.projectId === UNASSIGNED_PROJECT ? '' : location.projectId,
+      format: /Copilot CLI/i.test(location.node.sourceDetail) ? 'cli' : 'vscode',
     })
     const node = { ...location.node, ...(yield* scan.stats) }
     const reset = revision !== scan.eventRevision || since > scan.events.length

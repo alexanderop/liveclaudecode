@@ -469,6 +469,7 @@ onUnmounted(() => {
         v-model:live-only="live.liveOnly.value"
         v-model:attention-only="live.attentionOnly.value"
         v-model:hide-idle="live.hideIdle.value"
+        v-model:hours="live.hours.value"
         :projects="live.visibleProjects.value"
         :all-projects="live.projects.value"
         :sources="live.sources.value"
@@ -678,6 +679,7 @@ onUnmounted(() => {
                   :key="sessionIdentity"
                   :project="live.selectedProject.value || ''"
                   :session-key="selectedSessionKey || ''"
+                  :hours="live.hours.value"
                 />
               </KeepAlive>
             </aside>

@@ -314,6 +314,7 @@ export interface TreeResponse {
   projects: ProjectRuns[]
   sources: SessionSourceStatus[]
   now: number
+  hours: number
 }
 
 export interface ProjectRuns {

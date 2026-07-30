@@ -70,6 +70,7 @@ describe('RunSidebar', () => {
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
+        hours: 168,
       },
     })
     const project = component.get('.project-row')
@@ -136,6 +137,7 @@ describe('RunSidebar', () => {
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
+        hours: 168,
       },
     })
 
@@ -173,6 +175,7 @@ describe('RunSidebar', () => {
         liveOnly: false,
         attentionOnly: false,
         hideIdle: true,
+        hours: 168,
       },
     })
 
@@ -205,5 +208,40 @@ describe('RunSidebar', () => {
     await component.setProps({ loading: false })
     expect(component.text()).not.toContain('Loading local sessions')
     expect(component.text()).toContain('No matching sessions')
+  })
+
+  it('selects a date range and explains empty Copilot results in that range', async () => {
+    const component = await mountSuspended(RunSidebar, {
+      global: { stubs: { UTooltip: { template: '<slot />' } } },
+      props: {
+        projects: [],
+        allProjects: [],
+        sources: [],
+        projectOptions: [],
+        loading: false,
+        selectedProject: null,
+        selectedKey: null,
+        query: '',
+        sourceFilter: 'copilot',
+        projectFilter: 'all',
+        liveOnly: false,
+        attentionOnly: false,
+        hideIdle: true,
+        hours: 24,
+      },
+    })
+
+    expect(component.text()).toContain('No Copilot chats were found for last 24 hours')
+    expect(component.text()).toContain('Try a longer date range')
+
+    await component.get('.sidebar-filter-toggle').trigger('click')
+    await component.get('[aria-label="Filter by date range"]').trigger('click')
+    const allTimeOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find(option => option.textContent?.includes('All time'))
+    expect(allTimeOption).toBeDefined()
+    allTimeOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await component.vm.$nextTick()
+
+    expect(component.emitted('update:hours')).toContainEqual([0])
   })
 })

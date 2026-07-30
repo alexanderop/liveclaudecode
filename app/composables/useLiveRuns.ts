@@ -10,6 +10,7 @@ import type {
 } from '#shared/types/run'
 
 export type FeedDensity = 'compact' | 'normal' | 'raw'
+export type SessionRangeHours = number
 
 function descendants(node: RunNode, output: RunNode[] = []): RunNode[] {
   output.push(node)
@@ -50,11 +51,14 @@ export function useLiveRuns() {
   const followOutput = ref(true)
   const errorsOnly = ref(false)
   const density = ref<FeedDensity>('normal')
+  const hours = ref<SessionRangeHours>(168)
   let treeTimer: ReturnType<typeof setInterval> | undefined
   let eventTimer: ReturnType<typeof setInterval> | undefined
   let runTimer: ReturnType<typeof setInterval> | undefined
   let sessionEventTimer: ReturnType<typeof setInterval> | undefined
   let treePending = false
+  let treeReloadQueued = false
+  let rangeInitialized = false
   let eventPendingKey: string | null = null
   let inspectedEventPendingKey: string | null = null
   let runPendingKey: string | null = null
@@ -116,13 +120,25 @@ export function useLiveRuns() {
   }
 
   async function loadTree(): Promise<void> {
-    if (treePending) return
+    if (treePending) {
+      treeReloadQueued = true
+      return
+    }
     treePending = true
+    const requestedHours = rangeInitialized ? hours.value : null
     try {
-      const response = await request<TreeResponse>('/api/tree')
+      const response = await request<TreeResponse>(requestedHours === null
+        ? '/api/tree'
+        : `/api/tree?hours=${requestedHours}`)
+      if (requestedHours !== null && requestedHours !== hours.value) return
       if (!response) {
         loading.value = false
         return
+      }
+      if (!rangeInitialized) {
+        hours.value = response.hours
+        await nextTick()
+        rangeInitialized = true
       }
       projects.value = response.projects
       sources.value = response.sources
@@ -141,6 +157,10 @@ export function useLiveRuns() {
       }
     } finally {
       treePending = false
+      if (treeReloadQueued) {
+        treeReloadQueued = false
+        void loadTree()
+      }
     }
   }
 
@@ -148,12 +168,13 @@ export function useLiveRuns() {
     const key = selectedKey.value
     const project = selectedProject.value
     if (!key || !project) return
-    const requestKey = `${project}\0${key}`
+    const requestedHours = hours.value
+    const requestKey = `${project}\0${key}\0${requestedHours}`
     if (runPendingKey === requestKey) return
     runPendingKey = requestKey
     try {
-      const response = await request<RunResponse>(`/api/run?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}`)
-      if (response && selectedKey.value === key && selectedProject.value === project) run.value = response
+      const response = await request<RunResponse>(`/api/run?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&hours=${requestedHours}`)
+      if (response && selectedKey.value === key && selectedProject.value === project && hours.value === requestedHours) run.value = response
     } finally {
       if (runPendingKey === requestKey) runPendingKey = null
     }
@@ -163,14 +184,15 @@ export function useLiveRuns() {
     const key = selectedKey.value
     const project = selectedProject.value
     if (!key || !project) return
-    const requestKey = `${project}\0${key}`
+    const requestedHours = hours.value
+    const requestKey = `${project}\0${key}\0${requestedHours}`
     if (eventPendingKey === requestKey) return
     eventPendingKey = requestKey
     try {
       const response = await request<EventsResponse>(
-        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${eventRevision.value}`,
+        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${eventRevision.value}&hours=${requestedHours}`,
       )
-      if (!response || selectedKey.value !== key || selectedProject.value !== project) return
+      if (!response || selectedKey.value !== key || selectedProject.value !== project || hours.value !== requestedHours) return
       since.value = response.next
       eventRevision.value = response.revision
       if (response.reset) events.value = [...response.events]
@@ -184,14 +206,15 @@ export function useLiveRuns() {
     const key = selectedRoot.value?.key || selectedKey.value
     const project = selectedProject.value
     if (!key || !project) return
-    const requestKey = `${project}\0${key}`
+    const requestedHours = hours.value
+    const requestKey = `${project}\0${key}\0${requestedHours}`
     if (sessionEventPendingKey === requestKey) return
     sessionEventPendingKey = requestKey
     try {
       const response = await request<SessionEventsResponse>(
-        `/api/session-events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&limit=800`,
+        `/api/session-events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&limit=800&hours=${requestedHours}`,
       )
-      if (!response || (selectedRoot.value?.key || selectedKey.value) !== key || selectedProject.value !== project) return
+      if (!response || (selectedRoot.value?.key || selectedKey.value) !== key || selectedProject.value !== project || hours.value !== requestedHours) return
       sessionEvents.value = response.events
       sessionEventsTruncated.value = response.truncated
     } finally {
@@ -203,14 +226,15 @@ export function useLiveRuns() {
     const key = inspectedKey.value
     const project = selectedProject.value
     if (!key || !project) return
-    const requestKey = `${project}\0${key}`
+    const requestedHours = hours.value
+    const requestKey = `${project}\0${key}\0${requestedHours}`
     if (inspectedEventPendingKey === requestKey) return
     inspectedEventPendingKey = requestKey
     try {
       const response = await request<EventsResponse>(
-        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${inspectedSince.value}&revision=${inspectedEventRevision.value}`,
+        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${inspectedSince.value}&revision=${inspectedEventRevision.value}&hours=${requestedHours}`,
       )
-      if (!response || inspectedKey.value !== key || selectedProject.value !== project) return
+      if (!response || inspectedKey.value !== key || selectedProject.value !== project || hours.value !== requestedHours) return
       inspectedSince.value = response.next
       inspectedEventRevision.value = response.revision
       if (response.reset) inspectedEvents.value = [...response.events]
@@ -257,6 +281,20 @@ export function useLiveRuns() {
     await Promise.all([pollEvents(), loadRun(), pollSessionEvents()])
   }
 
+  watch(hours, () => {
+    if (!rangeInitialized) return
+    loading.value = true
+    projects.value = []
+    selectedProject.value = null
+    selectedKey.value = null
+    run.value = null
+    events.value = []
+    sessionEvents.value = []
+    sessionEventsTruncated.value = false
+    clearInspection()
+    void loadTree()
+  })
+
   onMounted(() => {
     void loadTree()
     treeTimer = setInterval(loadTree, 4_000)
@@ -302,6 +340,7 @@ export function useLiveRuns() {
     followOutput,
     errorsOnly,
     density,
+    hours,
     select,
     inspect,
     clearInspection,

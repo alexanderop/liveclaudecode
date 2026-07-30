@@ -5,6 +5,7 @@ import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import { TranscriptScan } from './transcript'
 import { CodexTranscriptScan } from './codex-transcript'
+import { CopilotCliTranscriptScan } from './copilot-cli-transcript'
 import { CopilotTranscriptScan } from './copilot-transcript'
 import type { RunNode, SessionSource } from '#shared/types/run'
 
@@ -42,6 +43,15 @@ export const VsCodeUserDataDirectories = Context.Reference<ReadonlyArray<string>
           join(homedir(), 'Library', 'Application Support', 'Code', 'User'),
           join(homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User'),
         ],
+  },
+)
+
+/** Root of GitHub Copilot CLI's append-only local session event logs. */
+export const CopilotSessionStateDirectory = Context.Reference<string>(
+  'lcc/CopilotSessionStateDirectory',
+  {
+    defaultValue: () => process.env.LCC_COPILOT_SESSIONS
+      || join(homedir(), '.copilot', 'session-state'),
   },
 )
 
@@ -146,28 +156,29 @@ export class CodexScanCache extends Context.Service<CodexScanCache, {
   )
 }
 
-/** Incrementally replayed VS Code chat logs, keyed by the selected session path. */
+export type CopilotSessionScan = CopilotTranscriptScan | CopilotCliTranscriptScan
+
+/** Incrementally replayed Copilot CLI and VS Code logs, keyed by session path. */
 export class CopilotScanCache extends Context.Service<CopilotScanCache, {
   readonly get: (location: {
     path: string
     application: string
     workspace: string
-  }) => Effect.Effect<CopilotTranscriptScan, PlatformError.PlatformError, FileSystem.FileSystem>
-  readonly peek: (path: string) => Effect.Effect<CopilotTranscriptScan | undefined>
+    format?: 'vscode' | 'cli'
+  }) => Effect.Effect<CopilotSessionScan, PlatformError.PlatformError, FileSystem.FileSystem>
+  readonly peek: (path: string) => Effect.Effect<CopilotSessionScan | undefined>
 }>()('lcc/CopilotScanCache') {
   static readonly layer = Layer.effect(
     CopilotScanCache,
     Effect.sync(() => {
-      const scans = new Map<string, CopilotTranscriptScan>()
+      const scans = new Map<string, CopilotSessionScan>()
       return CopilotScanCache.of({
         get: Effect.fn('CopilotScanCache.get')(function*(location) {
           let scan = scans.get(location.path)
           if (!scan) {
-            scan = new CopilotTranscriptScan(
-              location.path,
-              location.application,
-              location.workspace,
-            )
+            scan = location.format === 'cli'
+              ? new CopilotCliTranscriptScan(location.path, location.application, location.workspace)
+              : new CopilotTranscriptScan(location.path, location.application, location.workspace)
             scans.set(location.path, scan)
           }
           return yield* scan.refresh

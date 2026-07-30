@@ -36,6 +36,7 @@ describe('accessibility', () => {
       projects: [],
       sources: [],
       now: 0,
+      hours: 168,
     }))
     const component = await mountSuspended(IndexPage, {
       attachTo: document.body,
@@ -63,6 +64,7 @@ describe('accessibility', () => {
           projects: [{ id: '/repo', name: 'repo', roots: [root] }],
           sources: [],
           now: 0,
+          hours: 168,
         }
       }
       if (url.startsWith('/api/run')) return run

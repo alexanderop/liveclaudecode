@@ -1,7 +1,7 @@
 # liveclaudecode
 
-A local, live Nuxt dashboard for Claude Code, OpenAI Codex, and VS Code GitHub
-Copilot Chat sessions, including subagents providers explicitly record. It
+A local, live Nuxt dashboard for Claude Code, OpenAI Codex, GitHub Copilot CLI,
+and VS Code GitHub Copilot Chat sessions, including subagents providers explicitly record. It
 reads the providers' local JSONL transcripts directly from disk and combines
 them into one project-oriented browser.
 
@@ -61,6 +61,7 @@ The storage roots can be overridden for tests or nonstandard installations:
 ```bash
 LCC_CODEX_SESSIONS=/path/to/codex/sessions \
 LCC_CLAUDE_PROJECTS=/path/to/claude/projects \
+LCC_COPILOT_SESSIONS=/path/to/copilot/session-state \
 LCC_VSCODE_USER_DATA='/path/to/Code/User:/path/to/Code - Insiders/User' \
 ./bin/liveclaudecode
 ```
@@ -144,8 +145,15 @@ Projectless sessions are retained in an **Unassigned** group. Duplicate Codex
 rollouts with the same session id are deduplicated by newest file modification
 time.
 
-VS Code GitHub Copilot Chat sessions are read from VS Code-owned version-3
-snapshot/delta logs under Stable, Insiders, and profile storage:
+GitHub Copilot CLI sessions are read from their append-only local event logs:
+
+```text
+~/.copilot/session-state/<session-id>/events.jsonl
+```
+
+The working directory and Git metadata come from the recorded `session.start`
+event. VS Code GitHub Copilot Chat sessions are also read from VS Code-owned
+version-3 snapshot/delta logs under Stable, Insiders, and profile storage:
 
 ```text
 ~/Library/Application Support/Code/User/workspaceStorage/*/chatSessions/*.jsonl
@@ -155,8 +163,10 @@ snapshot/delta logs under Stable, Insiders, and profile storage:
 
 Workspace association comes from `workspace.json` or a recorded working
 directory. Empty-window and unidentified sessions remain under **Unassigned**.
-Only sessions with explicit GitHub Copilot responder or participant metadata
-are included; generic VS Code chat and derivative edit/resource stores are not.
+Only VS Code sessions with explicit GitHub Copilot responder or participant
+metadata are included; generic VS Code chat and derivative edit/resource stores
+are not. The sidebar date-range filter can switch between 24 hours, 7 days,
+30 days, and all locally retained history without restarting the server.
 
 The complete local-storage investigation, evidence, schema notes, and supported
 versus unsupported sources are in
@@ -185,12 +195,12 @@ test/
   fixtures/         synthetic Claude, Codex, and Copilot transcript builders
 ```
 
-`TranscriptScan`, `CodexTranscriptScan`, and `CopilotTranscriptScan` cache each parsed file and ingest only
+The provider transcript scans cache each parsed file and ingest only
 complete new lines. A trailing line without a newline is considered an
 in-progress append. The unified server catalog loads each provider independently,
 so missing or malformed storage for one provider is reported without hiding the
 other providers' sessions. Copilot event polling refreshes only the selected
-session file rather than rescanning every VS Code workspace.
+CLI or VS Code session file rather than rescanning every storage root.
 
 The browser polls three read-only endpoints:
 

@@ -54,6 +54,12 @@ const TestLayer = Layer.mergeAll(
 )
 
 describe('Codex rollout hierarchy', () => {
+  it.effect('uses zero hours to include all history', () =>
+    Effect.gen(function*() {
+      const discovery = yield* collectCodexRollouts(0)
+      assert.strictEqual(discovery.paths.length, 4)
+    }).pipe(Effect.provide(TestLayer)))
+
   it.effect('deduplicates IDs, links subagents, retains projectless roots, and sorts by activity', () =>
     Effect.gen(function*() {
       const built = yield* buildCodexTree(999_999)

@@ -2,11 +2,11 @@ import type { H3Event } from 'h3'
 import { getQuery } from 'h3'
 import { Effect } from 'effect'
 import { resolveProjectDirectories, type ProjectDirectory } from './project'
+import { resolveHours } from './request-hours'
 import { UnknownProject } from './services'
 
 function hoursFor(event: H3Event): number {
-  const hours = Number(useRuntimeConfig(event).lcc.hours)
-  return Number.isFinite(hours) && hours >= 0 ? hours : 168
+  return resolveHours(useRuntimeConfig(event).lcc.hours, getQuery(event).hours)
 }
 
 export function browserOptionsFor(event: H3Event): { project: string, hours: number } {

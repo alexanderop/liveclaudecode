@@ -25,15 +25,16 @@ applications continued appending records while the investigation ran.
 | Claude desktop Claude Code session metadata | `/Users/alexanderopalic/Library/Application Support/Claude/claude-code-sessions` | Not a transcript source | Small JSON files contain desktop/session settings and pointers such as `cliSessionId`; they do not contain complete conversation events and may describe the same Claude Code sessions. |
 | ChatGPT/Codex Chromium profile data | `/Users/alexanderopalic/Library/Application Support/Codex` | Not a conversation source | The profile contains browser history, cache, cookies, Local/Session Storage, and LevelDB data, but no complete, stable, conversation-specific local store was found. Reading it would also cross credential and cookie boundaries. |
 | Ordinary ChatGPT conversations | No complete local store found | Unsupported | The installed desktop bundle is `com.openai.codex` and its native Codex app server writes supported Codex tasks to `~/.codex`. Ordinary ChatGPT chats appear cloud-backed or opportunistically cached in browser storage, not completely and stably stored in a safe local format. |
+| GitHub Copilot CLI sessions | `/Users/alexanderopalic/.copilot/session-state/*/events.jsonl` | Supported | Copilot CLI writes append-only JSONL with session context, user/assistant messages, tool lifecycle events, model changes, and turn boundaries. The `session.start` event records the session ID and working directory. |
 | VS Code-owned local chat session logs | `/Users/alexanderopalic/Library/Application Support/Code/User/{workspaceStorage,globalStorage}` and the corresponding `Code - Insiders` root | Supported only when Copilot metadata is explicit | VS Code writes complete version-3 chat snapshots plus append-only deltas to per-session JSONL. The installed VS Code source contains the replay algorithm. Session responder/participant metadata can identify GitHub Copilot without reading credentials. |
 | VS Code `state.vscdb` chat index | Per-workspace `state.vscdb` under Stable and Insiders `workspaceStorage` | Index only; not displayed separately | `chat.ChatSessionStore.index` indexes the same JSONL sessions. It is mutable SQLite state and would duplicate canonical JSONL. |
 | VS Code `chatEditingSessions` and extension resource folders | Per-workspace `chatEditingSessions` and `GitHub.copilot-chat` directories | Unsupported as conversation sources | These are derivative edit snapshots, working contents, or referenced resources. Reading them is unnecessary for the conversation and could expose unrelated file contents. |
 | GitHub Copilot extension global storage | Stable/Insiders `User/globalStorage/github.copilot-chat` | Unsupported as a conversation source | Observed files are embeddings, agent definitions, CLI shims/metadata, debug helpers, and diff indexes rather than canonical VS Code chat conversations. |
 
-The integration therefore treats Claude Code, Codex rollouts, and explicitly
-identified VS Code GitHub Copilot Chat logs as three provider sources. Codex CLI
-and desktop are producer variants of one source,
-not separate entries.
+The integration therefore treats Claude Code, Codex rollouts, and GitHub
+Copilot logs as three provider sources. Copilot CLI and explicitly identified
+VS Code GitHub Copilot Chat logs are producer variants of the Copilot source;
+Codex CLI and desktop are producer variants of the Codex source.
 
 ## Claude Code
 
@@ -279,6 +280,21 @@ evidence established that ordinary ChatGPT cloud conversations are completely
 stored locally. They are therefore explicitly excluded; the product must not
 claim ordinary ChatGPT history support.
 
+## GitHub Copilot CLI
+
+Copilot CLI writes one append-only event log per session:
+
+```text
+~/.copilot/session-state/<session-id>/events.jsonl
+```
+
+Known events include `session.start`, `user.message`, `assistant.message`,
+`tool.execution_start`, `tool.execution_complete`, model changes, and turn
+boundaries. The adapter reads only complete JSONL lines, decodes external
+records with Effect Schema, tolerates unknown event types, and derives project
+association from `session.start.data.context.cwd`. It does not need to read
+credentials or contact GitHub.
+
 ## VS Code GitHub Copilot Chat
 
 ### Locations and application variants inspected
@@ -474,13 +490,14 @@ health reporting limit the impact of that instability.
 
 ## Supportability conclusion
 
-There is a safe, reliable path for the requested unified browser using three
+There is a safe, reliable path for the requested unified browser using these
 canonical adapters:
 
 1. Claude Code project JSONL, retaining the existing rich run model.
 2. Codex date-partitioned rollout JSONL, shared by CLI, desktop, exec,
    automations, and subagents.
-3. VS Code-owned local chat JSONL, restricted to sessions with explicit GitHub
+3. Copilot CLI append-only session event JSONL.
+4. VS Code-owned local chat JSONL, restricted to sessions with explicit GitHub
    Copilot responder or participant metadata.
 
 The adapters must deduplicate each logical session by provider plus session ID.

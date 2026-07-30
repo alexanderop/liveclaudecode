@@ -18,6 +18,7 @@ const Harness = defineComponent({
       :data-events="live.events.value.map(event => event.body).join('|')"
       :data-inspected="live.inspectedEvents.value.map(event => event.body).join('|')"
       :data-inspected-loading="String(live.inspectedEventsLoading.value)"
+      :data-hours="String(live.hours.value)"
     />
   `,
 })
@@ -68,11 +69,12 @@ function node(overrides: Partial<RunNode>): RunNode {
   }
 }
 
-function tree(root: RunNode): TreeResponse {
+function tree(root: RunNode, hours = 168): TreeResponse {
   return {
     projects: [{ id: '/repo', name: 'repo', roots: [root] }],
     sources: [],
     now: 0,
+    hours,
   }
 }
 
@@ -140,10 +142,10 @@ describe('useLiveRuns', () => {
       'data-events': 'Working',
     })
     expect(fetch).toHaveBeenCalledWith(
-      '/api/events?project=%2Frepo&key=session%2Fworker&since=0&revision=0',
+      '/api/events?project=%2Frepo&key=session%2Fworker&since=0&revision=0&hours=168',
     )
     expect(fetch).toHaveBeenCalledWith(
-      '/api/run?project=%2Frepo&key=session%2Fworker',
+      '/api/run?project=%2Frepo&key=session%2Fworker&hours=168',
     )
 
     component.unmount()
@@ -176,7 +178,7 @@ describe('useLiveRuns', () => {
 
     expect(component.attributes('data-events')).toBe('Rebuilt event')
     expect(fetch).toHaveBeenCalledWith(
-      '/api/events?project=%2Frepo&key=session&since=1&revision=1',
+      '/api/events?project=%2Frepo&key=session&since=1&revision=1&hours=168',
     )
 
     component.unmount()
@@ -253,6 +255,57 @@ describe('useLiveRuns', () => {
       'data-offline': 'false',
       'data-key': root.key,
     })
+
+    component.unmount()
+  })
+
+  it('reloads every session endpoint when the date range changes, including all time', async () => {
+    const root = node({})
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree' || url.startsWith('/api/tree?hours=')) return tree(root)
+      if (url.startsWith('/api/run')) return runResponse({ root, node: root })
+      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
+      if (url.startsWith('/api/events')) return events(root.key, '')
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    expect(component.attributes('data-hours')).toBe('168')
+
+    fetch.mockClear()
+    component.vm.live.hours.value = 0
+    await flushPromises()
+
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(expect.arrayContaining([
+      '/api/tree?hours=0',
+      '/api/run?project=%2Frepo&key=session&hours=0',
+      '/api/events?project=%2Frepo&key=session&since=0&revision=0&hours=0',
+      '/api/session-events?project=%2Frepo&key=session&limit=800&hours=0',
+    ]))
+    expect(component.attributes('data-hours')).toBe('0')
+
+    component.unmount()
+  })
+
+  it('preserves a custom launch-time range until the user changes it', async () => {
+    const root = node({})
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree') return tree(root, 3)
+      if (url.startsWith('/api/run')) return runResponse({ root, node: root })
+      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
+      if (url.startsWith('/api/events')) return events(root.key, '')
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+
+    expect(component.attributes('data-hours')).toBe('3')
+    expect(fetch).toHaveBeenCalledWith('/api/run?project=%2Frepo&key=session&hours=3')
+    expect(fetch).not.toHaveBeenCalledWith('/api/tree?hours=168')
 
     component.unmount()
   })

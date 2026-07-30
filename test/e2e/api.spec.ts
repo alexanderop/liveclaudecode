@@ -17,6 +17,7 @@ const COPILOT_SESSION = '33333333-3333-4333-8333-333333333333'
 const directory = mkdtempSync(join(tmpdir(), 'liveclaudecode-api-'))
 const codexDirectory = mkdtempSync(join(tmpdir(), 'liveclaudecode-codex-api-'))
 const vscodeDirectory = mkdtempSync(join(tmpdir(), 'liveclaudecode-vscode-api-'))
+const copilotCliDirectory = mkdtempSync(join(tmpdir(), 'liveclaudecode-copilot-cli-api-'))
 const codexDay = join(codexDirectory, '2026', '07', '26')
 const codexRootPath = join(codexDay, `rollout-2026-07-26T08-00-00-${CODEX_SESSION}.jsonl`)
 const copilotRootPath = join(
@@ -111,6 +112,7 @@ copilot.writeLog(copilotRootPath, [
 vi.stubEnv('LCC_PROJECT', directory)
 vi.stubEnv('LCC_CODEX_SESSIONS', codexDirectory)
 vi.stubEnv('LCC_VSCODE_USER_DATA', vscodeDirectory)
+vi.stubEnv('LCC_COPILOT_SESSIONS', copilotCliDirectory)
 vi.stubEnv('LCC_HOURS', '99999')
 
 function sourceSnapshot(root: string) {
@@ -144,13 +146,14 @@ describe('read-only API', async () => {
     rmSync(directory, { recursive: true, force: true })
     rmSync(codexDirectory, { recursive: true, force: true })
     rmSync(vscodeDirectory, { recursive: true, force: true })
+    rmSync(copilotCliDirectory, { recursive: true, force: true })
   })
 
   it('serves the dashboard shell with its document language and primary navigation', async () => {
     const html = await $fetch<string>('/')
 
     expect(html).toMatch(/<html\s+lang="en"/)
-    expect(html).toContain('<title>Claude + Codex Sessions — Live</title>')
+    expect(html).toContain('<title>Claude + Codex + Copilot Sessions — Live</title>')
     expect(html).toContain('<main class="main-content">')
     expect(html).toContain('aria-label="Overview workspace"')
     expect(html).toContain('aria-label="Open a session view"')

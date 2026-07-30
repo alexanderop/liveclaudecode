@@ -6,6 +6,7 @@ import {
 } from '#server/utils/copilot-runs'
 import {
   CopilotScanCache,
+  CopilotSessionStateDirectory,
   VsCodeUserDataDirectories,
 } from '#server/utils/services'
 import * as fixture from '../fixtures/copilot'
@@ -13,6 +14,7 @@ import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
 
 const STABLE = '/Library/Application Support/Code/User'
 const INSIDERS = '/Library/Application Support/Code - Insiders/User'
+const CLI = '/copilot/session-state'
 
 function session(root: string, workspace: string, id: string): string {
   return `${root}/workspaceStorage/${workspace}/chatSessions/${id}.jsonl`
@@ -21,12 +23,75 @@ function session(root: string, workspace: string, id: string): string {
 function layer(tree: FakeTree, denied: ReadonlyArray<string> = []) {
   return Layer.mergeAll(
     CopilotScanCache.layer,
+    Layer.succeed(CopilotSessionStateDirectory)(CLI),
     Layer.succeed(VsCodeUserDataDirectories)([STABLE, INSIDERS]),
     testFileSystem(tree, { denied }),
   )
 }
 
 describe('VS Code Copilot discovery', () => {
+  it.effect('discovers current Copilot CLI session event logs', () =>
+    Effect.gen(function*() {
+      const built = yield* buildCopilotTree(0)
+      assert.strictEqual(built.rootsPresent, 1)
+      assert.strictEqual(built.roots.length, 1)
+      assert.strictEqual(built.roots[0]?.key, 'copilot:cli-session')
+      assert.strictEqual(built.roots[0]?.sourceDetail, 'Copilot CLI')
+      assert.strictEqual(built.cwdByKey.get('copilot:cli-session'), '/repo')
+    }).pipe(Effect.provide(layer({
+      [`${CLI}/cli-session/events.jsonl`]: [
+        JSON.stringify({
+          id: 'event-1',
+          timestamp: '2026-07-30T10:00:00.000Z',
+          type: 'session.start',
+          data: {
+            sessionId: 'cli-session',
+            version: 1,
+            producer: 'copilot-agent',
+            copilotVersion: '1.0.75',
+            startTime: '2026-07-30T10:00:00.000Z',
+            context: { cwd: '/repo', gitRoot: '/repo', branch: 'main' },
+          },
+        }),
+        JSON.stringify({
+          id: 'event-2',
+          timestamp: '2026-07-30T10:00:01.000Z',
+          type: 'user.message',
+          data: { content: 'Inspect this repository' },
+        }),
+        JSON.stringify({
+          id: 'event-3',
+          timestamp: '2026-07-30T10:00:02.000Z',
+          type: 'assistant.message',
+          data: { content: 'Done.', model: 'gpt-5', outputTokens: 4 },
+        }),
+        JSON.stringify({
+          id: 'event-4',
+          timestamp: '2026-07-30T10:00:03.000Z',
+          type: 'assistant.turn_end',
+          data: { turnId: 'turn-1' },
+        }),
+        '',
+      ].join('\n'),
+    }))))
+
+  it.effect('uses zero hours to include all history', () =>
+    Effect.gen(function*() {
+      const discovery = yield* collectCopilotSessions(0)
+      assert.strictEqual(discovery.locations.length, 3)
+    }).pipe(Effect.provide(layer({
+      [`${STABLE}/workspaceStorage/stable-workspace/workspace.json`]: JSON.stringify({ folder: 'file:///repo' }),
+      [session(STABLE, 'stable-workspace', 'stable')]: { mtime: 1, content: fixture.log([
+        fixture.initial(fixture.snapshot({ id: 'stable' })),
+      ]) },
+      [session(INSIDERS, 'insiders-workspace', 'insiders')]: { mtime: 2, content: fixture.log([
+        fixture.initial(fixture.snapshot({ id: 'insiders' })),
+      ]) },
+      [`${INSIDERS}/globalStorage/emptyWindowChatSessions/unassigned.jsonl`]: { mtime: 3, content: fixture.log([
+        fixture.initial(fixture.snapshot({ id: 'unassigned' })),
+      ]) },
+    }))))
+
   it.effect('discovers Stable, Insiders, profiles, and workspace associations', () =>
     Effect.gen(function*() {
       const discovery = yield* collectCopilotSessions(999_999)

@@ -56,11 +56,12 @@ const childDirectories = Effect.fn('childDirectories')(function*(directory: stri
 })
 
 export const collectCodexRollouts = Effect.fn('collectCodexRollouts')(function*(maxAgeHours: number) {
-  if (maxAgeHours <= 0) return { paths: [], unreadable: 0 } satisfies CodexRolloutDiscovery
   const fs = yield* FileSystem.FileSystem
   const root = yield* CodexSessionsDirectory
   const now = yield* Clock.currentTimeMillis
-  const cutoff = now - maxAgeHours * 3_600_000
+  const cutoff = maxAgeHours <= 0
+    ? Number.NEGATIVE_INFINITY
+    : now - maxAgeHours * 3_600_000
 
   const years = yield* childDirectories(root)
   const months = (yield* Effect.forEach(years, childDirectories, { concurrency: 'unbounded' })).flat()

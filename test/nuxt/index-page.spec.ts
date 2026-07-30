@@ -11,7 +11,7 @@ describe('session view controls', () => {
   it('exposes and updates the selected event density', async () => {
     const root = runNode({ subErrors: 0, errors: 0 })
     vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
-      if (url === '/api/tree') return { projects: [{ id: '/repo', name: 'repo', roots: [root] }], sources: [], now: 0 }
+      if (url === '/api/tree') return { projects: [{ id: '/repo', name: 'repo', roots: [root] }], sources: [], now: 0, hours: 168 }
       if (url.startsWith('/api/run')) return runResponse({ root, node: root })
       if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
       return { key: root.key, events: [], next: 0, revision: 1, reset: false, node: root }

@@ -91,10 +91,11 @@ export const collect = Effect.fn('collect')(function*(
   projectDirectory: string,
   maxAgeHours: number,
 ) {
-  if (maxAgeHours <= 0) return []
   const fs = yield* FileSystem.FileSystem
   const now = yield* Clock.currentTimeMillis
-  const cutoff = now - maxAgeHours * 3_600_000
+  const cutoff = maxAgeHours <= 0
+    ? Number.NEGATIVE_INFINITY
+    : now - maxAgeHours * 3_600_000
   const names = (yield* fs.readDirectory(projectDirectory).pipe(
     Effect.catchIf(
       error => error.reason._tag === 'NotFound',
