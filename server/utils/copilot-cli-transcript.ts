@@ -20,7 +20,7 @@ import type {
   TranscriptStats,
 } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { clip, shortPath } from './transcript'
+import { clip, shortPath } from './transcript-content'
 
 interface ToolRecord {
   name: string

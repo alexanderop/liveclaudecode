@@ -22,7 +22,7 @@ import type {
   TranscriptEvent,
   TranscriptStats,
 } from '#shared/types/run'
-import { clip, shortPath } from './transcript'
+import { clip, shortPath } from './transcript-content'
 
 type JsonContainer = Record<PropertyKey, unknown>
 

@@ -31,12 +31,12 @@ import type {
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import {
   clip,
-  consumeNewRecords,
   findMilestones,
   resultText,
   shortPath,
   toolSummary,
-} from './transcript'
+} from './transcript-content'
+import { consumeNewRecords } from './incremental-jsonl'
 
 interface CodexToolRecord {
   name: string

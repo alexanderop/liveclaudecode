@@ -18,7 +18,8 @@ import type {
   TimelineLane,
   Usage,
 } from '#shared/types/run'
-import { plainText, readHead } from './transcript'
+import { readHead } from './incremental-jsonl'
+import { plainText } from './transcript-content'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 /**

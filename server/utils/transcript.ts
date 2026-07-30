@@ -1,6 +1,15 @@
-import { Clock, Effect, Option, Predicate, Stream } from 'effect'
+import { Clock, Effect, Predicate } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
+import { consumeNewRecords } from './incremental-jsonl'
+import {
+  clip,
+  commandOk,
+  findMilestones,
+  resultText,
+  shortPath,
+  toolSummary,
+} from './transcript-content'
 import {
   parseClaudeAssistantBlock,
   parseClaudeRecord,
@@ -34,7 +43,6 @@ import type {
   Usage,
 } from '#shared/types/run'
 
-export const MAX_CHARS = 8_000
 export const LIVE_WINDOW = 45
 
 export const EDIT_TOOLS = new Set([
@@ -61,140 +69,6 @@ interface MutableFileChange {
   tools: string[]
   lastTs: Timestamp
 }
-
-const TOOL_SUMMARY_KEYS = [
-  'command',
-  'file_path',
-  'pattern',
-  'path',
-  'description',
-  'prompt',
-  'query',
-  'url',
-  'skill',
-  'notebook_path',
-  'old_string',
-]
-
-const PHASE_PATTERNS = [
-  /^\s{0,3}(?:[-*]\s*)?(?:#{1,4}\s*)?(?:\*\*)?\s*((?:Wave|Phase|Slice|Step|Round|Stage)\s+[\w\d.]+[^\n*]{0,70})/gim,
-  /^\s{0,3}\*\*([^\n*]{4,70})\*\*:?\s*$/gm,
-  /^\s{0,3}#{1,4}\s+([^\n]{4,70})$/gm,
-]
-
-const FAIL_RE = /\b([1-9]\d* failed|FAIL\b(?!\s+0\b)|failing|error TS\d+|Error:|✗|✘|command not found|exit code [1-9]|Test Files\s+[1-9]\d* failed)/i
-const PASS_RE = /\b(passed|✓|PASS\b|0 problems|no issues|success)/i
-
-const utf8 = new TextDecoder()
-
-function bytesOf(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
-  return chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks)
-}
-
-interface AppendedLines {
-  lines: string[]
-  nextByte: number
-}
-
-/**
- * Read the complete lines that start at byte `fromByte`, leaving a trailing
- * partial line for a later read. `nextByte` is the offset just past the last
- * newline consumed, so the next call picks up exactly where this one stopped.
- */
-const readCompleteLines = Effect.fn('readCompleteLines')(function*(
-  path: string,
-  fromByte: number,
-) {
-  const fs = yield* FileSystem.FileSystem
-  const bytes = bytesOf(yield* Stream.runCollect(fs.stream(path, { offset: fromByte })))
-  const lastNewline = bytes.lastIndexOf(0x0A)
-  if (lastNewline < 0) return { lines: [], nextByte: fromByte } satisfies AppendedLines
-  return {
-    lines: utf8.decode(bytes.subarray(0, lastNewline)).split('\n'),
-    nextByte: fromByte + lastNewline + 1,
-  } satisfies AppendedLines
-})
-
-/** Read at most the first `maxBytes` of a file as text. */
-export const readHead = Effect.fn('readHead')(function*(path: string, maxBytes: number) {
-  const fs = yield* FileSystem.FileSystem
-  return utf8.decode(bytesOf(yield* Stream.runCollect(fs.stream(path, { bytesToRead: maxBytes }))))
-})
-
-/** The bookkeeping an incremental JSONL scan carries between refreshes. */
-export interface IncrementalScanState {
-  line: number
-  malformed: number
-  mtime: number
-  size: number
-  bytesConsumed: number
-  lastLoadedMtime: number
-  lastLoadedSize: number
-}
-
-/**
- * Advance an incremental JSONL scan and return the newly complete records as
- * `[absolute line index, parsed JSON]` pairs.
- *
- * A missing file is not an error — scans are polled while the writer is still
- * creating files. The file is stat'd first so an unchanged one costs no read,
- * and an appended one is read only from the last consumed byte onward. Lines
- * that fail to parse as JSON count toward `state.malformed`.
- */
-export const consumeNewRecords = Effect.fn('consumeNewRecords')(function*(
-  path: string,
-  state: IncrementalScanState,
-) {
-  const fs = yield* FileSystem.FileSystem
-  const records: Array<[index: number, value: unknown]> = []
-
-  const infoOption = yield* fs.stat(path).pipe(
-    Effect.map(Option.some),
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.succeed(Option.none<FileSystem.File.Info>()),
-    ),
-  )
-  if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return records
-
-  const info = infoOption.value
-  state.mtime = Option.match(info.mtime, {
-    onNone: () => state.mtime,
-    onSome: date => date.getTime() / 1_000,
-  })
-  state.size = Number(info.size)
-  if (state.size === state.lastLoadedSize && state.mtime === state.lastLoadedMtime) return records
-
-  // A shrunken file was rewritten, not appended; the byte offset no longer
-  // points into it, so re-read from the start and skip consumed lines.
-  const fromByte = state.size < state.bytesConsumed ? 0 : state.bytesConsumed
-  const read = yield* readCompleteLines(path, fromByte).pipe(
-    Effect.map(Option.some),
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.succeed(Option.none<AppendedLines>()),
-    ),
-  )
-  if (Option.isNone(read)) return records
-
-  const { lines, nextByte } = read.value
-  const baseLine = fromByte === 0 ? 0 : state.line
-  for (let offset = fromByte === 0 ? state.line : 0; offset < lines.length; offset += 1) {
-    const line = lines[offset]!
-    if (!line.trim()) continue
-    // A writer can leave a half-written line while appending; skip it.
-    try {
-      records.push([baseLine + offset, JSON.parse(line)])
-    } catch {
-      state.malformed += 1
-    }
-  }
-  state.line = baseLine + lines.length
-  state.bytesConsumed = nextByte
-  state.lastLoadedMtime = state.mtime
-  state.lastLoadedSize = state.size
-  return records
-})
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -229,93 +103,6 @@ function toolStats(value: unknown): ToolStats {
     linesRemoved: asNumber(stats.linesRemoved),
     other: asNumber(stats.otherToolCount),
   }
-}
-
-export function plainText(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-
-  return content
-    .flatMap((block) => {
-      if (typeof block === 'string') return [block]
-      if (Predicate.isObject(block) && block.type === 'text') return [asString(block.text)]
-      return []
-    })
-    .join('\n')
-}
-
-export function toolSummary(input: unknown): string {
-  if (!Predicate.isObject(input)) return ''
-
-  for (const key of TOOL_SUMMARY_KEYS) {
-    const value = input[key]
-    if (typeof value === 'string' && value.trim()) {
-      return value.trim().replace(/\s+/g, ' ')
-    }
-  }
-
-  try {
-    return JSON.stringify(input).slice(0, 200)
-  } catch {
-    return ''
-  }
-}
-
-export function resultText(result: unknown): string {
-  if (typeof result === 'string') return result
-  if (Array.isArray(result)) {
-    return result
-      .flatMap((block) => {
-        if (typeof block === 'string') return [block]
-        if (!Predicate.isObject(block)) return []
-        if (block.type === 'text') return [asString(block.text)]
-        if (block.type === 'image') return ['[image]']
-        return []
-      })
-      .join('\n')
-  }
-  if (Predicate.isObject(result)) {
-    try {
-      return JSON.stringify(result, null, 2)
-    } catch {
-      return String(result)
-    }
-  }
-  return ''
-}
-
-export function clip(value: string): [body: string, originalLength: number] {
-  const text = value || ''
-  return [text.slice(0, MAX_CHARS), text.length]
-}
-
-export function findMilestones(text: string): Array<[title: string, strong: boolean]> {
-  for (const [index, pattern] of PHASE_PATTERNS.entries()) {
-    pattern.lastIndex = 0
-    const matches = Array.from(text.matchAll(pattern))
-      .map(match => ({
-        index: match.index,
-        title: (match[1] || '').replace(/\s+/g, ' ').replace(/^[ *:#-]+|[ *:#-]+$/g, ''),
-      }))
-      .sort((a, b) => a.index - b.index)
-
-    if (matches.length) return matches.map(match => [match.title, index === 0])
-  }
-  return []
-}
-
-export function commandOk(output: string, isError: boolean): boolean {
-  if (isError) return false
-  const head = (output || '').slice(0, 2_500)
-  return !(FAIL_RE.test(head) && !PASS_RE.test(head.slice(0, 200)))
-}
-
-export function shortPath(path: string, root = ''): string {
-  if (!path) return ''
-  const prefix = `${root.replace(/\/$/, '')}/`
-  if (root && path.startsWith(prefix)) return path.slice(prefix.length)
-  const parts = path.split('/')
-  return parts.length > 3 ? parts.slice(-3).join('/') : path
 }
 
 export class TranscriptScan {

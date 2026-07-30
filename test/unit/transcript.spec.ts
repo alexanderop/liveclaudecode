@@ -8,8 +8,8 @@ import {
   MAX_CHARS,
   shortPath,
   toolSummary,
-  TranscriptScan,
-} from '#server/utils/transcript'
+} from '#server/utils/transcript-content'
+import { TranscriptScan } from '#server/utils/transcript'
 import * as fixture from '../fixtures/transcripts'
 import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
 
