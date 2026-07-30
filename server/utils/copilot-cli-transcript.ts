@@ -20,6 +20,12 @@ import type {
   TranscriptStats,
 } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import {
+  emptyTranscriptDiagnostics,
+  emptyTranscriptStats,
+  reconcileTranscriptEvents,
+  TranscriptFile,
+} from './copilot-transcript-state'
 import { clip, shortPath } from './transcript-content'
 
 interface ToolRecord {
@@ -120,30 +126,6 @@ function filePaths(name: string, input: unknown): string[] {
   return Array.from(input.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm), match => match[1]!.trim())
 }
 
-function emptyStats(mtime: number, size: number, now: number): TranscriptStats {
-  return {
-    records: 0,
-    tools: 0,
-    toolCounts: {},
-    reads: 0,
-    errors: 0,
-    tokensOut: 0,
-    firstTs: null,
-    lastTs: null,
-    mtime,
-    ago: Math.max(0, now - mtime),
-    live: false,
-    size,
-    todos: null,
-    skills: [],
-    milestones: [],
-    current: null,
-    files: [],
-    commands: [],
-    finalText: '',
-  }
-}
-
 export class CopilotCliTranscriptScan {
   readonly path: string
   readonly application: string
@@ -157,42 +139,22 @@ export class CopilotCliTranscriptScan {
   sessionId = ''
   readonly events: TranscriptEvent[] = []
   eventRevision = 0
-  private mtime = 0
-  private size = 0
-  private lastLoadedMtime = 0
-  private lastLoadedSize = -1
+  private readonly file: TranscriptFile
   private derived: DerivedState | null = null
 
   constructor(path: string | URL, application = 'GitHub Copilot CLI', workspace = '') {
     this.path = path.toString()
     this.application = application
     this.workspace = workspace
+    this.file = new TranscriptFile(this.path)
   }
 
   get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
     const self = this
     return Effect.gen(function*() {
-      const fs = yield* FileSystem.FileSystem
-      const infoOption = yield* fs.stat(self.path).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<FileSystem.File.Info>()),
-        ),
-      )
-      if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return self
-
-      const info = infoOption.value
-      const mtime = Option.match(info.mtime, {
-        onNone: () => self.mtime,
-        onSome: value => value.getTime() / 1_000,
-      })
-      const size = Number(info.size)
-      self.mtime = mtime
-      self.size = size
-      if (size === self.lastLoadedSize && mtime === self.lastLoadedMtime) return self
-
-      const raw = yield* fs.readFileString(self.path)
+      const changed = yield* self.file.refresh()
+      if (Option.isNone(changed)) return self
+      const { raw } = changed.value
       const lines = raw.split('\n')
       const completeLines = lines.slice(0, -1)
       const parsedEvents: Array<[number, ParsedCopilotCliEvent]> = []
@@ -221,23 +183,9 @@ export class CopilotCliTranscriptScan {
       self.line = completeLines.length
       self.malformed = malformed
       self.unknown = unknown
-      self.lastLoadedMtime = mtime
-      self.lastLoadedSize = size
       self.rebuild(parsedEvents)
       return self
     })
-  }
-
-  private reconcileEvents(next: ReadonlyArray<TranscriptEvent>): void {
-    const prefixUnchanged = this.events.length <= next.length
-      && this.events.every((event, index) => JSON.stringify(event) === JSON.stringify(next[index]))
-    if (prefixUnchanged) {
-      for (let index = this.events.length; index < next.length; index += 1) this.events.push(next[index]!)
-      return
-    }
-    this.events.length = 0
-    this.events.push(...next)
-    this.eventRevision += 1
   }
 
   private rebuild(records: ReadonlyArray<readonly [number, ParsedCopilotCliEvent]>): void {
@@ -248,7 +196,7 @@ export class CopilotCliTranscriptScan {
       this.malformedParts = 0
       this.sessionId = ''
       this.derived = null
-      this.reconcileEvents([])
+      if (reconcileTranscriptEvents(this.events, [])) this.eventRevision += 1
       return
     }
 
@@ -487,10 +435,10 @@ export class CopilotCliTranscriptScan {
       tokensOut,
       firstTs,
       lastTs,
-      mtime: this.mtime,
+      mtime: this.file.mtime,
       ago: 0,
       live,
-      size: this.size,
+      size: this.file.size,
       todos: null,
       skills: [],
       milestones: [],
@@ -501,7 +449,7 @@ export class CopilotCliTranscriptScan {
     }
     const usage = { in: 0, out: tokensOut, cr: 0, cw: 0 }
     const sourceDetail = this.application
-    this.reconcileEvents(nextEvents)
+    if (reconcileTranscriptEvents(this.events, nextEvents)) this.eventRevision += 1
     this.derived = {
       stats,
       title,
@@ -542,7 +490,7 @@ export class CopilotCliTranscriptScan {
   }
 
   statsAt(now: number): TranscriptStats {
-    if (!this.derived) return emptyStats(this.mtime, this.size, now)
+    if (!this.derived) return emptyTranscriptStats(this.file.mtime, this.file.size, now)
     return { ...this.derived.stats, ago: Math.max(0, now - this.derived.stats.mtime) }
   }
 
@@ -570,23 +518,6 @@ export class CopilotCliTranscriptScan {
   }
 
   diagnostics(): RunDiagnostics {
-    return this.derived?.diagnostics || {
-      incidents: [],
-      turns: [],
-      compactions: [],
-      outcomes: [],
-      changes: [],
-      git: [],
-      agents: [],
-      environment: { ...EMPTY_ENVIRONMENT },
-      causal: {
-        records: 0,
-        recordsWithUuid: 0,
-        branchPoints: 0,
-        sidechainRecords: 0,
-        interruptions: 0,
-      },
-      usage: { in: 0, out: 0, cr: 0, cw: 0 },
-    }
+    return this.derived?.diagnostics || emptyTranscriptDiagnostics(EMPTY_ENVIRONMENT)
   }
 }

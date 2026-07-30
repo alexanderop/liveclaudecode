@@ -22,6 +22,12 @@ import type {
   TranscriptEvent,
   TranscriptStats,
 } from '#shared/types/run'
+import {
+  emptyTranscriptDiagnostics,
+  emptyTranscriptStats,
+  reconcileTranscriptEvents,
+  TranscriptFile,
+} from './copilot-transcript-state'
 import { clip, shortPath } from './transcript-content'
 
 type JsonContainer = Record<PropertyKey, unknown>
@@ -230,10 +236,7 @@ export class CopilotTranscriptScan {
   eventRevision = 0
   private state: unknown
   private snapshot: CopilotSessionSnapshot | null = null
-  private mtime = 0
-  private size = 0
-  private lastLoadedMtime = 0
-  private lastLoadedSize = -1
+  private readonly file: TranscriptFile
   private derived: DerivedCopilotState | null = null
   private unknownLogRecords = 0
 
@@ -241,33 +244,17 @@ export class CopilotTranscriptScan {
     this.path = path
     this.application = application
     this.workspace = workspace
+    this.file = new TranscriptFile(this.path)
   }
 
   get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
     const self = this
     return Effect.gen(function*() {
-      const fs = yield* FileSystem.FileSystem
-      const infoOption = yield* fs.stat(self.path).pipe(
-        Effect.map(Option.some),
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed(Option.none<FileSystem.File.Info>()),
-        ),
-      )
-      if (Option.isNone(infoOption) || infoOption.value.type !== 'File') return self
-      const info = infoOption.value
-      const mtime = Option.match(info.mtime, {
-        onNone: () => self.mtime,
-        onSome: value => value.getTime() / 1_000,
-      })
-      const size = Number(info.size)
-      self.mtime = mtime
-      self.size = size
-      if (size === self.lastLoadedSize && mtime === self.lastLoadedMtime) return self
-
-      const raw = yield* fs.readFileString(self.path)
+      const changed = yield* self.file.refresh()
+      if (Option.isNone(changed)) return self
+      const { raw, rewritten } = changed.value
       const completeLines = raw.endsWith('\n') ? raw.split('\n').slice(0, -1) : raw.split('\n').slice(0, -1)
-      if (size < self.lastLoadedSize || completeLines.length < self.line) {
+      if (rewritten || completeLines.length < self.line) {
         self.line = 0
         self.state = undefined
         self.malformed = 0
@@ -301,16 +288,13 @@ export class CopilotTranscriptScan {
         self.state = applied.state
       }
       self.line = completeLines.length
-      self.lastLoadedMtime = mtime
-      self.lastLoadedSize = size
-
       const snapshot = parseCopilotSnapshot(self.state)
       if (!snapshot) {
         self.snapshot = null
         self.supported = false
         self.structuralMalformed = 1
         self.derived = null
-        self.reconcileEvents([])
+        if (reconcileTranscriptEvents(self.events, [])) self.eventRevision += 1
         return self
       }
       self.structuralMalformed = 0
@@ -323,26 +307,12 @@ export class CopilotTranscriptScan {
       self.supported = isCopilotSnapshot(snapshot)
       if (!self.supported) {
         self.derived = null
-        self.reconcileEvents([])
+        if (reconcileTranscriptEvents(self.events, [])) self.eventRevision += 1
         return self
       }
       self.rebuild()
       return self
     })
-  }
-
-  private reconcileEvents(next: ReadonlyArray<TranscriptEvent>): void {
-    const prefixUnchanged = this.events.length <= next.length
-      && this.events.every((event, index) => JSON.stringify(event) === JSON.stringify(next[index]))
-    if (prefixUnchanged) {
-      for (let index = this.events.length; index < next.length; index += 1) {
-        this.events.push(next[index]!)
-      }
-      return
-    }
-    this.events.length = 0
-    for (const event of next) this.events.push(event)
-    this.eventRevision += 1
   }
 
   private rebuild(): void {
@@ -535,7 +505,7 @@ export class CopilotTranscriptScan {
       ts: iso(snapshot.requests.at(-1)?.timestamp || snapshot.creationDate),
     }
     const firstTs = iso(snapshot.creationDate)
-    const lastTs = latestTimestamp(snapshot, this.mtime)
+    const lastTs = latestTimestamp(snapshot, this.file.mtime)
     const environment: SessionEnvironment = {
       ...EMPTY_ENVIRONMENT,
       cwd: workspace,
@@ -557,10 +527,10 @@ export class CopilotTranscriptScan {
       tokensOut,
       firstTs,
       lastTs,
-      mtime: this.mtime,
+      mtime: this.file.mtime,
       ago: 0,
       live,
-      size: this.size,
+      size: this.file.size,
       todos,
       skills: [],
       milestones: [],
@@ -570,7 +540,7 @@ export class CopilotTranscriptScan {
       finalText,
     }
     const base = diagnosticBase(snapshot, environment)
-    this.reconcileEvents(nextEvents)
+    if (reconcileTranscriptEvents(this.events, nextEvents)) this.eventRevision += 1
     this.derived = {
       stats,
       title,
@@ -602,12 +572,7 @@ export class CopilotTranscriptScan {
   statsAt(now: number): TranscriptStats {
     const stats = this.derived?.stats
     if (!stats) {
-      return {
-        records: 0, tools: 0, toolCounts: {}, reads: 0, errors: 0, tokensOut: 0,
-        firstTs: null, lastTs: null, mtime: this.mtime, ago: Math.max(0, now - this.mtime),
-        live: false, size: this.size, todos: null, skills: [], milestones: [], current: null,
-        files: [], commands: [], finalText: '',
-      }
+      return emptyTranscriptStats(this.file.mtime, this.file.size, now)
     }
     return { ...stats, ago: Math.max(0, now - stats.mtime) }
   }
@@ -629,12 +594,7 @@ export class CopilotTranscriptScan {
   }
 
   diagnostics(): RunDiagnostics {
-    return this.derived?.diagnostics || {
-      incidents: [], turns: [], compactions: [], outcomes: [], changes: [], git: [], agents: [],
-      environment: { ...EMPTY_ENVIRONMENT },
-      causal: { records: 0, recordsWithUuid: 0, branchPoints: 0, sidechainRecords: 0, interruptions: 0 },
-      usage: { in: 0, out: 0, cr: 0, cw: 0 },
-    }
+    return this.derived?.diagnostics || emptyTranscriptDiagnostics(EMPTY_ENVIRONMENT)
   }
 
   get stats(): Effect.Effect<TranscriptStats, never, FileSystem.FileSystem> {

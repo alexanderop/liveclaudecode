@@ -137,6 +137,38 @@ describe('Copilot transcript replay and normalization', () => {
     })
   })
 
+  it.effect('resets replay state when the log is rewritten shorter', () => {
+    const entry = {
+      content: fixture.log([fixture.initial(fixture.snapshot({
+        id: 'rewritten',
+        requests: [
+          fixture.request('request-1', 'A deliberately long original prompt'),
+          fixture.request('request-2', 'Another original prompt'),
+        ],
+      }))]),
+      mtime: 1,
+    }
+    const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
+    return Effect.gen(function*() {
+      yield* scan.refresh
+      const revision = scan.eventRevision
+      assert.strictEqual(scan.events.filter(event => event.kind === 'prompt').length, 2)
+
+      entry.content = fixture.log([fixture.initial(fixture.snapshot({
+        id: 'rewritten',
+        requests: [fixture.request('replacement', 'Replacement')],
+      }))])
+      entry.mtime = 2
+      yield* scan.refresh
+
+      assert.strictEqual(scan.eventRevision, revision + 1)
+      assert.deepStrictEqual(
+        scan.events.filter(event => event.kind === 'prompt').map(event => event.body),
+        ['Replacement'],
+      )
+    }).pipe(Effect.provide(testFileSystem({ [PATH]: entry })))
+  })
+
   it.effect('rejects unsafe replay paths and invalid indices without polluting prototypes', () => {
     const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
     return Effect.gen(function*() {
