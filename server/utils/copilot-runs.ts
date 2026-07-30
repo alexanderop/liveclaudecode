@@ -73,7 +73,10 @@ const workspaceFor = Effect.fn('workspaceFor')(function*(directory: string) {
   const fs = yield* FileSystem.FileSystem
   const path = join(directory, 'workspace.json')
   const result = yield* Effect.result(fs.readFileString(path))
-  if (Result.isFailure(result)) return ''
+  if (Result.isFailure(result)) {
+    if (result.failure.reason._tag === 'NotFound') return ''
+    return yield* result.failure
+  }
   let value: unknown
   try {
     value = JSON.parse(result.success) as unknown
@@ -122,8 +125,17 @@ const scanWorkspaceStorage = Effect.fn('scanWorkspaceStorage')(function*(
   if (!directoryResult.success.exists) return { locations: [], unreadable: 0 } satisfies LocationResult
   const results = yield* Effect.forEach(directoryResult.success.names, name => Effect.result(Effect.gen(function*() {
     const directory = join(storage, name)
-    const workspace = yield* workspaceFor(directory)
-    return yield* sessionFiles(join(directory, 'chatSessions'), application, workspace, cutoff)
+    const workspaceResult = yield* Effect.result(workspaceFor(directory))
+    const sessions = yield* sessionFiles(
+      join(directory, 'chatSessions'),
+      application,
+      Result.isSuccess(workspaceResult) ? workspaceResult.success : '',
+      cutoff,
+    )
+    return {
+      locations: sessions.locations,
+      unreadable: sessions.unreadable + (Result.isFailure(workspaceResult) ? 1 : 0),
+    } satisfies LocationResult
   })), { concurrency: 'unbounded' })
   return {
     locations: results.flatMap(result => Result.isSuccess(result) ? result.success.locations : []),

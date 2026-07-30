@@ -166,4 +166,20 @@ describe('VS Code Copilot discovery', () => {
       [unreadable]: fixture.log([fixture.initial(fixture.snapshot({ id: 'unreadable' }))]),
     }, [unreadable])))
   })
+
+  it.effect('keeps sessions when workspace metadata is unreadable and reports degradation', () => {
+    const workspace = `${INSIDERS}/workspaceStorage/workspace/workspace.json`
+    const readable = session(INSIDERS, 'workspace', 'readable')
+    return Effect.gen(function*() {
+      const discovery = yield* collectCopilotSessions(999_999)
+      assert.strictEqual(discovery.rootsPresent, 1)
+      assert.strictEqual(discovery.locations.length, 1)
+      assert.strictEqual(discovery.locations[0]?.path, readable)
+      assert.strictEqual(discovery.locations[0]?.workspace, '')
+      assert.strictEqual(discovery.unreadable, 1)
+    }).pipe(Effect.provide(layer({
+      [workspace]: JSON.stringify({ folder: 'file:///repo' }),
+      [readable]: fixture.log([fixture.initial(fixture.snapshot({ id: 'readable' }))]),
+    }, [workspace])))
+  })
 })
