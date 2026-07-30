@@ -510,8 +510,8 @@ onBeforeUnmount(() => {
           <UIcon v-if="index" name="i-lucide-chevron-right" />{{ item.label }}
         </button>
       </div>
-      <div class="canvas-status" :class="{ live: sessionLive }" role="status"><i />{{ replayAt !== null ? `Replay · ${replayLabel}` : sessionLive ? 'Session live' : 'Session idle' }}</div>
-      <p class="canvas-announcer" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
+      <div class="canvas-status" :class="{ live: sessionLive }"><i />{{ replayAt !== null ? `Replay · ${replayLabel}` : sessionLive ? 'Session live' : 'Session idle' }}</div>
+      <p class="canvas-announcer">{{ announcement }}</p>
 
       <div v-if="lens === 'problems'" class="canvas-issue-nav">
         <span><UIcon name="i-lucide-circle-alert" />{{ issues.length }} incidents</span>

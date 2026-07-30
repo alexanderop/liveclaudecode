@@ -37,22 +37,44 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
 
   await expect(page.getByRole('heading', { name: 'Verify the browser dashboard' })).toBeVisible()
   await expect(page.getByText('Claude', { exact: true }).first()).toBeVisible()
-  await expect(page.getByRole('navigation', { name: 'Supporting session views' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open a session view' })).toBeVisible()
 
-  await page.getByRole('button', { name: /Jump to session/ }).click()
+  await page.getByRole('button', { name: 'Search' }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await expect(page.getByPlaceholder('Jump to a session or view…')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
 
-  await page.keyboard.press('a')
-  await expect(page.getByRole('complementary', { name: 'Activity panel' })).toBeVisible()
+  await page.getByRole('button', { name: 'Open a session view' }).click()
+  await page.getByRole('menuitem', { name: /Activity/ }).click()
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible()
 
-  await page.keyboard.press('g')
-  await expect(page.getByRole('complementary', { name: 'Guide panel' })).toBeVisible()
+  // Destination mnemonics are launcher-scoped and no longer act as global shortcuts.
+  await page.keyboard.press('d')
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible()
 
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.getByRole('button', { name: 'Open a session view' }).click()
+  await page.getByRole('menuitem', { name: /Ask/ }).click()
+  const askComposer = page.getByRole('textbox', { name: 'Question about this session' })
+  await expect(page.locator('.ask-context')).toBeVisible()
+  await askComposer.fill('A draft that must survive closing Ask')
+  await askComposer.press('Escape')
+  await expect(page.locator('.ask-context')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Open a session view' }).click()
+  await page.getByRole('menuitem', { name: /Ask/ }).click()
+  await expect(page.getByRole('textbox', { name: 'Question about this session' }))
+    .toHaveValue('A draft that must survive closing Ask')
+  await page.getByRole('button', { name: 'Close Ask' }).click()
+
+  await page.getByRole('button', { name: 'Open a session view' }).click()
+  await page.getByRole('menuitem', { name: /Expand launcher/ }).click()
+  await expect(page.getByRole('navigation', { name: 'Open a session view' })).toBeVisible()
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('complementary', { name: 'Guide panel' })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'Open a session view' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible()
 
   await page.addScriptTag({ content: axe.source })
   for (const mode of ['Light', 'Dark']) {
@@ -82,9 +104,10 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
   }
 
   await page.setViewportSize({ width: 800, height: 900 })
-  await page.keyboard.press('a')
+  await page.getByRole('button', { name: 'Open a session view' }).click()
+  await page.getByRole('menuitem', { name: /Agent map/ }).click()
+  await page.locator('.sketch-node').first().click()
   await expect(page.locator('.supporting-slideover')).toBeVisible()
-  await expect(page.getByRole('complementary', { name: 'Activity panel' })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.locator('.supporting-slideover')).toHaveCount(0)
 
@@ -94,6 +117,8 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
 
 test('keeps selected-agent activity inside a scrollable viewport', async ({ page }) => {
   await page.goto('/', { waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: 'Open a session view' }).click()
+  await page.getByRole('menuitem', { name: /Agent map/ }).click()
   await page.locator('.sketch-node').first().click()
   await page.getByRole('tab', { name: 'Activity' }).click()
 

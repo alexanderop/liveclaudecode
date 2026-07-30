@@ -152,7 +152,8 @@ describe('read-only API', async () => {
     expect(html).toMatch(/<html\s+lang="en"/)
     expect(html).toContain('<title>Claude + Codex Sessions — Live</title>')
     expect(html).toContain('<main class="main-content">')
-    expect(html).toContain('aria-label="Supporting session views"')
+    expect(html).toContain('aria-label="Overview workspace"')
+    expect(html).toContain('aria-label="Open a session view"')
   })
 
   it('prevents caching of every live read endpoint', async () => {

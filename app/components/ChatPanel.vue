@@ -20,6 +20,15 @@ type ChatRow =
   | { kind: 'tool', toolCallId: string, title: string, toolKind: string, status: string }
   | { kind: 'turn-end', stopReason: string }
 
+type ChatSessionState = {
+  events: ChatEvent[]
+  since: number
+  revision: number
+  status: ChatStatus
+  selectedAgent: ChatAgentId
+  draft: string
+}
+
 const markdownPlugins = [
   security({
     blockedTags: ['script', 'iframe', 'object', 'embed', 'link', 'style', 'base', 'meta'],
@@ -36,12 +45,25 @@ const agentLabels: Readonly<Record<ChatAgentId, string>> = Object.fromEntries(
   agents.map(agent => [agent.id, agent.label]),
 ) as Record<ChatAgentId, string>
 
-const events = ref<ChatEvent[]>([])
-const since = ref(0)
-const revision = ref(0)
-const status = ref<ChatStatus>('idle')
-const selectedAgent = ref<ChatAgentId>('claude')
-const draft = ref('')
+const sessionState = useState<ChatSessionState>(
+  `liveclaudecode:ask:${encodeURIComponent(props.project)}:${encodeURIComponent(props.sessionKey)}`,
+  () => ({
+    events: [],
+    since: 0,
+    revision: 0,
+    status: 'idle',
+    selectedAgent: 'claude',
+    draft: '',
+  }),
+)
+const {
+  events,
+  since,
+  revision,
+  status,
+  selectedAgent,
+  draft,
+} = toRefs(sessionState.value)
 const actionPending = ref(false)
 const pollPending = ref(false)
 const requestError = ref('')
@@ -183,14 +205,20 @@ watch(
   },
 )
 
-onMounted(() => {
+function startPolling(): void {
   void poll()
-  timer = setInterval(() => void poll(), 800)
-})
+  if (!timer) timer = setInterval(() => void poll(), 800)
+}
 
-onUnmounted(() => {
+function stopPolling(): void {
   if (timer) clearInterval(timer)
-})
+  timer = undefined
+}
+
+onMounted(startPolling)
+onActivated(startPolling)
+onDeactivated(stopPolling)
+onUnmounted(stopPolling)
 </script>
 
 <template>
@@ -217,7 +245,6 @@ onUnmounted(() => {
 
     <UChatMessages
       class="chat-log"
-      aria-live="polite"
       aria-label="Session chat messages"
       :status="chatUiStatus"
       should-auto-scroll

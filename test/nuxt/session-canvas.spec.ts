@@ -7,6 +7,7 @@ import type { RunNode, RunResponse } from '#shared/types/run'
 
 afterEach(() => {
   window.localStorage.clear()
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
   vi.unstubAllGlobals()
 })
 
@@ -116,13 +117,54 @@ const InspectorStub = defineComponent({
   `,
 })
 
+function sessionFetch(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string) => {
+    if (url === '/api/tree') {
+      return {
+        projects: [{ id: '/workspace', name: 'workspace', roots: [root] }],
+        sources: [],
+        now: 0,
+      }
+    }
+    if (url.startsWith('/api/run')) return run
+    if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
+    if (url.includes('key=review')) {
+      return {
+        key: child.key,
+        events: [{
+          role: 'assistant',
+          kind: 'text',
+          ts: '2026-07-28T10:01:00.000Z',
+          line: 1,
+          body: 'Reviewing the requested flow.',
+        }],
+        next: 1,
+        revision: 1,
+        reset: false,
+        node: child,
+      }
+    }
+    return {
+      key: root.key,
+      events: [],
+      next: 0,
+      revision: 1,
+      reset: false,
+      node: root,
+    }
+  })
+}
+
+async function openMap(component: Awaited<ReturnType<typeof mountSuspended>>): Promise<void> {
+  await vi.waitFor(() => expect(component.get('.open-view-trigger').attributes('disabled')).toBeUndefined())
+  await component.get('.open-view-trigger').trigger('click')
+  await component.get('[role="menuitem"][data-destination="map"]').trigger('click')
+}
+
 describe('persistent session canvas', () => {
   it('resizes and remembers both docked sidebars', async () => {
-    vi.stubGlobal('$fetch', vi.fn().mockResolvedValue({
-      projects: [],
-      sources: [],
-      now: 0,
-    }))
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
+    vi.stubGlobal('$fetch', sessionFetch())
     const component = await mountSuspended(IndexPage, {
       global: {
         stubs: {
@@ -150,8 +192,9 @@ describe('persistent session canvas', () => {
     expect(window.localStorage.getItem('liveclaudecode:sidebar-width')).toBe('332')
 
     await sidebarHandle.trigger('dblclick')
-    await component.get('.view-actions button[aria-pressed]').trigger('click')
-    const panelHandle = component.get('button[aria-label="Resize details panel"]')
+    await openMap(component)
+    await component.get('.canvas-node').trigger('click')
+    const panelHandle = component.get('button[aria-label="Resize context panel"]')
     expect(panelHandle.attributes('aria-valuenow')).toBe('380')
 
     await panelHandle.trigger('keydown', { key: 'ArrowLeft' })
@@ -163,40 +206,8 @@ describe('persistent session canvas', () => {
   })
 
   it('keeps the canvas mounted while node details open and empty space closes them', async () => {
-    const fetch = vi.fn(async (url: string) => {
-      if (url === '/api/tree') {
-        return {
-          projects: [{ id: '/workspace', name: 'workspace', roots: [root] }],
-          sources: [],
-          now: 0,
-        }
-      }
-      if (url.startsWith('/api/run')) return run
-      if (url.includes('key=review')) {
-        return {
-          key: child.key,
-          events: [{
-            role: 'assistant',
-            kind: 'text',
-            ts: '2026-07-28T10:01:00.000Z',
-            line: 1,
-            body: 'Reviewing the requested flow.',
-          }],
-          next: 1,
-          revision: 1,
-          reset: false,
-          node: child,
-        }
-      }
-      return {
-        key: root.key,
-        events: [],
-        next: 0,
-        revision: 1,
-        reset: false,
-        node: root,
-      }
-    })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
+    const fetch = sessionFetch()
     vi.stubGlobal('$fetch', fetch)
 
     const component = await mountSuspended(IndexPage, {
@@ -214,6 +225,7 @@ describe('persistent session canvas', () => {
       },
     })
     await flushPromises()
+    await openMap(component)
 
     const originalCanvas = component.get('.canvas-stub').element
     await component.get('.canvas-node').trigger('click')
@@ -232,12 +244,8 @@ describe('persistent session canvas', () => {
     expect(component.get('.canvas-stub').attributes('data-selected')).toBe('')
   })
 
-  it('opens supporting views alongside the same canvas', async () => {
-    vi.stubGlobal('$fetch', vi.fn().mockResolvedValue({
-      projects: [],
-      sources: [],
-      now: 0,
-    }))
+  it('shows one primary workspace and restores the same canvas after an Activity round trip', async () => {
+    vi.stubGlobal('$fetch', sessionFetch())
     const component = await mountSuspended(IndexPage, {
       global: {
         stubs: {
@@ -252,11 +260,18 @@ describe('persistent session canvas', () => {
         },
       },
     })
+    await openMap(component)
     const originalCanvas = component.get('.canvas-stub').element
 
-    await component.get('.view-actions button[aria-pressed]').trigger('click')
+    await component.get('.open-view-trigger').trigger('click')
+    await component.get('[role="menuitem"][data-destination="activity"]').trigger('click')
 
-    expect(component.get('.session-panel').attributes('aria-label')).toBe('Activity panel')
+    expect(component.get('[data-workspace-heading]').text()).toBe('Activity')
+    expect(component.find('.canvas-stub').exists()).toBe(false)
+
+    await component.get('.open-view-trigger').trigger('click')
+    await component.get('[role="menuitem"][data-destination="map"]').trigger('click')
+
     expect(component.get('.canvas-stub').element).toBe(originalCanvas)
   })
 })

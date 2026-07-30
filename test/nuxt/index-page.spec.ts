@@ -1,6 +1,7 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
+import { runNode, runResponse } from '../fixtures/runs'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -8,10 +9,12 @@ afterEach(() => {
 
 describe('session view controls', () => {
   it('exposes and updates the selected event density', async () => {
-    vi.stubGlobal('$fetch', vi.fn().mockResolvedValue({
-      projects: [],
-      sources: [],
-      now: 0,
+    const root = runNode({ subErrors: 0, errors: 0 })
+    vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
+      if (url === '/api/tree') return { projects: [{ id: '/repo', name: 'repo', roots: [root] }], sources: [], now: 0 }
+      if (url.startsWith('/api/run')) return runResponse({ root, node: root })
+      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
+      return { key: root.key, events: [], next: 0, revision: 1, reset: false, node: root }
     }))
     const component = await mountSuspended(IndexPage, {
       global: {
@@ -27,7 +30,9 @@ describe('session view controls', () => {
         },
       },
     })
-    await component.get('.view-actions button[aria-pressed]').trigger('click')
+    await vi.waitFor(() => expect(component.get('.open-view-trigger').attributes('disabled')).toBeUndefined())
+    await component.get('.open-view-trigger').trigger('click')
+    await component.get('[role="menuitem"][data-destination="activity"]').trigger('click')
     const density = component.get('[role="group"][aria-label="Event detail"]')
     const buttons = density.findAll('button')
 

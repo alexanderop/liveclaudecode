@@ -26,21 +26,19 @@ describe('dashboard supporting views', () => {
     })
   })
 
-  it('renders the execution guide and emits the selected agent key', async () => {
+  it('renders the calm completed Overview and discloses technical details', async () => {
     const run = runResponse()
     const component = await mountSuspended(RunOverview, {
       props: { run, selectedKey: run.key },
     })
 
-    expect(component.text()).toContain('1 agent across 2m0s')
-    expect(component.text()).toContain('1 of 2 complete')
-    expect(component.text()).toContain('Latest: Validation')
-    expect(component.text()).toContain('Session narrative')
+    expect(component.get('[data-workspace-heading]').text()).toBe('Completed with warnings')
     expect(component.text()).toContain('The dashboard is ready for review.')
-    expect(component.get('.lane').attributes('aria-current')).toBe('true')
-
-    await component.get('.lane').trigger('click')
-    expect(component.emitted('select')).toEqual([[run.key]])
+    expect(component.find('.overview-current-action').exists()).toBe(false)
+    expect(component.findAll('.overview-actions button')).toHaveLength(2)
+    expect(component.get('.run-details').attributes('open')).toBeUndefined()
+    expect(component.get('.run-details-content').text()).toContain('Output tokens')
+    expect(component.get('.run-details-content').text()).toContain(run.transcriptPath)
   })
 })
 
