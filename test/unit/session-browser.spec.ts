@@ -207,6 +207,24 @@ describe('unified session catalog', () => {
       ], { malformed: true }),
     }))))
 
+  it.effect('reports unreadable Claude transcripts without hiding readable sessions', () => {
+    const denied = `${CLAUDE}/repo/denied.jsonl`
+    return Effect.gen(function*() {
+      const catalog = yield* loadSessionCatalog('', 999_999)
+      assert.strictEqual(catalog.sources[0]?.state, 'degraded')
+      assert.strictEqual(catalog.sources[0]?.sessions, 1)
+      assert.match(catalog.sources[0]?.message || '', /1 unreadable transcript skipped/)
+      assert.strictEqual(catalog.projects[0]?.roots[0]?.key, 'readable')
+    }).pipe(Effect.provide(layer({
+      [`${CLAUDE}/repo/readable.jsonl`]: claude.transcript([
+        claude.userText('Readable session'),
+      ]),
+      [denied]: claude.transcript([
+        claude.userText('Denied session'),
+      ]),
+    }, [denied])))
+  })
+
   it.effect('preserves exact Copilot storage metadata for targeted event refreshes', () =>
     {
       const locations: CopilotSessionLocation[] = []

@@ -1,5 +1,5 @@
 import { join, resolve, sep } from 'node:path'
-import { Clock, Effect, Predicate } from 'effect'
+import { Clock, Effect, Result } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import {
   parseClaudeRecord,
@@ -45,9 +45,14 @@ interface CollectedItem {
   meta: ClaudeSubagentMeta | null
 }
 
+interface CollectedItems {
+  items: CollectedItem[]
+  unreadable: number
+}
+
 /**
  * Subagent metadata is written separately from the transcript and may not exist
- * yet, so a missing or unreadable file yields `null` rather than failing.
+ * yet, so a missing file yields `null`. Other storage failures stay typed.
  */
 const readSubagentMeta = Effect.fn('readSubagentMeta')(function*(path: string) {
   const fs = yield* FileSystem.FileSystem
@@ -59,14 +64,15 @@ const readSubagentMeta = Effect.fn('readSubagentMeta')(function*(path: string) {
         return null
       }
     }),
-    Effect.catchTag('PlatformError', () => Effect.succeed(null)),
+    Effect.catchIf(
+      error => error.reason._tag === 'NotFound',
+      () => Effect.succeed(null),
+    ),
   )
 })
 
 const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
-  const raw = yield* readHead(path, FIRST_PROMPT_BYTES).pipe(
-    Effect.catchTag('PlatformError', () => Effect.succeed('')),
-  )
+  const raw = yield* readHead(path, FIRST_PROMPT_BYTES)
 
   for (const line of raw.split('\n', 61)) {
     let value: unknown
@@ -85,7 +91,12 @@ const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
 
 export const firstPrompt = Effect.fn('firstPrompt')(function*(path: string) {
   const cache = yield* PromptCache
-  return yield* cache.get(path, readFirstPrompt(path))
+  return yield* cache.get(path, readFirstPrompt(path)).pipe(
+    Effect.catchIf(
+      error => error.reason._tag === 'NotFound',
+      () => Effect.succeed(''),
+    ),
+  )
 })
 
 export const collect = Effect.fn('collect')(function*(
@@ -112,7 +123,7 @@ export const collect = Effect.fn('collect')(function*(
 
   const sessions = yield* Effect.forEach(
     names.filter(name => name.endsWith('.jsonl')),
-    name => Effect.gen(function*() {
+    name => Effect.result(Effect.gen(function*() {
       const path = join(projectDirectory, name)
       if (!(yield* freshFile(path))) return null
       const sid = name.slice(0, -'.jsonl'.length)
@@ -124,20 +135,23 @@ export const collect = Effect.fn('collect')(function*(
         meta: null,
         label: normalizeSessionLabel(yield* firstPrompt(path), sid.slice(0, 8)),
       } satisfies CollectedItem
-    }),
+    })),
     { concurrency: FILE_CONCURRENCY },
   )
 
   const subagents = yield* Effect.forEach(
     names.filter(name => !name.endsWith('.jsonl')),
-    sessionName => Effect.gen(function*() {
+    sessionName => Effect.result(Effect.gen(function*() {
       const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
       const subagentNames = yield* fs.readDirectory(subagentsDirectory).pipe(
-        Effect.catchTag('PlatformError', () => Effect.succeed([] as Array<string>)),
+        Effect.catchIf(
+          error => error.reason._tag === 'NotFound',
+          () => Effect.succeed([] as Array<string>),
+        ),
       )
-      return yield* Effect.forEach(
+      const results = yield* Effect.forEach(
         subagentNames.filter(name => name.endsWith('.jsonl')).sort((a, b) => a.localeCompare(b)),
-        name => Effect.gen(function*() {
+        name => Effect.result(Effect.gen(function*() {
           const path = join(subagentsDirectory, name)
           if (!(yield* freshFile(path))) return null
           const agent = name.slice(0, -'.jsonl'.length)
@@ -150,13 +164,27 @@ export const collect = Effect.fn('collect')(function*(
             meta,
             label: normalizeSessionLabel(meta?.description || '', agent),
           } satisfies CollectedItem
-        }),
+        })),
       )
-    }),
+      return {
+        items: results.flatMap(result => Result.isSuccess(result) && result.success ? [result.success] : []),
+        unreadable: results.filter(Result.isFailure).length,
+      } satisfies CollectedItems
+    })),
     { concurrency: FILE_CONCURRENCY },
   )
 
-  return [...sessions, ...subagents.flat()].filter(Predicate.isNotNull)
+  return {
+    items: [
+      ...sessions.flatMap(result => Result.isSuccess(result) && result.success ? [result.success] : []),
+      ...subagents.flatMap(result => Result.isSuccess(result) ? result.success.items : []),
+    ],
+    unreadable: sessions.filter(Result.isFailure).length
+      + subagents.reduce(
+        (total, result) => total + (Result.isSuccess(result) ? result.success.unreadable : 1),
+        0,
+      ),
+  } satisfies CollectedItems
 })
 
 export const buildTree = Effect.fn('buildTree')(function*(
@@ -164,12 +192,17 @@ export const buildTree = Effect.fn('buildTree')(function*(
   hours: number,
 ) {
   const cache = yield* ScanCache
-  const items = yield* collect(projectDirectory, hours)
-  const scans = yield* Effect.forEach(
-    items,
-    item => cache.get(item.path),
+  const discovery = yield* collect(projectDirectory, hours)
+  const scanResults = yield* Effect.forEach(
+    discovery.items,
+    item => Effect.result(cache.get(item.path)),
     { concurrency: FILE_CONCURRENCY },
   )
+  const readable = scanResults.flatMap((result, index) => Result.isSuccess(result)
+    ? [{ item: discovery.items[index]!, scan: result.success }]
+    : [])
+  const items = readable.map(entry => entry.item)
+  const scans = readable.map(entry => entry.scan)
   const stats = yield* Effect.forEach(scans, scan => scan.stats)
   const byKey = new Map<string, RunNode>()
 
@@ -233,6 +266,7 @@ export const buildTree = Effect.fn('buildTree')(function*(
     byKey,
     cwd: scans.find(scan => scan.cwd)?.cwd || '',
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
+    unreadable: discovery.unreadable + scanResults.filter(Result.isFailure).length,
   }
 })
 

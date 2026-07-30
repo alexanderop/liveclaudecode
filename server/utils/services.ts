@@ -252,8 +252,8 @@ export class SessionLocatorCache extends Context.Service<SessionLocatorCache, {
 export class PromptCache extends Context.Service<PromptCache, {
   readonly get: (
     path: string,
-    read: Effect.Effect<string, never, FileSystem.FileSystem>,
-  ) => Effect.Effect<string, never, FileSystem.FileSystem>
+    read: Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem>,
+  ) => Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem>
 }>()('lcc/PromptCache') {
   static readonly layer = Layer.effect(
     PromptCache,

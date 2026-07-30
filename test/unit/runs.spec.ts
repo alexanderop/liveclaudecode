@@ -1,9 +1,12 @@
 import { resolve, sep } from 'node:path'
 import { assert, describe, it } from '@effect/vitest'
-import { Effect, Layer } from 'effect'
+import { Effect, Layer, Stream } from 'effect'
+import * as FileSystem from 'effect/FileSystem'
+import * as PlatformError from 'effect/PlatformError'
 import { FastCheck } from 'effect/testing'
 import {
   buildTree,
+  firstPrompt,
   flatten,
   pathFor,
   rollup,
@@ -136,6 +139,105 @@ describe('run hierarchy', () => {
       Effect.map(built => assert.deepStrictEqual(built.roots, [])),
       Effect.provide(TestLayer),
     ))
+
+  it.effect('treats missing subagent metadata and directories as optional', () =>
+    buildTree('/optional', 99_999).pipe(
+      Effect.map((built) => {
+        assert.strictEqual(built.roots.length, 1)
+        assert.strictEqual(built.roots[0]?.children[0]?.label, 'worker')
+      }),
+      Effect.provide(
+        Layer.mergeAll(ScanCache.layer, PromptCache.layer).pipe(
+          Layer.provideMerge(testFileSystem({
+            '/optional/session.jsonl': fixture.transcript([fixture.userText('Session')]),
+            '/optional/session/subagents/worker.jsonl': fixture.transcript([
+              fixture.assistant([fixture.text('Done')]),
+            ]),
+            '/optional/empty/placeholder.txt': '',
+          })),
+        ),
+      ),
+    ))
+
+  it.effect('degrades around permission failures while reading session prompts', () => {
+    const path = '/denied/session.jsonl'
+    return Effect.gen(function*() {
+      const built = yield* buildTree('/denied', 99_999)
+      assert.strictEqual(built.roots.length, 0)
+      assert.strictEqual(built.unreadable, 1)
+    }).pipe(Effect.provide(
+      Layer.mergeAll(ScanCache.layer, PromptCache.layer).pipe(
+        Layer.provideMerge(testFileSystem({
+          [path]: fixture.transcript([fixture.userText('Secret')]),
+        }, { denied: [path] })),
+      ),
+    ))
+  })
+
+  it.effect('degrades around permission failures while reading subagent metadata', () => {
+    const meta = '/denied-meta/session/subagents/worker.meta.json'
+    return Effect.gen(function*() {
+      const built = yield* buildTree('/denied-meta', 99_999)
+      assert.strictEqual(built.roots[0]?.key, 'session')
+      assert.strictEqual(built.roots[0]?.children.length, 0)
+      assert.strictEqual(built.unreadable, 1)
+    }).pipe(Effect.provide(
+      Layer.mergeAll(ScanCache.layer, PromptCache.layer).pipe(
+        Layer.provideMerge(testFileSystem({
+          '/denied-meta/session.jsonl': fixture.transcript([fixture.userText('Session')]),
+          '/denied-meta/session/subagents/worker.jsonl': fixture.transcript([
+            fixture.assistant([fixture.text('Done')]),
+          ]),
+          [meta]: JSON.stringify({ description: 'worker' }),
+        }, { denied: [meta] })),
+      ),
+    ))
+  })
+
+  it.effect('degrades around permission failures while listing subagents', () => {
+    const directory = '/denied-directory/session/subagents'
+    return Effect.gen(function*() {
+      const built = yield* buildTree('/denied-directory', 99_999)
+      assert.strictEqual(built.roots[0]?.key, 'session')
+      assert.strictEqual(built.roots[0]?.children.length, 0)
+      assert.strictEqual(built.unreadable, 1)
+    }).pipe(Effect.provide(
+      Layer.mergeAll(ScanCache.layer, PromptCache.layer).pipe(
+        Layer.provideMerge(testFileSystem({
+          '/denied-directory/session.jsonl': fixture.transcript([fixture.userText('Session')]),
+          [`${directory}/worker.jsonl`]: fixture.transcript([
+            fixture.assistant([fixture.text('Done')]),
+          ]),
+        }, { denied: [directory] })),
+      ),
+    ))
+  })
+
+  it.effect('does not cache a transient missing-prompt fallback', () =>
+    {
+      let attempts = 0
+      const missing = PlatformError.systemError({
+        _tag: 'NotFound',
+        module: 'FileSystem',
+        method: 'stream',
+        pathOrDescriptor: '/retry/session.jsonl',
+      })
+      const content = new TextEncoder().encode(fixture.transcript([
+        fixture.userText('Recovered prompt'),
+      ]))
+      const fileSystem = FileSystem.layerNoop({
+        stream: () => {
+          attempts += 1
+          return attempts === 1 ? Stream.fail(missing) : Stream.make(content)
+        },
+      })
+      return Effect.gen(function*() {
+        assert.strictEqual(yield* firstPrompt('/retry/session.jsonl'), '')
+        assert.strictEqual(yield* firstPrompt('/retry/session.jsonl'), 'Recovered prompt')
+        assert.strictEqual(attempts, 2)
+      }).pipe(Effect.provide(Layer.mergeAll(PromptCache.layer, fileSystem)))
+    },
+  )
 
   it.effect('caches scans within a layer but not across them', () =>
     Effect.gen(function*() {

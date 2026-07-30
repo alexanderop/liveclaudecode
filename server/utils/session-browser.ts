@@ -46,6 +46,7 @@ interface ClaudeTree {
   byKey: Map<string, RunNode>
   cwd: string
   malformed: number
+  unreadable: number
 }
 
 type SessionLocator =
@@ -203,7 +204,8 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
         }))
       }
     }
-    statuses.push(sourceStatus('claude', sessions, malformed))
+    const unreadable = claudeResult.success.reduce((total, item) => total + item.tree.unreadable, 0)
+    statuses.push(sourceStatus('claude', sessions, malformed, '', unreadable, 'transcript'))
   } else {
     statuses.push(sourceStatus('claude', 0, 0, failureMessage(claudeResult.failure)))
   }
