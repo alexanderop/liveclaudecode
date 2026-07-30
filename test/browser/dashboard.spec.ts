@@ -145,3 +145,74 @@ test('keeps selected-agent activity inside a scrollable viewport', async ({ page
   await page.mouse.wheel(0, 500)
   await expect.poll(() => feed.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
 })
+
+test('supports every advertised view and sidebar shortcut', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'networkidle' })
+
+  const openView = page.getByRole('button', { name: 'Open a session view' })
+  const workspace = page.locator('.session-primary')
+  const primaryDestinations = [
+    ['n', 'Overview'],
+    ['m', 'Agent map'],
+    ['a', 'Activity'],
+    ['d', 'Changes'],
+    ['i', 'Diagnostics'],
+  ] as const
+
+  // Nuxt UI renders its platform-aware `meta` shortcut as Control in Chromium's Linux runtime.
+  await page.keyboard.press('Control+k')
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  for (const [shortcut, label] of primaryDestinations) {
+    await openView.click()
+    await page.keyboard.press(shortcut)
+    await expect(workspace).toHaveAttribute('aria-label', `${label} workspace`)
+  }
+
+  await openView.click()
+  await page.keyboard.press('q')
+  await expect(page.locator('.ask-context')).toBeVisible()
+  await page.getByRole('button', { name: 'Close Ask' }).click()
+
+  for (const [shortcut, label] of primaryDestinations) {
+    await openView.click()
+    await page.getByRole('menuitem', { name: /Expand launcher/ }).click()
+    await page.keyboard.press(shortcut)
+    await expect(workspace).toHaveAttribute('aria-label', `${label} workspace`)
+  }
+
+  await openView.click()
+  await page.getByRole('menuitem', { name: /Expand launcher/ }).click()
+  await page.keyboard.press('q')
+  await expect(page.locator('.ask-context')).toBeVisible()
+  await page.getByRole('button', { name: 'Close Ask' }).click()
+
+  await page.keyboard.press('Control+b')
+  await expect(page.getByRole('button', { name: 'Show session browser' })).toBeVisible()
+  await page.keyboard.press('Meta+b')
+  await expect(page.getByRole('button', { name: 'Hide sidebar' })).toBeVisible()
+})
+
+test('activates Sessions with the advertised G then S shortcut', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'networkidle' })
+
+  const sessions = page.locator('.primary-nav-item').filter({ hasText: 'Sessions' })
+  const attention = page.locator('.primary-nav-item').filter({ hasText: 'Attention' })
+
+  await attention.click()
+  await expect(attention).toHaveAttribute('aria-pressed', 'true')
+  await expect(sessions).toHaveAttribute('aria-pressed', 'false')
+
+  await page.keyboard.press('g')
+  await page.keyboard.press('s')
+
+  await expect(sessions).toHaveAttribute('aria-pressed', 'true')
+  await expect(attention).toHaveAttribute('aria-pressed', 'false')
+
+  await attention.click()
+  await page.getByRole('button', { name: 'Search' }).click()
+  await page.getByPlaceholder('Jump to a session or view…').pressSequentially('gs')
+  await expect(attention).toHaveAttribute('aria-pressed', 'true')
+})
