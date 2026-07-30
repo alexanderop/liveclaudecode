@@ -110,6 +110,8 @@ const panelMax = computed(() => {
 })
 const workspaceStyle = computed(() => ({ '--panel-width': `${effectivePanelWidth.value}px` }))
 let widthsHydrated = false
+let sessionsShortcutPending = false
+let sessionsShortcutTimer: ReturnType<typeof setTimeout> | undefined
 
 function clampWidth(width: number, min: number, max: number): number {
   return Math.round(Math.min(Math.max(width, min), max))
@@ -321,14 +323,54 @@ async function selectSession(project: string, key: string): Promise<void> {
   await live.select(key, project)
 }
 
+function resetSessionsShortcut(): void {
+  sessionsShortcutPending = false
+  if (sessionsShortcutTimer !== undefined) clearTimeout(sessionsShortcutTimer)
+  sessionsShortcutTimer = undefined
+}
+
+function beginSessionsShortcut(): void {
+  resetSessionsShortcut()
+  sessionsShortcutPending = true
+  sessionsShortcutTimer = setTimeout(resetSessionsShortcut, 1_000)
+}
+
+function isEditableShortcutTarget(event: KeyboardEvent): boolean {
+  const target = event.target
+  return target instanceof HTMLElement
+    && (target.isContentEditable || target.matches('input, textarea, select, [role="textbox"]'))
+}
+
 function handleShortcut(event: KeyboardEvent): void {
   if (event.defaultPrevented || event.isComposing) return
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b' && !event.altKey) {
+    resetSessionsShortcut()
     event.preventDefault()
     sidebarCollapsed.value = !sidebarCollapsed.value
     return
   }
+  const unmodified = !event.metaKey && !event.ctrlKey && !event.altKey
+  if (unmodified && !isEditableShortcutTarget(event)) {
+    const key = event.key.toLowerCase()
+    if (sessionsShortcutPending) {
+      resetSessionsShortcut()
+      if (key === 's') {
+        event.preventDefault()
+        live.liveOnly.value = false
+        live.attentionOnly.value = false
+        return
+      }
+    }
+    if (key === 'g') {
+      event.preventDefault()
+      beginSessionsShortcut()
+      return
+    }
+  } else {
+    resetSessionsShortcut()
+  }
   if (event.key !== 'Escape') return
+  resetSessionsShortcut()
   if (workspaceState.value.launcher.kind === 'compact') {
     event.preventDefault()
     closeLauncher()
@@ -427,6 +469,7 @@ onMounted(() => {
   window.addEventListener('resize', fitPanelsToViewport)
 })
 onUnmounted(() => {
+  resetSessionsShortcut()
   document.querySelectorAll<HTMLElement>('[inert]').forEach(target => target.removeAttribute('inert'))
   document.body.classList.remove('modal-layer-open')
   window.removeEventListener('keydown', handleShortcut)
