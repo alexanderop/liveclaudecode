@@ -1,5 +1,5 @@
 import { dirname } from 'node:path'
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Scope } from 'effect'
+import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Scope } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import { AcpAgentError, AcpConnector, type AcpConnection } from './acp-connection'
 import { pathFor } from './runs'
@@ -31,6 +31,16 @@ export class ChatBusy extends Schema.TaggedErrorClass<ChatBusy>()(
 ) {
   override get message(): string {
     return 'A reply is already in progress for this chat'
+  }
+}
+
+/** The process already owns the maximum number of active Ask conversations. */
+export class ChatCapacity extends Schema.TaggedErrorClass<ChatCapacity>()(
+  'ChatCapacity',
+  { capacity: Schema.Number },
+) {
+  override get message(): string {
+    return `At most ${this.capacity} Ask conversations can run at once`
   }
 }
 
@@ -121,10 +131,15 @@ export interface ChatRecord {
   primed: boolean
   /** The currently starting or prompting turn, owned by this record. */
   turn: Fiber.Fiber<void, never> | null
+  /** Cancellation owns the turn while its best-effort ACP notification runs. */
+  cancelling: boolean
+  /** Completion time used for idle expiry and least-recently-idle eviction. */
+  idleSince: number | null
 }
 
 type ChatReservation =
   | { readonly _tag: 'Busy' }
+  | { readonly _tag: 'Full' }
   | {
       readonly _tag: 'Reserved'
       readonly record: ChatRecord
@@ -137,8 +152,25 @@ type ChatCancellation =
       readonly _tag: 'Claimed'
       readonly record: ChatRecord
       readonly generation: number
-      readonly turn: Fiber.Fiber<void, never>
+      readonly turn: Fiber.Fiber<void, never> | null
     }
+
+const CHAT_RECORD_CAPACITY = 10
+const CHAT_IDLE_TTL_MILLIS = 30 * 60 * 1_000
+
+const closeChatRecord = Effect.fn('closeChatRecord')(function*(record: ChatRecord) {
+  record.generation += 1
+  if (record.turn) yield* Fiber.interrupt(record.turn)
+  record.turn = null
+  record.cancelling = false
+  record.status = 'idle'
+  const scope = record.scope
+  record.scope = null
+  record.connection = null
+  record.sessionId = null
+  record.primed = false
+  if (scope) yield* Scope.close(scope, Exit.void)
+})
 
 /** Live chats keyed by `${project}\0${key}`, scoped to the provided Layer. */
 export class ChatStore extends Context.Service<ChatStore, {
@@ -154,6 +186,11 @@ export class ChatStore extends Context.Service<ChatStore, {
     generation: number,
     turn: Fiber.Fiber<void, never>,
   ) => Effect.Effect<boolean>
+  readonly settle: (
+    chatKey: string,
+    record: ChatRecord,
+    generation: number,
+  ) => Effect.Effect<void>
   readonly claimCancellation: (chatKey: string) => Effect.Effect<ChatCancellation>
   readonly remove: (chatKey: string) => Effect.Effect<ChatRecord | undefined>
 }>()('lcc/ChatStore') {
@@ -161,62 +198,139 @@ export class ChatStore extends Context.Service<ChatStore, {
     ChatStore,
     Effect.gen(function*() {
       const records = new Map<string, ChatRecord>()
+      const takeEvictable = (now: number, maximumSize: number): ChatRecord[] => {
+        const evicted: ChatRecord[] = []
+        for (const [key, record] of records) {
+          if (
+            record.idleSince !== null
+            && now - record.idleSince >= CHAT_IDLE_TTL_MILLIS
+          ) {
+            records.delete(key)
+            evicted.push(record)
+          }
+        }
+        if (records.size > maximumSize) {
+          const idle = [...records.entries()]
+            .filter((entry): entry is [string, ChatRecord & { idleSince: number }] =>
+              entry[1].idleSince !== null,
+            )
+            .sort((left, right) => left[1].idleSince - right[1].idleSince)
+          for (const [key, record] of idle) {
+            if (records.size <= maximumSize) break
+            records.delete(key)
+            evicted.push(record)
+          }
+        }
+        return evicted
+      }
+      const closeEvicted = (records: ReadonlyArray<ChatRecord>) => Effect.uninterruptible(
+        Effect.forEach(records, closeChatRecord, { discard: true }),
+      )
       yield* Effect.addFinalizer(() => Effect.forEach(
         records.values(),
-        record => Effect.gen(function*() {
-          if (record.turn) yield* Fiber.interrupt(record.turn)
-          if (record.scope) yield* Scope.close(record.scope, Exit.void)
-        }),
+        closeChatRecord,
         { discard: true },
       ))
       return ChatStore.of({
-        get: chatKey => Effect.sync(() => records.get(chatKey)),
-        reserve: (chatKey, agent, text) => Effect.sync(() => {
-          let record = records.get(chatKey)
-          if (record && (record.status === 'busy' || record.status === 'starting')) {
-            return { _tag: 'Busy' } as const
-          }
-          if (!record) {
-            record = {
-              agent,
-              status: 'idle',
-              revision: 1,
-              generation: 0,
-              base: 0,
-              events: [],
-              scope: null,
-              connection: null,
-              sessionId: null,
-              primed: false,
-              turn: null,
+        get: chatKey => Effect.uninterruptible(Effect.gen(function*() {
+          const now = yield* Clock.currentTimeMillis
+          const { record, evicted } = yield* Effect.sync(() => {
+            const evicted = takeEvictable(now, CHAT_RECORD_CAPACITY)
+            return { record: records.get(chatKey), evicted }
+          })
+          yield* closeEvicted(evicted)
+          return record
+        })),
+        reserve: (chatKey, agent, text) => Effect.uninterruptible(Effect.gen(function*() {
+          const now = yield* Clock.currentTimeMillis
+          const { reservation, evicted } = yield* Effect.sync(() => {
+            const exists = records.has(chatKey)
+            const evicted = takeEvictable(
+              now,
+              exists ? CHAT_RECORD_CAPACITY : CHAT_RECORD_CAPACITY - 1,
+            )
+            let record = records.get(chatKey)
+            if (
+              record
+              && (
+                record.cancelling
+                || record.status === 'busy'
+                || record.status === 'starting'
+              )
+            ) {
+              return {
+                reservation: { _tag: 'Busy' } as const,
+                evicted,
+              }
             }
-            records.set(chatKey, record)
-          } else if (record.agent !== agent) {
-            record.agent = agent
-            record.connection = null
-            record.sessionId = null
-            record.primed = false
-          }
-          record.generation += 1
-          appendEvent(record, { kind: 'user', text })
-          record.status = record.connection ? 'busy' : 'starting'
-          return {
-            _tag: 'Reserved',
-            record,
-            generation: record.generation,
-          } as const
-        }),
+            if (!record && records.size >= CHAT_RECORD_CAPACITY) {
+              return {
+                reservation: { _tag: 'Full' } as const,
+                evicted,
+              }
+            }
+            if (!record) {
+              record = {
+                agent,
+                status: 'idle',
+                revision: 1,
+                generation: 0,
+                base: 0,
+                events: [],
+                scope: null,
+                connection: null,
+                sessionId: null,
+                primed: false,
+                turn: null,
+                cancelling: false,
+                idleSince: now,
+              }
+              records.set(chatKey, record)
+            } else if (record.agent !== agent) {
+              record.agent = agent
+              record.connection = null
+              record.sessionId = null
+              record.primed = false
+            }
+            record.generation += 1
+            record.idleSince = null
+            appendEvent(record, { kind: 'user', text })
+            record.status = record.connection ? 'busy' : 'starting'
+            return {
+              reservation: {
+                _tag: 'Reserved',
+                record,
+                generation: record.generation,
+              } as const,
+              evicted,
+            }
+          })
+          yield* closeEvicted(evicted)
+          return reservation
+        })),
         attach: (chatKey, record, generation, turn) => Effect.sync(() => {
           if (records.get(chatKey) !== record || record.generation !== generation) return false
           record.turn = turn
           return true
         }),
+        settle: (chatKey, record, generation) => Effect.uninterruptible(Effect.gen(function*() {
+          const now = yield* Clock.currentTimeMillis
+          const evicted = yield* Effect.sync(() => {
+            if (records.get(chatKey) === record && record.generation === generation) {
+              record.turn = null
+              record.cancelling = false
+              record.idleSince = now
+            }
+            return takeEvictable(now, CHAT_RECORD_CAPACITY)
+          })
+          yield* closeEvicted(evicted)
+        })),
         claimCancellation: chatKey => Effect.sync(() => {
           const record = records.get(chatKey)
           if (
             !record
             || (record.status !== 'busy' && record.status !== 'starting')
-            || !record.turn
+            || record.cancelling
           ) {
             return {
               _tag: 'Inactive',
@@ -224,7 +338,7 @@ export class ChatStore extends Context.Service<ChatStore, {
             } as const
           }
           const turn = record.turn
-          record.turn = null
+          record.cancelling = true
           record.generation += 1
           return {
             _tag: 'Claimed',
@@ -233,12 +347,15 @@ export class ChatStore extends Context.Service<ChatStore, {
             turn,
           } as const
         }),
-        remove: chatKey => Effect.sync(() => {
-          const record = records.get(chatKey)
-          records.delete(chatKey)
-          if (record) record.generation += 1
+        remove: chatKey => Effect.uninterruptible(Effect.gen(function*() {
+          const record = yield* Effect.sync(() => {
+            const record = records.get(chatKey)
+            records.delete(chatKey)
+            return record
+          })
+          if (record) yield* closeChatRecord(record)
           return record
-        }),
+        })),
       })
     }),
   )
@@ -469,6 +586,8 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
 
 const runChatTurnSafely = Effect.fn('runChatTurnSafely')(
   function*(
+    chatKey: string,
+    store: ChatStore['Service'],
     record: ChatRecord,
     generation: number,
     connector: AcpConnector['Service'],
@@ -480,11 +599,9 @@ const runChatTurnSafely = Effect.fn('runChatTurnSafely')(
   ) {
     yield* runChatTurn(record, generation, connector, command, location, transcriptPath, cwd, text)
   },
-  (effect, record, generation) => effect.pipe(
+  (effect, chatKey, store, record, generation) => effect.pipe(
     Effect.catch(error => failChatTurn(record, generation, error)),
-    Effect.ensuring(Effect.sync(() => {
-      if (record.generation === generation) record.turn = null
-    })),
+    Effect.ensuring(store.settle(chatKey, record, generation)),
   ),
 )
 
@@ -514,11 +631,16 @@ export const sendChatMessage = Effect.fn('sendChatMessage')(function*(
   return yield* Effect.uninterruptible(Effect.gen(function*() {
     const reservation = yield* store.reserve(id, agent as ChatAgentId, text)
     if (reservation._tag === 'Busy') return yield* new ChatBusy({ key })
+    if (reservation._tag === 'Full') {
+      return yield* new ChatCapacity({ capacity: CHAT_RECORD_CAPACITY })
+    }
     const { record, generation } = reservation
     const start = yield* Deferred.make<void>()
     const turn = yield* Effect.forkDetach(
       Deferred.await(start).pipe(
         Effect.andThen(runChatTurnSafely(
+          id,
+          store,
           record,
           generation,
           connector,
@@ -571,17 +693,19 @@ export const pollChatEvents = Effect.fn('pollChatEvents')(function*(
 export const cancelChat = Effect.fn('cancelChat')(function*(project: string, key: string) {
   return yield* Effect.uninterruptibleMask(restore => Effect.gen(function*() {
     const store = yield* ChatStore
-    const cancellation = yield* store.claimCancellation(chatKey(project, key))
+    const id = chatKey(project, key)
+    const cancellation = yield* store.claimCancellation(id)
     if (cancellation._tag === 'Inactive') {
       return { status: cancellation.status } satisfies ChatActionResponse
     }
     const { generation, record, turn } = cancellation
     const cleanup = Effect.gen(function*() {
-      yield* Fiber.interrupt(turn)
+      if (turn) yield* Fiber.interrupt(turn)
       if (record.generation === generation) {
         yield* closeChatConnection(record)
         appendEvent(record, { kind: 'turn-end', stopReason: 'cancelled' })
         record.status = 'idle'
+        yield* store.settle(id, record, generation)
       }
     })
     const notify = record.connection && record.sessionId
@@ -595,11 +719,7 @@ export const cancelChat = Effect.fn('cancelChat')(function*(project: string, key
 export const resetChat = Effect.fn('resetChat')(function*(project: string, key: string) {
   return yield* Effect.uninterruptible(Effect.gen(function*() {
     const store = yield* ChatStore
-    const record = yield* store.remove(chatKey(project, key))
-    if (record) {
-      if (record.turn) yield* Fiber.interrupt(record.turn)
-      yield* closeChatConnection(record)
-    }
+    yield* store.remove(chatKey(project, key))
     return { status: 'idle' } satisfies ChatActionResponse
   }))
 })

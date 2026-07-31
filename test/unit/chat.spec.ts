@@ -1,5 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
-import { Deferred, Effect, Fiber, Layer, Result } from 'effect'
+import { Deferred, Effect, Fiber, Layer, Result, Scope } from 'effect'
+import { TestClock } from 'effect/testing'
 import { AcpConnector, type AcpConnectionOptions } from '#server/utils/acp-connection'
 import {
   ChatAgentCommands,
@@ -166,6 +167,166 @@ describe('session chat', () => {
       assert.strictEqual(second.events.filter(event => event.kind === 'turn-end').length, 2)
     }).pipe(Effect.provide(chatLayer(prompts)))
   })
+
+  it.effect('expires idle chats and closes their retained ACP scope', () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime(0)
+      const store = yield* ChatStore
+      const reservation = yield* store.reserve('idle-chat', 'codex', 'Hello')
+      assert.strictEqual(reservation._tag, 'Reserved')
+      if (reservation._tag !== 'Reserved') return
+
+      let closed = false
+      const scope = yield* Scope.make()
+      yield* Scope.addFinalizer(scope, Effect.sync(() => { closed = true }))
+      reservation.record.scope = scope
+      reservation.record.status = 'idle'
+      yield* store.settle('idle-chat', reservation.record, reservation.generation)
+
+      yield* TestClock.setTime(30 * 60 * 1_000 - 1)
+      assert.strictEqual(yield* store.get('idle-chat'), reservation.record)
+      assert.isFalse(closed)
+
+      yield* TestClock.setTime(30 * 60 * 1_000)
+      assert.strictEqual(yield* store.get('idle-chat'), undefined)
+      assert.isTrue(closed)
+    }).pipe(Effect.provide(ChatStore.layer)))
+
+  it.effect('bounds idle chats without evicting an active turn', () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime(0)
+      const store = yield* ChatStore
+      const active = yield* store.reserve('active-chat', 'codex', 'Keep working')
+      assert.strictEqual(active._tag, 'Reserved')
+
+      const closed: string[] = []
+      for (let index = 0; index < 10; index += 1) {
+        yield* TestClock.setTime(index + 1)
+        const key = `idle-${index}`
+        const reservation = yield* store.reserve(key, 'codex', 'Hello')
+        assert.strictEqual(reservation._tag, 'Reserved')
+        if (reservation._tag !== 'Reserved') continue
+        const scope = yield* Scope.make()
+        yield* Scope.addFinalizer(scope, Effect.sync(() => { closed.push(key) }))
+        reservation.record.scope = scope
+        reservation.record.status = 'idle'
+        yield* store.settle(key, reservation.record, reservation.generation)
+      }
+
+      assert.isTrue((yield* store.get('active-chat')) !== undefined)
+      assert.strictEqual(yield* store.get('idle-0'), undefined)
+      assert.deepStrictEqual(closed, ['idle-0'])
+
+      yield* TestClock.setTime(30 * 60 * 1_000 + 1)
+      assert.isTrue((yield* store.get('active-chat')) !== undefined)
+    }).pipe(Effect.provide(ChatStore.layer)))
+
+  it.effect('rejects a new chat when every retained slot owns an active turn', () =>
+    Effect.gen(function*() {
+      const store = yield* ChatStore
+      for (let index = 0; index < 10; index += 1) {
+        const reservation = yield* store.reserve(`active-${index}`, 'codex', 'Keep working')
+        assert.strictEqual(reservation._tag, 'Reserved')
+      }
+
+      const overflow = yield* store.reserve('active-overflow', 'codex', 'One more')
+      assert.strictEqual(overflow._tag, 'Full')
+      assert.strictEqual(yield* store.get('active-overflow'), undefined)
+    }).pipe(Effect.provide(ChatStore.layer)))
+
+  it.effect('finishes eviction cleanup when its triggering read is interrupted', () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime(0)
+      const store = yield* ChatStore
+      const reservation = yield* store.reserve('expiring-chat', 'codex', 'Hello')
+      assert.strictEqual(reservation._tag, 'Reserved')
+      if (reservation._tag !== 'Reserved') return
+
+      const cleanupStarted = yield* Deferred.make<void>()
+      const releaseCleanup = yield* Deferred.make<void>()
+      let closed = false
+      const scope = yield* Scope.make()
+      yield* Scope.addFinalizer(scope, Effect.gen(function*() {
+        yield* Deferred.succeed(cleanupStarted, undefined)
+        yield* Deferred.await(releaseCleanup)
+        closed = true
+      }))
+      reservation.record.scope = scope
+      reservation.record.status = 'idle'
+      yield* store.settle('expiring-chat', reservation.record, reservation.generation)
+      yield* TestClock.setTime(30 * 60 * 1_000)
+
+      const reading = yield* Effect.forkChild(store.get('expiring-chat'))
+      yield* Deferred.await(cleanupStarted)
+      const interrupting = yield* Effect.forkChild(Fiber.interrupt(reading))
+      yield* Effect.yieldNow
+      assert.isFalse(closed)
+
+      yield* Deferred.succeed(releaseCleanup, undefined)
+      yield* Fiber.join(interrupting)
+      assert.isTrue(closed)
+      assert.strictEqual(yield* store.get('expiring-chat'), undefined)
+    }).pipe(Effect.provide(ChatStore.layer)))
+
+  it.effect('cancels a new reservation while admission waits for eviction cleanup', () => {
+    const prompts: unknown[] = []
+    const connections: AcpConnectionOptions[] = []
+    return Effect.gen(function*() {
+      const store = yield* ChatStore
+      const cleanupStarted = yield* Deferred.make<void>()
+      const releaseCleanup = yield* Deferred.make<void>()
+
+      for (let index = 0; index < 10; index += 1) {
+        yield* TestClock.setTime(index)
+        const key = `retained-${index}`
+        const reservation = yield* store.reserve(key, 'codex', 'Hello')
+        assert.strictEqual(reservation._tag, 'Reserved')
+        if (reservation._tag !== 'Reserved') continue
+        if (index === 0) {
+          const scope = yield* Scope.make()
+          yield* Scope.addFinalizer(scope, Effect.gen(function*() {
+            yield* Deferred.succeed(cleanupStarted, undefined)
+            yield* Deferred.await(releaseCleanup)
+          }))
+          reservation.record.scope = scope
+        }
+        reservation.record.status = 'idle'
+        yield* store.settle(key, reservation.record, reservation.generation)
+      }
+
+      const sending = yield* Effect.forkChild(
+        sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Do not start'),
+      )
+      yield* Deferred.await(cleanupStarted)
+      const cancelled = yield* cancelChat('/repo', 'codex:chat-run')
+      assert.strictEqual(cancelled.status, 'idle')
+
+      yield* Deferred.succeed(releaseCleanup, undefined)
+      const sendResult = yield* Fiber.join(sending)
+      assert.strictEqual(sendResult.status, 'idle')
+      assert.strictEqual(connections.length, 0)
+      assert.strictEqual(prompts.length, 0)
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
+      assert.deepStrictEqual(response.events.map(event => event.kind), ['user', 'turn-end'])
+    }).pipe(Effect.provide(chatLayer(prompts, connections)))
+  })
+
+  it.effect('closes retained chat scopes when the store layer is released', () =>
+    Effect.gen(function*() {
+      let closed = false
+      yield* Effect.gen(function*() {
+        const store = yield* ChatStore
+        const reservation = yield* store.reserve('retained-chat', 'codex', 'Hello')
+        assert.strictEqual(reservation._tag, 'Reserved')
+        if (reservation._tag !== 'Reserved') return
+        const scope = yield* Scope.make()
+        yield* Scope.addFinalizer(scope, Effect.sync(() => { closed = true }))
+        reservation.record.scope = scope
+        reservation.record.status = 'idle'
+        yield* store.settle('retained-chat', reservation.record, reservation.generation)
+      }).pipe(Effect.provide(ChatStore.layer))
+      assert.isTrue(closed)
+    }))
 
   it.effect('launches Copilot CLI and attributes its streamed answer to Copilot', () => {
     const prompts: unknown[] = []
@@ -386,6 +547,54 @@ describe('session chat', () => {
       assert.strictEqual(response.status, 'idle')
       assert.strictEqual(terminalEvents.length, 1)
       assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
+    }).pipe(Effect.provide(chatLayer([], [], connector)))
+  })
+
+  it.effect('keeps a cancelling turn owned so concurrent reset can interrupt it', () => {
+    let promptStarted!: Deferred.Deferred<void>
+    let cancelNotified!: Deferred.Deferred<void>
+    let releaseCancel!: Deferred.Deferred<void>
+    let turnInterrupted = false
+    const connector = AcpConnector.of({
+      connect: () => Effect.succeed({
+        request: method => {
+          if (method === 'initialize') return Effect.succeed({ protocolVersion: 1 })
+          if (method === 'session/new') return Effect.succeed({ sessionId: 'cancel-reset-session' })
+          if (method === 'session/prompt') {
+            return Effect.gen(function*() {
+              yield* Deferred.succeed(promptStarted, undefined)
+              return yield* Effect.never
+            }).pipe(Effect.onInterrupt(() => Effect.sync(() => { turnInterrupted = true })))
+          }
+          return Effect.succeed({})
+        },
+        notify: method => method === 'session/cancel'
+          ? Effect.gen(function*() {
+              yield* Deferred.succeed(cancelNotified, undefined)
+              yield* Deferred.await(releaseCancel)
+            })
+          : Effect.void,
+      }),
+    })
+    return Effect.gen(function*() {
+      promptStarted = yield* Deferred.make<void>()
+      cancelNotified = yield* Deferred.make<void>()
+      releaseCancel = yield* Deferred.make<void>()
+      yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Keep working')
+      yield* Deferred.await(promptStarted)
+
+      const cancelling = yield* Effect.forkChild(cancelChat('/repo', 'codex:chat-run'))
+      yield* Deferred.await(cancelNotified)
+      const reset = yield* resetChat('/repo', 'codex:chat-run')
+
+      assert.strictEqual(reset.status, 'idle')
+      assert.isTrue(turnInterrupted)
+      yield* Deferred.succeed(releaseCancel, undefined)
+      assert.strictEqual((yield* Fiber.join(cancelling)).status, 'idle')
+
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 1, 1)
+      assert.deepStrictEqual(response.events, [])
+      assert.isTrue(response.reset)
     }).pipe(Effect.provide(chatLayer([], [], connector)))
   })
 

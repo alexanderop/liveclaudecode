@@ -16,6 +16,7 @@ import { SessionCatalogCache, SessionLocatorCache } from './session-catalog'
 import { AcpAgentError, AcpConnector } from './acp-connection'
 import {
   ChatBusy,
+  ChatCapacity,
   ChatStore,
   InvalidChatAction,
   UnknownChatAgent,
@@ -57,6 +58,7 @@ export type AppError =
   | InvalidChatAction
   | UnknownChatAgent
   | ChatBusy
+  | ChatCapacity
   | AcpAgentError
   | PlatformError.PlatformError
 
@@ -73,6 +75,8 @@ function toHttpError(error: AppError) {
       return createError({ statusCode: 400, statusMessage: error.message })
     case 'ChatBusy':
       return createError({ statusCode: 409, statusMessage: error.message })
+    case 'ChatCapacity':
+      return createError({ statusCode: 429, statusMessage: error.message })
     case 'UnknownProject':
     case 'NoTranscriptsFound':
     case 'UnknownRun':
