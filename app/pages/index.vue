@@ -511,9 +511,11 @@ onUnmounted(() => {
                 :loading="live.loading.value"
                 :source-incomplete="sourceIncomplete"
                 :source-message="selectedSourceMessage"
+                :projects="live.projects.value"
                 @open="openWorkspace"
                 @ask="openAskPanel"
                 @select="inspectAgent"
+                @select-agent="selectSession"
             />
 
             <div v-if="workspaceState.primary === 'activity'" class="primary-list-workspace activity-workspace">

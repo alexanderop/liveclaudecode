@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { RunNode, RunResponse } from '#shared/types/run'
+import type { ProjectRuns, RunNode, RunResponse } from '#shared/types/run'
 import { normalizeSessionLabel, normalizeSessionSummary } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import { agentState } from '~/utils/session-state'
@@ -12,18 +12,21 @@ const props = withDefaults(defineProps<{
   sourceIncomplete?: boolean
   sourceMessage?: string
   selectedKey?: string | null
+  projects?: ProjectRuns[]
 }>(), {
   root: null,
   loading: false,
   sourceIncomplete: false,
   sourceMessage: '',
   selectedKey: null,
+  projects: () => [],
 })
 
 const emit = defineEmits<{
   open: [destination: PrimaryWorkspaceKind]
   ask: []
   select: [key: string]
+  selectAgent: [project: string, key: string]
 }>()
 
 const toast = useToast()
@@ -153,6 +156,11 @@ async function copyTranscriptPath(): Promise<void> {
         </div>
         <span class="overview-status-pill" :class="displayState.kind">{{ displayState.label }}</span>
       </header>
+
+      <ActiveAgentsOverview
+        :projects="projects"
+        @select="(project, key) => emit('selectAgent', project, key)"
+      />
 
       <section class="overview-outcome" aria-labelledby="overview-outcome-heading">
         <div>
