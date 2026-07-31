@@ -25,13 +25,50 @@ interface EventPollerOptions {
   readonly currentProject: () => string | null
   readonly currentHours: () => SessionRangeHours
   readonly cursor: EventCursor
-  readonly request: (url: string) => Promise<EventsResponse | null>
+  readonly request: (
+    url: string,
+    isCurrent: () => boolean,
+  ) => Promise<EventsResponse | null>
   readonly settled?: (requestedKey: string) => void
 }
 
 interface EventPoller {
   readonly poll: () => Promise<void>
   readonly reset: () => void
+}
+
+interface RequestToken {
+  readonly key: string
+  readonly generation: number
+}
+
+interface LatestRequestGate {
+  readonly start: (key: string) => RequestToken | null
+  readonly isCurrent: (request: RequestToken) => boolean
+  readonly settle: (request: RequestToken) => void
+  readonly invalidate: () => void
+}
+
+function createLatestRequestGate(): LatestRequestGate {
+  let generation = 0
+  let pending: RequestToken | null = null
+
+  return {
+    start(key) {
+      if (pending?.key === key) return null
+      const request = { key, generation: generation += 1 }
+      pending = request
+      return request
+    },
+    isCurrent: request => request.generation === generation,
+    settle(request) {
+      if (pending === request) pending = null
+    },
+    invalidate() {
+      generation += 1
+      pending = null
+    },
+  }
 }
 
 function createEventPoller(options: EventPollerOptions): EventPoller {
@@ -48,17 +85,16 @@ function createEventPoller(options: EventPollerOptions): EventPoller {
     if (pending?.key === requestKey && pending.generation === requestGeneration) return
     const request = { key: requestKey, generation: requestGeneration }
     pending = request
+    const isCurrent = () => generation === requestGeneration
+      && options.currentKey() === key
+      && options.currentProject() === project
+      && options.currentHours() === hours
     try {
       const response = await options.request(
         `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${options.cursor.since.value}&revision=${options.cursor.revision.value}&hours=${hours}`,
+        isCurrent,
       )
-      if (
-        !response
-        || generation !== requestGeneration
-        || options.currentKey() !== key
-        || options.currentProject() !== project
-        || options.currentHours() !== hours
-      ) return
+      if (!response || !isCurrent()) return
       options.cursor.since.value = response.next
       options.cursor.revision.value = response.revision
       if (response.reset) options.cursor.events.value = [...response.events]
@@ -127,9 +163,10 @@ export function useLiveRuns() {
   let sessionEventTimer: ReturnType<typeof setInterval> | undefined
   let treePending = false
   let treeReloadQueued = false
+  let treeGeneration = 0
   let rangeInitialized = false
-  let runPendingKey: string | null = null
-  let sessionEventPendingKey: string | null = null
+  const runRequests = createLatestRequestGate()
+  const sessionEventRequests = createLatestRequestGate()
 
   const nodeIndex = computed(() => {
     const map = new Map<string, { node: RunNode, parent: string | null }>()
@@ -177,13 +214,16 @@ export function useLiveRuns() {
     .map(project => ({ id: project.id, name: project.name }))
     .sort((a, b) => a.name.localeCompare(b.name)))
 
-  async function request<T>(url: string): Promise<T | null> {
+  async function request<T>(
+    url: string,
+    isCurrent: () => boolean = () => true,
+  ): Promise<T | null> {
     try {
       const result = await $fetch(url)
-      offline.value = false
+      if (isCurrent()) offline.value = false
       return result as T
     } catch {
-      offline.value = true
+      if (isCurrent()) offline.value = true
       return null
     }
   }
@@ -194,12 +234,15 @@ export function useLiveRuns() {
       return
     }
     treePending = true
+    const requestGeneration = treeGeneration
     const requestedHours = rangeInitialized ? hours.value : null
+    const isCurrent = () => treeGeneration === requestGeneration
+      && (requestedHours === null ? !rangeInitialized : requestedHours === hours.value)
     try {
       const response = await request<TreeResponse>(requestedHours === null
         ? '/api/tree'
-        : `/api/tree?hours=${requestedHours}`)
-      if (requestedHours !== null && requestedHours !== hours.value) return
+        : `/api/tree?hours=${requestedHours}`, isCurrent)
+      if (!isCurrent()) return
       if (!response) {
         loading.value = false
         return
@@ -215,14 +258,14 @@ export function useLiveRuns() {
 
       if (!selectedKey.value) {
         const firstProject = visibleProjects.value.find(project => project.roots.length)
-        if (firstProject) await select(deepestLive(firstProject.roots[0]!).key, firstProject.id)
+        if (firstProject) void select(deepestLive(firstProject.roots[0]!).key, firstProject.id)
         return
       }
       if (followActive.value && selectedRoot.value) {
         const live = descendants(selectedRoot.value)
           .filter(node => node.live)
           .sort((a, b) => b.mtime - a.mtime)[0]
-        if (live && live.key !== selectedKey.value) await select(live.key, selectedProject.value!)
+        if (live && live.key !== selectedKey.value) void select(live.key, selectedProject.value!)
       }
     } finally {
       treePending = false
@@ -239,13 +282,22 @@ export function useLiveRuns() {
     if (!key || !project) return
     const requestedHours = hours.value
     const requestKey = `${project}\0${key}\0${requestedHours}`
-    if (runPendingKey === requestKey) return
-    runPendingKey = requestKey
+    const pending = runRequests.start(requestKey)
+    if (!pending) return
     try {
-      const response = await request<RunResponse>(`/api/run?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&hours=${requestedHours}`)
-      if (response && selectedKey.value === key && selectedProject.value === project && hours.value === requestedHours) run.value = response
+      const response = await request<RunResponse>(
+        `/api/run?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&hours=${requestedHours}`,
+        () => runRequests.isCurrent(pending),
+      )
+      if (
+        response
+        && runRequests.isCurrent(pending)
+        && selectedKey.value === key
+        && selectedProject.value === project
+        && hours.value === requestedHours
+      ) run.value = response
     } finally {
-      if (runPendingKey === requestKey) runPendingKey = null
+      runRequests.settle(pending)
     }
   }
 
@@ -263,17 +315,24 @@ export function useLiveRuns() {
     if (!key || !project) return
     const requestedHours = hours.value
     const requestKey = `${project}\0${key}\0${requestedHours}`
-    if (sessionEventPendingKey === requestKey) return
-    sessionEventPendingKey = requestKey
+    const pending = sessionEventRequests.start(requestKey)
+    if (!pending) return
     try {
       const response = await request<SessionEventsResponse>(
         `/api/session-events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&limit=800&hours=${requestedHours}`,
+        () => sessionEventRequests.isCurrent(pending),
       )
-      if (!response || (selectedRoot.value?.key || selectedKey.value) !== key || selectedProject.value !== project || hours.value !== requestedHours) return
+      if (
+        !response
+        || !sessionEventRequests.isCurrent(pending)
+        || (selectedRoot.value?.key || selectedKey.value) !== key
+        || selectedProject.value !== project
+        || hours.value !== requestedHours
+      ) return
       sessionEvents.value = response.events
       sessionEventsTruncated.value = response.truncated
     } finally {
-      if (sessionEventPendingKey === requestKey) sessionEventPendingKey = null
+      sessionEventRequests.settle(pending)
     }
   }
 
@@ -324,12 +383,15 @@ export function useLiveRuns() {
 
   watch(hours, () => {
     if (!rangeInitialized) return
+    treeGeneration += 1
     loading.value = true
     projects.value = []
     selectedProject.value = null
     selectedKey.value = null
     run.value = null
     selectedEventPoller.reset()
+    runRequests.invalidate()
+    sessionEventRequests.invalidate()
     sessionEvents.value = []
     sessionEventsTruncated.value = false
     clearInspection()

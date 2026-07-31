@@ -2,7 +2,13 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { EventsResponse, RunNode, TreeResponse } from '#shared/types/run'
+import type {
+  EventsResponse,
+  RunNode,
+  RunResponse,
+  SessionEventsResponse,
+  TreeResponse,
+} from '#shared/types/run'
 import { runResponse } from '../fixtures/runs'
 
 const Harness = defineComponent({
@@ -315,6 +321,301 @@ describe('useLiveRuns', () => {
 
     expect(component.attributes('data-key')).toBe(second.key)
     expect(live.run.value?.key).toBe(second.key)
+
+    component.unmount()
+  })
+
+  it('rejects stale run and session responses after an A-B-A selection cycle', async () => {
+    const first = node({ key: 'first', label: 'First' })
+    const second = node({ key: 'second', label: 'Second' })
+    const treeResponse = tree(first)
+    treeResponse.projects[0]!.roots = [first, second]
+    let firstRunRequest = 0
+    let firstSessionRequest = 0
+    let rejectStaleRun!: (error: Error) => void
+    let resolveFreshRun!: (value: RunResponse) => void
+    let resolveStaleSession!: (value: SessionEventsResponse) => void
+    let resolveFreshSession!: (value: SessionEventsResponse) => void
+    const staleRun = new Promise<RunResponse>((_resolve, reject) => {
+      rejectStaleRun = reject
+    })
+    const freshRun = new Promise<RunResponse>((resolve) => {
+      resolveFreshRun = resolve
+    })
+    const staleSession = new Promise<SessionEventsResponse>((resolve) => {
+      resolveStaleSession = resolve
+    })
+    const freshSession = new Promise<SessionEventsResponse>((resolve) => {
+      resolveFreshSession = resolve
+    })
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree') return treeResponse
+      if (url.startsWith('/api/run') && url.includes('key=first')) {
+        firstRunRequest += 1
+        return firstRunRequest === 1 ? staleRun : freshRun
+      }
+      if (url.startsWith('/api/run') && url.includes('key=second')) {
+        return runResponse({ key: second.key, transcriptPath: '/second', node: second, root: second })
+      }
+      if (url.startsWith('/api/session-events') && url.includes('key=first')) {
+        firstSessionRequest += 1
+        return firstSessionRequest === 1 ? staleSession : freshSession
+      }
+      if (url.startsWith('/api/session-events') && url.includes('key=second')) {
+        return { key: second.key, events: [], total: 0, truncated: false }
+      }
+      if (url.startsWith('/api/events')) {
+        const key = url.includes('key=second') ? second.key : first.key
+        return events(key, '')
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    const live = component.vm.live
+    await live.select(second.key, '/repo')
+    const freshSelection = live.select(first.key, '/repo')
+    await flushPromises()
+
+    resolveFreshRun(runResponse({
+      key: first.key,
+      transcriptPath: '/fresh-first',
+      node: first,
+      root: first,
+    }))
+    resolveFreshSession({
+      key: first.key,
+      events: events(first.key, 'Fresh session event').events,
+      total: 1,
+      truncated: false,
+    })
+    await freshSelection
+    await flushPromises()
+
+    expect(live.run.value?.transcriptPath).toBe('/fresh-first')
+    expect(live.sessionEvents.value.map(event => event.body)).toEqual(['Fresh session event'])
+
+    rejectStaleRun(new Error('stale run failed'))
+    resolveStaleSession({
+      key: first.key,
+      events: events(first.key, 'Stale session event').events,
+      total: 1,
+      truncated: true,
+    })
+    await flushPromises()
+
+    expect(live.run.value?.transcriptPath).toBe('/fresh-first')
+    expect(live.sessionEvents.value.map(event => event.body)).toEqual(['Fresh session event'])
+    expect(live.sessionEventsTruncated.value).toBe(false)
+    expect(live.offline.value).toBe(false)
+
+    component.unmount()
+  })
+
+  it('invalidates pending loaders across a coalesced hour-range reset', async () => {
+    vi.useFakeTimers()
+    const root = node({})
+    let runRequest = 0
+    let sessionRequest = 0
+    let treeRangeRequest = 0
+    let resolveStaleTree!: (value: TreeResponse) => void
+    let resolveStaleRun!: (value: RunResponse) => void
+    let resolveStaleSession!: (value: SessionEventsResponse) => void
+    const staleTree = new Promise<TreeResponse>((resolve) => {
+      resolveStaleTree = resolve
+    })
+    const staleRun = new Promise<RunResponse>((resolve) => {
+      resolveStaleRun = resolve
+    })
+    const staleSession = new Promise<SessionEventsResponse>((resolve) => {
+      resolveStaleSession = resolve
+    })
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree') return tree(root)
+      if (url.startsWith('/api/tree?hours=')) {
+        treeRangeRequest += 1
+        return treeRangeRequest === 1 ? staleTree : tree(root)
+      }
+      if (url.startsWith('/api/run')) {
+        runRequest += 1
+        if (runRequest === 2) return staleRun
+        return runResponse({
+          root,
+          node: root,
+          transcriptPath: runRequest === 1 ? '/initial' : '/fresh-after-reset',
+        })
+      }
+      if (url.startsWith('/api/session-events')) {
+        sessionRequest += 1
+        if (sessionRequest === 2) return staleSession
+        return {
+          key: root.key,
+          events: events(root.key, sessionRequest === 1 ? 'Initial session' : 'Fresh after reset').events,
+          total: 1,
+          truncated: false,
+        }
+      }
+      if (url.startsWith('/api/events')) return events(root.key, '')
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    const live = component.vm.live
+    await vi.advanceTimersByTimeAsync(6_000)
+    await flushPromises()
+    expect(runRequest).toBe(2)
+    expect(sessionRequest).toBe(2)
+
+    live.hours.value = 24
+    await flushPromises()
+    live.hours.value = 168
+    await flushPromises()
+    resolveStaleTree(tree(node({
+      key: 'stale-session',
+      sid: 'stale-session',
+      label: 'Stale pre-reset session',
+    })))
+    await flushPromises()
+
+    expect(fetch).not.toHaveBeenCalledWith('/api/tree?hours=24')
+    expect(fetch).not.toHaveBeenCalledWith('/api/run?project=%2Frepo&key=session&hours=24')
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('key=stale-session'))).toBe(false)
+    expect(treeRangeRequest).toBe(2)
+    expect(runRequest).toBe(3)
+    expect(sessionRequest).toBe(3)
+    expect(live.run.value?.transcriptPath).toBe('/fresh-after-reset')
+    expect(live.sessionEvents.value.map(event => event.body)).toEqual(['Fresh after reset'])
+
+    resolveStaleRun(runResponse({ root, node: root, transcriptPath: '/stale-before-reset' }))
+    resolveStaleSession({
+      key: root.key,
+      events: events(root.key, 'Stale before reset').events,
+      total: 1,
+      truncated: true,
+    })
+    await flushPromises()
+
+    expect(live.run.value?.transcriptPath).toBe('/fresh-after-reset')
+    expect(live.sessionEvents.value.map(event => event.body)).toEqual(['Fresh after reset'])
+    expect(live.sessionEventsTruncated.value).toBe(false)
+
+    component.unmount()
+  })
+
+  it('refreshes the tree range while initial detail loaders remain pending', async () => {
+    const root = node({})
+    let runRequest = 0
+    let sessionRequest = 0
+    let resolveInitialRun!: (value: RunResponse) => void
+    let resolveInitialSession!: (value: SessionEventsResponse) => void
+    const initialRun = new Promise<RunResponse>((resolve) => {
+      resolveInitialRun = resolve
+    })
+    const initialSession = new Promise<SessionEventsResponse>((resolve) => {
+      resolveInitialSession = resolve
+    })
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree') return tree(root)
+      if (url === '/api/tree?hours=24') return tree(root, 24)
+      if (url.startsWith('/api/run')) {
+        runRequest += 1
+        return runRequest === 1
+          ? initialRun
+          : runResponse({ root, node: root, transcriptPath: '/range-24' })
+      }
+      if (url.startsWith('/api/session-events')) {
+        sessionRequest += 1
+        return sessionRequest === 1
+          ? initialSession
+          : {
+              key: root.key,
+              events: events(root.key, 'Range 24 session').events,
+              total: 1,
+              truncated: false,
+            }
+      }
+      if (url.startsWith('/api/events')) return events(root.key, '')
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    const live = component.vm.live
+    expect(runRequest).toBe(1)
+    expect(sessionRequest).toBe(1)
+
+    live.hours.value = 24
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith('/api/tree?hours=24')
+    expect(runRequest).toBe(2)
+    expect(sessionRequest).toBe(2)
+    expect(live.run.value?.transcriptPath).toBe('/range-24')
+    expect(live.sessionEvents.value.map(event => event.body)).toEqual(['Range 24 session'])
+
+    resolveInitialRun(runResponse({ root, node: root, transcriptPath: '/stale-initial' }))
+    resolveInitialSession({
+      key: root.key,
+      events: events(root.key, 'Stale initial session').events,
+      total: 1,
+      truncated: true,
+    })
+    await flushPromises()
+
+    expect(live.run.value?.transcriptPath).toBe('/range-24')
+    expect(live.sessionEvents.value.map(event => event.body)).toEqual(['Range 24 session'])
+
+    component.unmount()
+  })
+
+  it('deduplicates pending details across repeated and same-root selections', async () => {
+    const child = node({ key: 'session/child', kind: 'subagent', label: 'Child' })
+    const root = node({ children: [child], subAgents: 1 })
+    let resolveRootRun!: (value: RunResponse) => void
+    let resolveRootSession!: (value: SessionEventsResponse) => void
+    const rootRun = new Promise<RunResponse>((resolve) => {
+      resolveRootRun = resolve
+    })
+    const rootSession = new Promise<SessionEventsResponse>((resolve) => {
+      resolveRootSession = resolve
+    })
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree') return tree(root)
+      if (url.startsWith('/api/run') && url.includes('key=session%2Fchild')) {
+        return runResponse({ key: child.key, root, node: child, transcriptPath: '/child' })
+      }
+      if (url.startsWith('/api/run')) return rootRun
+      if (url.startsWith('/api/session-events')) return rootSession
+      if (url.startsWith('/api/events')) {
+        return events(url.includes('key=session%2Fchild') ? child.key : root.key, '')
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    const live = component.vm.live
+    const repeatedRoot = live.select(root.key, '/repo')
+    await flushPromises()
+    await live.select(child.key, '/repo')
+    await flushPromises()
+
+    expect(fetch.mock.calls.filter(([url]) => String(url).startsWith('/api/run'))).toHaveLength(2)
+    expect(fetch.mock.calls.filter(([url]) => String(url).startsWith('/api/session-events'))).toHaveLength(1)
+    expect(live.run.value?.transcriptPath).toBe('/child')
+
+    resolveRootRun(runResponse({ root, node: root, transcriptPath: '/stale-root' }))
+    resolveRootSession({ key: root.key, events: [], total: 0, truncated: false })
+    await repeatedRoot
+    await flushPromises()
+
+    expect(live.run.value?.transcriptPath).toBe('/child')
 
     component.unmount()
   })
