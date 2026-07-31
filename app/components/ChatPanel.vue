@@ -21,15 +21,6 @@ type ChatRow =
   | { kind: 'tool', toolCallId: string, title: string, toolKind: string, status: string }
   | { kind: 'turn-end', stopReason: string }
 
-type ChatSessionState = {
-  events: ChatEvent[]
-  since: number
-  revision: number
-  status: ChatStatus
-  selectedAgent: ChatAgentId
-  draft: string
-}
-
 const markdownPlugins = [
   security({
     blockedTags: ['script', 'iframe', 'object', 'embed', 'link', 'style', 'base', 'meta'],
@@ -46,14 +37,10 @@ const agentLabels: Readonly<Record<ChatAgentId, string>> = Object.fromEntries(
   agents.map(agent => [agent.id, agent.label]),
 ) as Record<ChatAgentId, string>
 
-const sessionState = reactive<ChatSessionState>({
-  events: [],
-  since: 0,
-  revision: 0,
-  status: 'idle',
-  selectedAgent: 'claude',
-  draft: '',
-})
+const { state: sessionState, touch: touchSessionState } = useChatSessionState(
+  props.project,
+  props.sessionKey,
+)
 const {
   events,
   since,
@@ -235,6 +222,7 @@ watch(
 
 function startPolling(): void {
   active = true
+  touchSessionState()
   void poll()
   if (!timer) timer = setInterval(() => void poll(), 800)
 }

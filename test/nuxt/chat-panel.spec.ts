@@ -113,6 +113,47 @@ describe('ChatPanel', () => {
     component.unmount()
   })
 
+  it('preserves a draft when the Ask cache owner closes and reopens', async () => {
+    vi.stubGlobal('$fetch', vi.fn().mockResolvedValue({
+      events: [],
+      next: 0,
+      revision: 0,
+      reset: false,
+      status: 'idle',
+    }))
+    const Harness = defineComponent({
+      components: { ChatPanel },
+      setup() {
+        return { open: ref(true) }
+      },
+      template: `
+        <template v-if="open">
+          <KeepAlive :max="10">
+            <ChatPanel
+              key="close-reopen"
+              project="/close-reopen"
+              session-key="close-reopen"
+              :hours="720"
+            />
+          </KeepAlive>
+        </template>
+      `,
+    })
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    await component.get('textarea').setValue('draft survives close')
+
+    component.vm.open = false
+    await nextTick()
+    component.vm.open = true
+    await nextTick()
+    await flushPromises()
+
+    expect(component.get('textarea').element).toHaveProperty('value', 'draft survives close')
+
+    component.unmount()
+  })
+
   it('aborts unresolved polls as cached sessions deactivate and evict', async () => {
     vi.useFakeTimers()
     const signals: AbortSignal[] = []
