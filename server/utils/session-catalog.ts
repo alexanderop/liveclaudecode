@@ -31,9 +31,11 @@ import {
 } from './services'
 import type {
   ProjectRuns,
+  PublicRunNode,
   RunNode,
   SessionEventsResponse,
   SessionSourceStatus,
+  TranscriptEvent,
 } from '#shared/types/run'
 
 interface ClaudeTree {
@@ -98,6 +100,24 @@ export type SessionEventLocation =
       source: 'copilot'
       copilotLocation: CopilotSessionLocation
     }
+
+function sessionEventLocation(locator: SessionLocator): SessionEventLocation | undefined {
+  const base = {
+    projectId: locator.projectId,
+    key: locator.node.key,
+    node: locator.node,
+  }
+  if (locator.source === 'claude') {
+    return { ...base, source: 'claude', projectDirectory: locator.projectDirectory }
+  }
+  if (locator.source === 'copilot') {
+    return { ...base, source: 'copilot', copilotLocation: locator.location }
+  }
+  const transcriptPath = locator.tree.pathByKey.get(locator.node.key)
+  return transcriptPath
+    ? { ...base, source: 'codex', transcriptPath }
+    : undefined
+}
 
 const SESSION_LOCATOR_CAPACITY = 8
 const UNASSIGNED_PROJECT = '__unassigned__'
@@ -359,21 +379,14 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     return bLast.localeCompare(aLast) || a.name.localeCompare(b.name)
   })
 
-  yield* locatorCache.replace(projectInput, hours, [...locators.values()].flatMap((locator): SessionEventLocation[] => {
-    const base = {
-      projectId: locator.projectId,
-      key: locator.node.key,
-      node: locator.node,
-    }
-    if (locator.source === 'claude') {
-      return [{ ...base, source: 'claude', projectDirectory: locator.projectDirectory }]
-    }
-    if (locator.source === 'copilot') {
-      return [{ ...base, source: 'copilot' as const, copilotLocation: locator.location }]
-    }
-    const transcriptPath = locator.tree.pathByKey.get(locator.node.key) || ''
-    return transcriptPath ? [{ ...base, source: 'codex', transcriptPath }] : []
-  }))
+  yield* locatorCache.replace(
+    projectInput,
+    hours,
+    [...locators.values()].flatMap((locator) => {
+      const location = sessionEventLocation(locator)
+      return location ? [location] : []
+    }),
+  )
 
   return {
     projects: visible.map(({ id, name, roots }) => ({ id, name, roots })),
@@ -496,6 +509,59 @@ export const getSessionRun = Effect.fn('getSessionRun')(function*(
   }
 })
 
+interface SessionEventSnapshot {
+  events: TranscriptEvent[]
+  revision: number
+  node: PublicRunNode
+  decorate: (events: TranscriptEvent[]) => TranscriptEvent[]
+}
+
+const loadSessionEventSnapshot = Effect.fn('loadSessionEventSnapshot')(function*(
+  location: SessionEventLocation,
+) {
+  if (location.source === 'codex') {
+    const cache = yield* CodexScanCache
+    const scan = yield* cache.get(location.transcriptPath)
+    const node = { ...location.node, ...(yield* scan.stats) }
+    return {
+      events: scan.events,
+      revision: 0,
+      node: stripNode(node),
+      decorate: (events: TranscriptEvent[]) => events,
+    } satisfies SessionEventSnapshot
+  }
+
+  if (location.source === 'copilot') {
+    const cache = yield* CopilotScanCache
+    const scan = yield* cache.get(location.copilotLocation)
+    const node = { ...location.node, ...(yield* scan.stats) }
+    return {
+      events: scan.events,
+      revision: scan.eventRevision,
+      node: stripNode(node),
+      decorate: (events: TranscriptEvent[]) => events,
+    } satisfies SessionEventSnapshot
+  }
+
+  const cache = yield* ScanCache
+  const scan = yield* cache.get(yield* pathFor(location.projectDirectory, location.key))
+  const node = settleReturnedAgent({ ...location.node, ...(yield* scan.stats) })
+  const childByToolId = new Map(
+    location.node.children
+      .filter(child => child.toolUseId)
+      .map(child => [child.toolUseId!, child.key]),
+  )
+  return {
+    events: scan.events,
+    revision: 0,
+    node: stripNode(node),
+    decorate: events => events.map((entry) => {
+      const childKey = entry.spawn && entry.id ? childByToolId.get(entry.id) : undefined
+      return childKey ? { ...entry, childKey } : entry
+    }),
+  } satisfies SessionEventSnapshot
+})
+
 export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
   projectInput: string,
   hours: number,
@@ -512,55 +578,142 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
   }
   if (!location) return yield* new UnknownRun({ key })
 
-  if (location.source === 'codex') {
-    const cache = yield* CodexScanCache
-    const scan = yield* cache.get(location.transcriptPath)
-    const node = { ...location.node, ...(yield* scan.stats) }
-    return {
-      key,
-      events: scan.events.slice(since),
-      next: scan.events.length,
-      revision: 0,
-      reset: false,
-      node: stripNode(node),
-    }
-  }
-
-  if (location.source === 'copilot') {
-    const cache = yield* CopilotScanCache
-    const scan = yield* cache.get(location.copilotLocation)
-    const node = { ...location.node, ...(yield* scan.stats) }
-    const reset = revision !== scan.eventRevision || since > scan.events.length
-    return {
-      key,
-      events: reset ? [...scan.events] : scan.events.slice(since),
-      next: scan.events.length,
-      revision: scan.eventRevision,
-      reset,
-      node: stripNode(node),
-    }
-  }
-
-  const cache = yield* ScanCache
-  const scan = yield* cache.get(yield* pathFor(location.projectDirectory, key))
-  const node = settleReturnedAgent({ ...location.node, ...(yield* scan.stats) })
-  const childByToolId = new Map(
-    location.node.children
-      .filter(child => child.toolUseId)
-      .map(child => [child.toolUseId!, child.key]),
-  )
-  const events = scan.events.slice(since).map((entry) => {
-    const childKey = entry.spawn && entry.id ? childByToolId.get(entry.id) : undefined
-    return childKey ? { ...entry, childKey } : entry
-  })
+  const snapshot = yield* loadSessionEventSnapshot(location)
+  const reset = location.source === 'copilot'
+    && (revision !== snapshot.revision || since > snapshot.events.length)
+  const events = reset ? [...snapshot.events] : snapshot.events.slice(since)
   return {
     key,
-    events,
-    next: scan.events.length,
-    revision: 0,
-    reset: false,
-    node: stripNode(node),
+    events: snapshot.decorate(events),
+    next: snapshot.events.length,
+    revision: snapshot.revision,
+    reset,
+    node: snapshot.node,
   }
+})
+
+interface SessionEventTail {
+  events: TranscriptEvent[]
+  total: number
+}
+
+interface ActivityHeapEntry {
+  event: TranscriptEvent
+  eventIndex: number
+  streamIndex: number
+}
+
+function compareActivityEvents(left: TranscriptEvent, right: TranscriptEvent): number {
+  const byTime = (left.ts || '').localeCompare(right.ts || '')
+  if (byTime) return byTime
+  const byDepth = (left.agentDepth || 0) - (right.agentDepth || 0)
+  return byDepth || left.line - right.line
+}
+
+function compareActivityEntries(left: ActivityHeapEntry, right: ActivityHeapEntry): number {
+  const byEvent = compareActivityEvents(left.event, right.event)
+  if (byEvent) return byEvent
+  const byStream = left.streamIndex - right.streamIndex
+  return byStream || left.eventIndex - right.eventIndex
+}
+
+type HeapComparator<A> = (left: A, right: A) => number
+
+function pushHeap<A>(heap: A[], entry: A, compare: HeapComparator<A>): void {
+  heap.push(entry)
+  let index = heap.length - 1
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2)
+    if (compare(heap[parent]!, entry) >= 0) break
+    heap[index] = heap[parent]!
+    index = parent
+  }
+  heap[index] = entry
+}
+
+function popHeap<A>(heap: A[], compare: HeapComparator<A>): A | undefined {
+  const first = heap[0]
+  const last = heap.pop()
+  if (first === undefined || last === undefined || heap.length === 0) return first
+
+  let index = 0
+  while (true) {
+    const left = index * 2 + 1
+    if (left >= heap.length) break
+    const right = left + 1
+    const child = right < heap.length
+      && compare(heap[right]!, heap[left]!) > 0
+      ? right
+      : left
+    if (compare(last, heap[child]!) >= 0) break
+    heap[index] = heap[child]!
+    index = child
+  }
+  heap[index] = last
+  return first
+}
+
+function selectActivityTail(
+  events: ReadonlyArray<TranscriptEvent>,
+  limit: number,
+): TranscriptEvent[] {
+  if (limit <= 0) return []
+  const oldestFirst = (left: ActivityHeapEntry, right: ActivityHeapEntry): number =>
+    compareActivityEntries(right, left)
+  const heap: ActivityHeapEntry[] = []
+  events.forEach((event, eventIndex) => {
+    const entry = { event, eventIndex, streamIndex: 0 }
+    if (heap.length < limit) {
+      pushHeap(heap, entry, oldestFirst)
+      return
+    }
+    if (compareActivityEntries(entry, heap[0]!) <= 0) return
+    popHeap(heap, oldestFirst)
+    pushHeap(heap, entry, oldestFirst)
+  })
+  return heap.sort(compareActivityEntries).map(entry => entry.event)
+}
+
+function mergeActivityTails(
+  streams: ReadonlyArray<ReadonlyArray<TranscriptEvent>>,
+  limit: number,
+): TranscriptEvent[] {
+  if (limit <= 0) return []
+  const heap: ActivityHeapEntry[] = []
+  streams.forEach((events, streamIndex) => {
+    const eventIndex = events.length - 1
+    const event = events[eventIndex]
+    if (event) pushHeap(heap, { event, eventIndex, streamIndex }, compareActivityEntries)
+  })
+
+  const newestFirst: TranscriptEvent[] = []
+  while (heap.length > 0 && newestFirst.length < limit) {
+    const entry = popHeap(heap, compareActivityEntries)!
+    newestFirst.push(entry.event)
+    const eventIndex = entry.eventIndex - 1
+    const event = streams[entry.streamIndex]?.[eventIndex]
+    if (event) {
+      pushHeap(heap, {
+        event,
+        eventIndex,
+        streamIndex: entry.streamIndex,
+      }, compareActivityEntries)
+    }
+  }
+  return newestFirst.reverse()
+}
+
+const getSessionEventTail = Effect.fn('getSessionEventTail')(function*(
+  locator: SessionLocator,
+  limit: number,
+) {
+  const location = sessionEventLocation(locator)
+  if (!location) return yield* new UnknownRun({ key: locator.node.key })
+  const snapshot = yield* loadSessionEventSnapshot(location)
+  return {
+    events: snapshot.decorate(selectActivityTail(snapshot.events, limit)),
+    total: snapshot.events.length,
+  } satisfies SessionEventTail
 })
 
 export const getSessionActivity = Effect.fn('getSessionActivity')(function*(
@@ -583,32 +736,33 @@ export const getSessionActivity = Effect.fn('getSessionActivity')(function*(
   }
   gather(root, 0)
 
-  const responses = yield* Effect.forEach(
+  const tails = yield* Effect.forEach(
     nodes,
-    ({ node }) => getSessionEvents(projectInput, hours, project, node.key, 0, 0),
+    ({ node }) => {
+      const nodeLocator = catalog.locators.get(locatorKey(locator.projectId, node.key))
+      return nodeLocator
+        ? getSessionEventTail(nodeLocator, limit)
+        : Effect.fail(new UnknownRun({ key: node.key }))
+    },
     { concurrency: FILE_CONCURRENCY },
   )
-  const events = responses.flatMap((response, index) => {
+  const streams = tails.map((tail, index) => {
     const entry = nodes[index]!
-    return response.events.map(event => ({
+    return tail.events.map(event => ({
       ...event,
       agentKey: entry.node.key,
       agentLabel: entry.node.label,
       agentType: entry.node.agentType || (entry.depth ? 'Subagent' : 'Main session'),
       agentDepth: entry.depth,
     }))
-  }).sort((left, right) => {
-    const byTime = (left.ts || '').localeCompare(right.ts || '')
-    if (byTime) return byTime
-    const byDepth = (left.agentDepth || 0) - (right.agentDepth || 0)
-    return byDepth || left.line - right.line
   })
-  const selected = events.slice(-limit)
+  const events = mergeActivityTails(streams, limit)
+  const total = tails.reduce((count, tail) => count + tail.total, 0)
 
   return {
     key: root.key,
-    events: selected,
-    total: events.length,
-    truncated: selected.length < events.length,
+    events,
+    total,
+    truncated: events.length < total,
   } satisfies SessionEventsResponse
 })

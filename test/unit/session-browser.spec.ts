@@ -2,6 +2,7 @@ import { assert, describe, it } from '@effect/vitest'
 import { Deferred, Effect, Fiber, Layer } from 'effect'
 import { TestClock } from 'effect/testing'
 import {
+  getSessionActivity,
   getSessionEvents,
   loadSessionCatalog,
   SessionCatalogCache,
@@ -401,4 +402,83 @@ describe('unified session catalog', () => {
       }, [], locations)))
     },
   )
+
+  it.effect('merges only bounded per-agent tails from large session histories', () => {
+    const rootRecords = [
+      claude.assistant([
+        claude.tool('Agent', 'spawn-bounded', { description: 'Bounded worker' }),
+      ], { ts: '2026-07-25T18:00:00.000Z' }),
+    ]
+    const childRecords = []
+    const startedAt = Date.parse('2026-07-25T19:00:00.000Z')
+    for (let index = 0; index < 1_200; index += 1) {
+      rootRecords.push(claude.userText(`Root event ${index}`, {
+        ts: new Date(startedAt + index * 2_000).toISOString(),
+      }))
+      childRecords.push(claude.userText(`Child event ${index}`, {
+        ts: new Date(startedAt + index * 2_000 + 1_000).toISOString(),
+      }))
+    }
+
+    return Effect.gen(function*() {
+      const activity = yield* getSessionActivity('', 999_999, '/repo', 'bounded', 37)
+      assert.strictEqual(activity.total, 2_401)
+      assert.strictEqual(activity.events.length, 37)
+      assert.isTrue(activity.truncated)
+      assert.deepStrictEqual(
+        activity.events.map(event => event.ts || ''),
+        [...activity.events]
+          .sort((left, right) => (left.ts || '').localeCompare(right.ts || ''))
+          .map(event => event.ts || ''),
+      )
+      assert.deepStrictEqual(
+        new Set(activity.events.map(event => event.agentKey)),
+        new Set(['bounded', 'bounded/agent-bounded']),
+      )
+      assert.deepStrictEqual(
+        [activity.events[0]?.body, activity.events.at(-1)?.body],
+        ['Child event 1181', 'Child event 1199'],
+      )
+      assert.deepStrictEqual(
+        [activity.events[0]?.ts, activity.events.at(-1)?.ts],
+        [
+          new Date(startedAt + 1_181 * 2_000 + 1_000).toISOString(),
+          new Date(startedAt + 1_199 * 2_000 + 1_000).toISOString(),
+        ],
+      )
+
+      const empty = yield* getSessionActivity('', 999_999, '/repo', 'bounded', 0)
+      assert.strictEqual(empty.total, 2_401)
+      assert.deepStrictEqual(empty.events, [])
+      assert.isTrue(empty.truncated)
+    }).pipe(Effect.provide(layer({
+      [`${CLAUDE}/repo/bounded.jsonl`]: claude.transcript(rootRecords),
+      [`${CLAUDE}/repo/bounded/subagents/agent-bounded.jsonl`]: claude.transcript(childRecords),
+      [`${CLAUDE}/repo/bounded/subagents/agent-bounded.meta.json`]: JSON.stringify({
+        agentType: 'implementation-worker',
+        description: 'Bounded worker',
+        toolUseId: 'spawn-bounded',
+      }),
+    })))
+  })
+
+  it.effect('selects the newest activity by timestamp when transcript order differs', () =>
+    Effect.gen(function*() {
+      const activity = yield* getSessionActivity('', 999_999, '/repo', 'unordered', 2)
+      assert.strictEqual(activity.total, 3)
+      assert.isTrue(activity.truncated)
+      assert.deepStrictEqual(
+        activity.events.map(event => [event.ts, event.body]),
+        [
+          ['2026-07-25T18:00:10.000Z', 'Ten'],
+          ['2026-07-25T18:00:12.000Z', 'Twelve'],
+        ],
+      )
+    }).pipe(Effect.provide(layer({
+      [`${CLAUDE}/repo/unordered.jsonl`]: claude.transcript([
+        claude.userText('Ten', { ts: '2026-07-25T18:00:10.000Z' }),
+        claude.userText('Twelve', { ts: '2026-07-25T18:00:12.000Z' }),
+        claude.userText('Nine', { ts: '2026-07-25T18:00:09.000Z' }),
+      ]),
+    }))))
 })
