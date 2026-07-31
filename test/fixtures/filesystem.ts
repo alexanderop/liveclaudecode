@@ -29,11 +29,14 @@ const notFound = (method: string, path: string) =>
 export function testFileSystem(tree: FakeTree, options: {
   /** Paths that fail with PermissionDenied instead of being read. */
   readonly denied?: ReadonlyArray<string>
+  /** Effect run immediately before file content is returned or streamed. */
+  readonly beforeRead?: (path: string) => Effect.Effect<void>
   /** Called with the path each time file content is read (not stat'd). */
   readonly onRead?: (path: string) => void
 } = {}): Layer.Layer<FileSystem.FileSystem> {
   const files = new Map(Object.entries(tree).map(([path, value]) => [path, entryOf(value)]))
   const denied = new Set(options.denied ?? [])
+  const beforeRead = options.beforeRead ?? (() => Effect.void)
   const onRead = options.onRead ?? (() => {})
 
   const directories = new Set<string>()
@@ -77,8 +80,10 @@ export function testFileSystem(tree: FakeTree, options: {
       if (Option.isSome(denial)) return Effect.fail(denial.value)
       const file = files.get(path)
       if (!file) return Effect.fail(notFound('readFileString', path))
-      onRead(path)
-      return Effect.succeed(file.content)
+      return beforeRead(path).pipe(
+        Effect.tap(() => Effect.sync(() => onRead(path))),
+        Effect.as(file.content),
+      )
     },
 
     stream: (path, streamOptions) => {
@@ -86,13 +91,15 @@ export function testFileSystem(tree: FakeTree, options: {
       if (Option.isSome(denial)) return Stream.fail(denial.value)
       const file = files.get(path)
       if (!file) return Stream.fail(notFound('stream', path))
-      onRead(path)
       const bytes = encoder.encode(file.content)
       const offset = Number(streamOptions?.offset ?? 0)
       const end = streamOptions?.bytesToRead === undefined
         ? bytes.length
         : Math.min(bytes.length, offset + Number(streamOptions.bytesToRead))
-      return Stream.make(bytes.subarray(offset, end))
+      return Stream.unwrap(beforeRead(path).pipe(
+        Effect.tap(() => Effect.sync(() => onRead(path))),
+        Effect.as(Stream.make(bytes.subarray(offset, end))),
+      ))
     },
 
     readDirectory: (path: string) => {

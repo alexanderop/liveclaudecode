@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { Context, Effect, Layer, Schema } from 'effect'
+import { Context, Effect, Layer, Schema, Semaphore } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import { TranscriptScan } from './transcript'
@@ -98,6 +98,40 @@ export class UnknownRun extends Schema.TaggedErrorClass<UnknownRun>()(
   }
 }
 
+interface RefreshableScan<A> {
+  readonly refresh: Effect.Effect<A, PlatformError.PlatformError, FileSystem.FileSystem>
+}
+
+interface ScanEntry<A> {
+  readonly scan: A
+  readonly semaphore: Semaphore.Semaphore
+}
+
+/**
+ * Refresh one mutable scanner at a time for each transcript path.
+ *
+ * Tree, run, and event requests overlap in production. Without this per-entry
+ * permit, two refreshes can observe the same byte offset and ingest one append
+ * twice before either publishes its new offset.
+ */
+function refreshCachedScan<A extends RefreshableScan<A>>(
+  entries: Map<string, ScanEntry<A>>,
+  key: string,
+  create: () => A,
+): Effect.Effect<A, PlatformError.PlatformError, FileSystem.FileSystem> {
+  return Effect.suspend(() => {
+    let entry = entries.get(key)
+    if (!entry) {
+      entry = {
+        scan: create(),
+        semaphore: Semaphore.makeUnsafe(1),
+      }
+      entries.set(key, entry)
+    }
+    return entry.semaphore.withPermit(entry.scan.refresh)
+  })
+}
+
 /**
  * Incrementally-parsed transcripts, keyed by path.
  *
@@ -113,17 +147,10 @@ export class ScanCache extends Context.Service<ScanCache, {
   static readonly layer = Layer.effect(
     ScanCache,
     Effect.sync(() => {
-      const scans = new Map<string, TranscriptScan>()
+      const entries = new Map<string, ScanEntry<TranscriptScan>>()
       return ScanCache.of({
-        get: Effect.fn('ScanCache.get')(function*(path: string) {
-          let scan = scans.get(path)
-          if (!scan) {
-            scan = new TranscriptScan(path)
-            scans.set(path, scan)
-          }
-          return yield* scan.refresh
-        }),
-        peek: (path: string) => Effect.sync(() => scans.get(path)),
+        get: path => refreshCachedScan(entries, path, () => new TranscriptScan(path)),
+        peek: path => Effect.sync(() => entries.get(path)?.scan),
       })
     }),
   )
@@ -139,17 +166,10 @@ export class CodexScanCache extends Context.Service<CodexScanCache, {
   static readonly layer = Layer.effect(
     CodexScanCache,
     Effect.sync(() => {
-      const scans = new Map<string, CodexTranscriptScan>()
+      const entries = new Map<string, ScanEntry<CodexTranscriptScan>>()
       return CodexScanCache.of({
-        get: Effect.fn('CodexScanCache.get')(function*(path: string) {
-          let scan = scans.get(path)
-          if (!scan) {
-            scan = new CodexTranscriptScan(path)
-            scans.set(path, scan)
-          }
-          return yield* scan.refresh
-        }),
-        peek: (path: string) => Effect.sync(() => scans.get(path)),
+        get: path => refreshCachedScan(entries, path, () => new CodexTranscriptScan(path)),
+        peek: path => Effect.sync(() => entries.get(path)?.scan),
       })
     }),
   )
@@ -174,19 +194,16 @@ export class CopilotScanCache extends Context.Service<CopilotScanCache, {
   static readonly layer = Layer.effect(
     CopilotScanCache,
     Effect.sync(() => {
-      const scans = new Map<string, CopilotSessionScan>()
+      const entries = new Map<string, ScanEntry<CopilotSessionScan>>()
       return CopilotScanCache.of({
-        get: Effect.fn('CopilotScanCache.get')(function*(location) {
-          let scan = scans.get(location.path)
-          if (!scan) {
-            scan = location.format === 'cli'
-              ? new CopilotCliTranscriptScan(location.path, location.application, location.workspace)
-              : new CopilotTranscriptScan(location.path, location.application, location.workspace)
-            scans.set(location.path, scan)
-          }
-          return yield* scan.refresh
-        }),
-        peek: path => Effect.sync(() => scans.get(path)),
+        get: location => refreshCachedScan(
+          entries,
+          location.path,
+          () => location.format === 'cli'
+            ? new CopilotCliTranscriptScan(location.path, location.application, location.workspace)
+            : new CopilotTranscriptScan(location.path, location.application, location.workspace),
+        ),
+        peek: path => Effect.sync(() => entries.get(path)?.scan),
       })
     }),
   )
