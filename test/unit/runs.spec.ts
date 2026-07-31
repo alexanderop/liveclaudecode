@@ -159,6 +159,22 @@ describe('run hierarchy', () => {
       ),
     ))
 
+  it.effect('ignores project metadata files when discovering session directories', () =>
+    buildTree('/indexed', 99_999).pipe(
+      Effect.map((built) => {
+        assert.deepStrictEqual(built.roots.map(root => root.key), ['session'])
+        assert.strictEqual(built.unreadable, 0)
+      }),
+      Effect.provide(
+        Layer.mergeAll(ScanCache.layer, PromptCache.layer).pipe(
+          Layer.provideMerge(testFileSystem({
+            '/indexed/session.jsonl': fixture.transcript([fixture.userText('Session')]),
+            '/indexed/sessions-index.json': JSON.stringify({ version: 1 }),
+          })),
+        ),
+      ),
+    ))
+
   it.effect('degrades around permission failures while reading session prompts', () => {
     const path = '/denied/session.jsonl'
     return Effect.gen(function*() {

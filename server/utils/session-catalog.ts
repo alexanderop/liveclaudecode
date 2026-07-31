@@ -344,25 +344,14 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
         'Copilot CLI and VS Code storage unavailable',
       ))
     } else {
-      const notes = [
-        tree.genericExcluded
-          ? `${tree.genericExcluded} non-Copilot chat session${tree.genericExcluded === 1 ? '' : 's'} excluded`
-          : '',
-        tree.duplicates
-          ? `${tree.duplicates} duplicate session${tree.duplicates === 1 ? '' : 's'} deduplicated`
-          : '',
-      ].filter(Boolean)
-      const status = sourceStatus(
+      statuses.push(sourceStatus(
         'copilot',
         tree.roots.length,
         tree.malformed,
         '',
         tree.unreadable,
         'session file',
-      )
-      statuses.push(notes.length
-        ? { ...status, message: [status.message, ...notes].filter(Boolean).join('; ') }
-        : status)
+      ))
     }
   } else {
     statuses.push(sourceStatus('copilot', 0, 0, failureMessage(copilotResult.failure)))

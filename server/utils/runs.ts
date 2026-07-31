@@ -143,7 +143,12 @@ const collectWithLimiter = Effect.fn('collectWithLimiter')(function*(
   const subagents = yield* Effect.forEach(
     names.filter(name => !name.endsWith('.jsonl')),
     sessionName => Effect.result(Effect.gen(function*() {
-      const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
+      const sessionDirectory = join(projectDirectory, sessionName)
+      const info = yield* limiter.withPermit(fs.stat(sessionDirectory))
+      if (info.type !== 'Directory') {
+        return { items: [], unreadable: 0 } satisfies CollectedItems
+      }
+      const subagentsDirectory = join(sessionDirectory, 'subagents')
       const subagentNames = yield* limiter.withPermit(fs.readDirectory(subagentsDirectory)).pipe(
         Effect.catchIf(
           error => error.reason._tag === 'NotFound',

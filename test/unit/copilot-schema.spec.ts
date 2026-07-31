@@ -18,6 +18,17 @@ describe('Copilot schemas', () => {
     assert.strictEqual(parseCopilotResponsePart(fixture.textEdit('/repo/src/a.ts')).kind, 'text_edit')
   })
 
+  it('accepts current VS Code command line objects with optional display metadata', () => {
+    const parsed = parseCopilotResponsePart(fixture.tool('run_in_terminal', 'tool-1', {
+      command: {
+        original: 'cd /repo && pnpm test',
+        toolEdited: 'pnpm test',
+        isSandboxWrapped: false,
+      },
+    }))
+    assert.strictEqual(parsed.kind, 'tool')
+  })
+
   it('treats unknown future records and response kinds as supported unknowns', () => {
     assert.deepStrictEqual(parseCopilotLogRecord(fixture.unknownRecord()), {
       success: true,

@@ -65,6 +65,12 @@ function markdownText(value: string | { readonly value: string } | undefined): s
   return typeof value === 'string' ? value : value?.value || ''
 }
 
+function commandLineText(tool: CopilotToolPart): string {
+  const commandLine = tool.toolSpecificData?.commandLine
+  if (typeof commandLine === 'string') return commandLine.trim()
+  return (commandLine?.toolEdited ?? commandLine?.original ?? commandLine?.forDisplay ?? '').trim()
+}
+
 function compact(value: string, limit = 240): string {
   return value.trim().replace(/\s+/g, ' ').slice(0, limit)
 }
@@ -406,8 +412,9 @@ export class CopilotTranscriptScan {
         if (part.kind === 'tool') {
           const tool = part.data
           const name = tool.toolId
+          const commandLine = commandLineText(tool)
           const summary = compact(
-            tool.toolSpecificData?.commandLine
+            commandLine
             || markdownText(tool.invocationMessage)
             || markdownText(tool.pastTenseMessage)
             || name,
@@ -446,7 +453,6 @@ export class CopilotTranscriptScan {
               toolUseId: tool.toolCallId,
             })
           }
-          const commandLine = tool.toolSpecificData?.commandLine?.trim()
           if (name === 'run_in_terminal' && commandLine) {
             commands.push({
               cmd: compact(commandLine, 160),

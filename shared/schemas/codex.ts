@@ -129,11 +129,11 @@ export const CodexUsageSchema = Schema.Struct({
 
 export const CodexTokenCountPayloadSchema = Schema.Struct({
   type: Schema.Literal('token_count'),
-  info: Schema.optionalKey(Schema.Struct({
+  info: Schema.optionalKey(Schema.NullOr(Schema.Struct({
     total_token_usage: Schema.optionalKey(CodexUsageSchema),
     last_token_usage: Schema.optionalKey(CodexUsageSchema),
     model_context_window: optionalFinite,
-  })),
+  }))),
 })
 
 export const CodexPatchApplyEndPayloadSchema = Schema.Struct({
@@ -165,7 +165,7 @@ export const CodexUserMessagePayloadSchema = Schema.Struct({
 export const CodexTaskStartedPayloadSchema = Schema.Struct({
   type: Schema.Literal('task_started'),
   turn_id: Schema.optionalKey(Schema.String),
-  started_at: Schema.optionalKey(Schema.String),
+  started_at: Schema.optionalKey(Schema.Union([Schema.String, Schema.Finite])),
 })
 
 export const CodexTaskCompletePayloadSchema = Schema.Struct({

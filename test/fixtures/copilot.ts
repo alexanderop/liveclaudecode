@@ -30,7 +30,12 @@ export function tool(
   toolCallId: string,
   options: {
     complete?: boolean
-    command?: string
+    command?: string | {
+      original?: string
+      toolEdited?: string
+      forDisplay?: string
+      isSandboxWrapped?: boolean
+    }
     exitCode?: number
     isError?: boolean
     message?: string

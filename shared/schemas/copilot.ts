@@ -169,9 +169,19 @@ export const CopilotTerminalStateSchema = Schema.Struct({
   timestamp: Schema.optionalKey(Schema.Finite),
 })
 
+export const CopilotCommandLineSchema = Schema.Union([
+  Schema.String,
+  Schema.Struct({
+    original: Schema.optionalKey(Schema.String),
+    toolEdited: Schema.optionalKey(Schema.String),
+    forDisplay: Schema.optionalKey(Schema.String),
+    isSandboxWrapped: Schema.optionalKey(Schema.Boolean),
+  }),
+])
+
 export const CopilotToolSpecificDataSchema = Schema.Struct({
   kind: Schema.optionalKey(Schema.String),
-  commandLine: Schema.optionalKey(Schema.String),
+  commandLine: Schema.optionalKey(CopilotCommandLineSchema),
   terminalCommandState: Schema.optionalKey(CopilotTerminalStateSchema),
   todoList: Schema.optionalKey(Schema.Array(Schema.Struct({
     title: Schema.optionalKey(Schema.String),

@@ -50,6 +50,22 @@ describe('Codex rollout schemas', () => {
     assert.deepStrictEqual(malformed, { success: false, known: true })
   })
 
+  it('accepts current task timestamps and nullable token usage', () => {
+    const started = parseCodexRecord(fixture.event('task_started', {
+      turn_id: 'turn-1',
+      started_at: 1_780_908_086,
+      model_context_window: 258_400,
+      collaboration_mode_kind: 'default',
+    }))
+    assert.isTrue(started.success)
+
+    const tokenCount = parseCodexRecord(fixture.event('token_count', {
+      info: null,
+      rate_limits: { limit_id: 'premium' },
+    }))
+    assert.isTrue(tokenCount.success)
+  })
+
   it('keeps unknown response item types supportable without accepting malformed known items', () => {
     const unknown = parseCodexRecord({
       timestamp: fixture.C0(),

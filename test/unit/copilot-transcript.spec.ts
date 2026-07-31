@@ -49,6 +49,38 @@ describe('Copilot transcript replay and normalization', () => {
     }).pipe(Effect.provide(testFileSystem({ [PATH]: fixture.log([fixture.initial(initial)]) })))
   })
 
+  it.effect('uses the edited command from current VS Code command line objects', () => {
+    const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
+    return Effect.gen(function*() {
+      yield* scan.refresh
+      assert.strictEqual(scan.malformedParts, 0)
+      assert.deepStrictEqual(scan.statsAt(10).commands, [{
+        cmd: 'pnpm test',
+        ts: '2026-07-26T08:00:00.000Z',
+        ok: true,
+        tid: 'command-object',
+      }])
+      assert.strictEqual(
+        scan.events.find(event => event.kind === 'tool_use')?.summary,
+        'pnpm test',
+      )
+    }).pipe(Effect.provide(testFileSystem({
+      [PATH]: fixture.log([fixture.initial(fixture.snapshot({
+        requests: [fixture.request('request', 'Run the edited command', {
+          response: [fixture.tool('run_in_terminal', 'command-object', {
+            command: {
+              original: 'cd /repo && pnpm test',
+              toolEdited: ' pnpm test',
+              forDisplay: ' pnpm test',
+              isSandboxWrapped: false,
+            },
+            exitCode: 0,
+          })],
+        })],
+      }))]),
+    })))
+  })
+
   it.effect('keeps explicit active state regardless of inactivity and completed state idle when recent', () => {
     const active = new CopilotTranscriptScan('/active.jsonl', 'VS Code', '/repo')
     const complete = new CopilotTranscriptScan('/complete.jsonl', 'VS Code', '/repo')

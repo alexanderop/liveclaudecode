@@ -389,12 +389,26 @@ describe('unified session catalog', () => {
       assert.strictEqual(catalog.sources[2]?.state, 'degraded')
       assert.strictEqual(catalog.sources[2]?.sessions, 1)
       assert.strictEqual(catalog.sources[2]?.malformed, 1)
+      assert.strictEqual(catalog.sources[2]?.message, '1 malformed record skipped')
       assert.strictEqual(catalog.projects[0]?.roots[0]?.key, 'copilot:copilot-readable')
     }).pipe(Effect.provide(layer({
       [`${VSCODE}/workspaceStorage/repo/workspace.json`]: JSON.stringify({ folder: 'file:///repo' }),
       [`${VSCODE}/workspaceStorage/repo/chatSessions/copilot-readable.jsonl`]: copilot.log([
         copilot.initial(copilot.snapshot({ id: 'copilot-readable' })),
       ], { malformed: true }),
+      [`${VSCODE}/globalStorage/transferredChatSessions/copilot-duplicate.jsonl`]: copilot.log([
+        copilot.initial(copilot.snapshot({ id: 'copilot-readable' })),
+      ]),
+      [`${VSCODE}/globalStorage/emptyWindowChatSessions/generic.jsonl`]: copilot.log([
+        copilot.initial(copilot.snapshot({
+          id: 'generic',
+          responder: 'Other Provider',
+          requests: [copilot.request('generic-request', 'Not Copilot', {
+            agentId: 'other.provider',
+            copilotMetadata: false,
+          })],
+        })),
+      ]),
     }))))
 
   it.effect('reports unreadable Claude transcripts without hiding readable sessions', () => {
