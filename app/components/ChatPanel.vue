@@ -46,17 +46,14 @@ const agentLabels: Readonly<Record<ChatAgentId, string>> = Object.fromEntries(
   agents.map(agent => [agent.id, agent.label]),
 ) as Record<ChatAgentId, string>
 
-const sessionState = useState<ChatSessionState>(
-  `liveclaudecode:ask:${encodeURIComponent(props.project)}:${encodeURIComponent(props.sessionKey)}`,
-  () => ({
-    events: [],
-    since: 0,
-    revision: 0,
-    status: 'idle',
-    selectedAgent: 'claude',
-    draft: '',
-  }),
-)
+const sessionState = reactive<ChatSessionState>({
+  events: [],
+  since: 0,
+  revision: 0,
+  status: 'idle',
+  selectedAgent: 'claude',
+  draft: '',
+})
 const {
   events,
   since,
@@ -64,11 +61,17 @@ const {
   status,
   selectedAgent,
   draft,
-} = toRefs(sessionState.value)
+} = toRefs(sessionState)
 const actionPending = ref(false)
 const pollPending = ref(false)
 const requestError = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
+let pollController: AbortController | undefined
+let pollGeneration = 0
+let actionController: AbortController | undefined
+let actionGeneration = 0
+let active = false
+let disposed = false
 
 const busy = computed(() => status.value === 'starting' || status.value === 'busy')
 const canSend = computed(() => Boolean(
@@ -128,12 +131,22 @@ async function poll(): Promise<void> {
   const key = props.sessionKey
   const requestedHours = props.hours
   if (!project || !key || pollPending.value) return
+  const generation = pollGeneration
+  const controller = new AbortController()
+  pollController = controller
   pollPending.value = true
   try {
     const response = await $fetch<ChatEventsResponse>(
       `/api/chat?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${revision.value}&hours=${requestedHours}`,
+      { signal: controller.signal },
     )
-    if (props.project !== project || props.sessionKey !== key || props.hours !== requestedHours) return
+    if (
+      controller.signal.aborted
+      || generation !== pollGeneration
+      || props.project !== project
+      || props.sessionKey !== key
+      || props.hours !== requestedHours
+    ) return
     since.value = response.next
     revision.value = response.revision
     status.value = response.status
@@ -142,28 +155,41 @@ async function poll(): Promise<void> {
     else events.value.push(...response.events)
     requestError.value = ''
   } catch (error) {
+    if (controller.signal.aborted || generation !== pollGeneration) return
     requestError.value = errorMessage(error)
   } finally {
-    pollPending.value = false
+    if (pollController === controller) {
+      pollController = undefined
+      pollPending.value = false
+    }
   }
 }
 
 async function act(action: ChatAction): Promise<boolean> {
+  const generation = actionGeneration
+  const controller = new AbortController()
+  actionController = controller
   actionPending.value = true
   requestError.value = ''
   try {
     const response = await $fetch<{ status: ChatStatus }>(`/api/chat?hours=${props.hours}`, {
       method: 'POST',
       body: action,
+      signal: controller.signal,
     })
+    if (controller.signal.aborted || generation !== actionGeneration || disposed) return false
     status.value = response.status
-    await poll()
+    if (active) await poll()
     return true
   } catch (error) {
+    if (controller.signal.aborted || generation !== actionGeneration || disposed) return false
     requestError.value = errorMessage(error)
     return false
   } finally {
-    actionPending.value = false
+    if (actionController === controller) {
+      actionController = undefined
+      actionPending.value = false
+    }
   }
 }
 
@@ -208,19 +234,34 @@ watch(
 )
 
 function startPolling(): void {
+  active = true
   void poll()
   if (!timer) timer = setInterval(() => void poll(), 800)
 }
 
 function stopPolling(): void {
+  active = false
   if (timer) clearInterval(timer)
   timer = undefined
+  pollGeneration += 1
+  pollController?.abort()
+  pollController = undefined
+  pollPending.value = false
+}
+
+function dispose(): void {
+  disposed = true
+  stopPolling()
+  actionGeneration += 1
+  actionController?.abort()
+  actionController = undefined
+  actionPending.value = false
 }
 
 onMounted(startPolling)
 onActivated(startPolling)
 onDeactivated(stopPolling)
-onUnmounted(stopPolling)
+onUnmounted(dispose)
 </script>
 
 <template>
