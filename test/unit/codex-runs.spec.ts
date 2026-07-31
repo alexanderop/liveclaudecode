@@ -1,9 +1,14 @@
 import { assert, describe, it } from '@effect/vitest'
 import { Effect, Layer } from 'effect'
 import { buildCodexTree, collectCodexRollouts } from '#server/utils/codex-runs'
+import { FILE_CONCURRENCY } from '#server/utils/filesystem-concurrency'
 import { CodexScanCache, CodexSessionsDirectory } from '#server/utils/services'
 import * as fixture from '../fixtures/codex'
-import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
+import {
+  operationConcurrencyProbe,
+  testFileSystem,
+  type FakeTree,
+} from '../fixtures/filesystem'
 
 const ROOT = '/codex/sessions'
 const day = `${ROOT}/2026/07/26`
@@ -59,6 +64,26 @@ describe('Codex rollout hierarchy', () => {
       const discovery = yield* collectCodexRollouts(0)
       assert.strictEqual(discovery.paths.length, 4)
     }).pipe(Effect.provide(TestLayer)))
+
+  it.effect('bounds filesystem work across nested rollout directories', () => {
+    const probe = operationConcurrencyProbe()
+    const history = Object.fromEntries(
+      Array.from({ length: 16 }, (_, parent) =>
+        Array.from({ length: 16 }, (_, child) => [
+          `${ROOT}/2026/${String(parent).padStart(2, '0')}/01/rollout-${child}.jsonl`,
+          '{}\n',
+        ] as const)).flat(),
+    )
+    return Effect.gen(function*() {
+      const discovery = yield* collectCodexRollouts(0)
+      assert.strictEqual(discovery.paths.length, 256)
+      assert.isAtMost(probe.maximum(), FILE_CONCURRENCY)
+      assert.isAbove(probe.maximum(), 1)
+    }).pipe(Effect.provide(Layer.mergeAll(
+      Layer.succeed(CodexSessionsDirectory)(ROOT),
+      testFileSystem(history, probe),
+    )))
+  })
 
   it.effect('deduplicates IDs, links subagents, retains projectless roots, and sorts by activity', () =>
     Effect.gen(function*() {

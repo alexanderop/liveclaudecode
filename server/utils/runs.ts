@@ -21,14 +21,7 @@ import type {
 import { readHead } from './incremental-jsonl'
 import { plainText } from './transcript-content'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-
-/**
- * How many transcript files one scan fan-out reads at once. Bounded rather
- * than unbounded so a large history cannot exhaust file descriptors; nested
- * fan-outs (directories × files) multiply it, which keeps the worst case in
- * the low hundreds of open files.
- */
-export const FILE_CONCURRENCY = 16
+import { FILE_CONCURRENCY } from './filesystem-concurrency'
 
 /**
  * The first prompt appears within the first records of a transcript, so only

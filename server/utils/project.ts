@@ -3,6 +3,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path'
 import { Effect } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import { NoTranscriptsFound, ProjectsDirectory, UnknownProject, WorkingDirectory } from './services'
+import { FILE_CONCURRENCY } from './filesystem-concurrency'
 
 export interface ProjectDirectory {
   id: string
@@ -58,7 +59,7 @@ export const newestProjectDirectory = Effect.fn('newestProjectDirectory')(functi
       if (info.type !== 'Directory') return []
       const mtime = info.mtime._tag === 'Some' ? info.mtime.value.getTime() : 0
       return [{ path, mtime }]
-    }), { concurrency: 'unbounded' })
+    }), { concurrency: FILE_CONCURRENCY })
 
   const newest = directories.flat().sort((a, b) => b.mtime - a.mtime)[0]
   if (!newest) return yield* new NoTranscriptsFound({ directory: projectsDirectory })
@@ -81,7 +82,7 @@ export const listProjectDirectories = Effect.fn('listProjectDirectories')(functi
       const directory = join(projectsDirectory, name)
       if (!(yield* isDirectory(directory))) return []
       return (yield* containsTranscript(directory)) ? [{ id: name, directory }] : []
-    }), { concurrency: 'unbounded' })
+    }), { concurrency: FILE_CONCURRENCY })
 
   return projects.flat().sort((a, b) => a.id.localeCompare(b.id))
 })

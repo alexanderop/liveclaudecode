@@ -3,7 +3,12 @@ import { Clock, Effect, Result } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type { CodexTranscriptScan } from './codex-transcript'
 import { CodexScanCache, CodexSessionsDirectory } from './services'
-import { FILE_CONCURRENCY, rollup } from './runs'
+import { rollup } from './runs'
+import {
+  FILE_CONCURRENCY,
+  makeFileDiscoveryLimiter,
+  type FileDiscoveryLimiter,
+} from './filesystem-concurrency'
 import type {
   AgentDiagnosticSummary,
   DiagnosticIncident,
@@ -44,43 +49,55 @@ function idFromFilename(path: string): string {
   return match?.[1] || ''
 }
 
-const childDirectories = Effect.fn('childDirectories')(function*(directory: string) {
+const childDirectories = Effect.fn('childDirectories')(function*(
+  directory: string,
+  limiter: FileDiscoveryLimiter,
+) {
   const fs = yield* FileSystem.FileSystem
-  const names = yield* fs.readDirectory(directory)
+  const names = yield* limiter.withPermit(fs.readDirectory(directory))
   const entries = yield* Effect.forEach(names, name => Effect.gen(function*() {
     const path = join(directory, name)
-    const info = yield* fs.stat(path)
+    const info = yield* limiter.withPermit(fs.stat(path))
     return info.type === 'Directory' ? [path] : []
-  }), { concurrency: 'unbounded' })
+  }), { concurrency: FILE_CONCURRENCY })
   return entries.flat()
 })
 
 export const collectCodexRollouts = Effect.fn('collectCodexRollouts')(function*(maxAgeHours: number) {
   const fs = yield* FileSystem.FileSystem
   const root = yield* CodexSessionsDirectory
+  const limiter = yield* makeFileDiscoveryLimiter()
   const now = yield* Clock.currentTimeMillis
   const cutoff = maxAgeHours <= 0
     ? Number.NEGATIVE_INFINITY
     : now - maxAgeHours * 3_600_000
 
-  const years = yield* childDirectories(root)
-  const months = (yield* Effect.forEach(years, childDirectories, { concurrency: 'unbounded' })).flat()
-  const days = (yield* Effect.forEach(months, childDirectories, { concurrency: 'unbounded' })).flat()
+  const years = yield* childDirectories(root, limiter)
+  const months = (yield* Effect.forEach(
+    years,
+    directory => childDirectories(directory, limiter),
+    { concurrency: FILE_CONCURRENCY },
+  )).flat()
+  const days = (yield* Effect.forEach(
+    months,
+    directory => childDirectories(directory, limiter),
+    { concurrency: FILE_CONCURRENCY },
+  )).flat()
   const discovered = yield* Effect.forEach(days, day => Effect.gen(function*() {
-    const names = yield* fs.readDirectory(day)
+    const names = yield* limiter.withPermit(fs.readDirectory(day))
     const candidates = names.filter(name => name.endsWith('.jsonl'))
     const results = yield* Effect.forEach(candidates, name => Effect.result(Effect.gen(function*() {
       const path = join(day, name)
-      const info = yield* fs.stat(path)
+      const info = yield* limiter.withPermit(fs.stat(path))
       if (info.type !== 'File') return []
       const fresh = info.mtime._tag === 'Some' ? info.mtime.value.getTime() >= cutoff : true
       return fresh ? [path] : []
-    })), { concurrency: 'unbounded' })
+    })), { concurrency: FILE_CONCURRENCY })
     return {
       paths: results.flatMap(result => Result.isSuccess(result) ? result.success : []),
       unreadable: results.filter(Result.isFailure).length,
     }
-  }), { concurrency: 'unbounded' })
+  }), { concurrency: FILE_CONCURRENCY })
 
   return {
     paths: discovered.flatMap(result => result.paths).sort((a, b) => a.localeCompare(b)),

@@ -12,6 +12,25 @@ export interface FakeEntry {
 
 export type FakeTree = Record<string, string | FakeEntry>
 
+export function operationConcurrencyProbe(): {
+  readonly beforeOperation: () => Effect.Effect<void>
+  readonly afterOperation: () => Effect.Effect<void>
+  readonly maximum: () => number
+} {
+  let active = 0
+  let maximum = 0
+  return {
+    beforeOperation: () => Effect.sync(() => {
+      active += 1
+      maximum = Math.max(maximum, active)
+    }).pipe(Effect.andThen(Effect.yieldNow)),
+    afterOperation: () => Effect.sync(() => {
+      active -= 1
+    }),
+    maximum: () => maximum,
+  }
+}
+
 const entryOf = (value: string | FakeEntry): FakeEntry =>
   typeof value === 'string' ? { content: value } : value
 
@@ -33,11 +52,16 @@ export function testFileSystem(tree: FakeTree, options: {
   readonly beforeRead?: (path: string) => Effect.Effect<void>
   /** Called with the path each time file content is read (not stat'd). */
   readonly onRead?: (path: string) => void
+  /** Effects bracketing each read-only filesystem operation. */
+  readonly beforeOperation?: (method: string, path: string) => Effect.Effect<void>
+  readonly afterOperation?: (method: string, path: string) => Effect.Effect<void>
 } = {}): Layer.Layer<FileSystem.FileSystem> {
   const files = new Map(Object.entries(tree).map(([path, value]) => [path, entryOf(value)]))
   const denied = new Set(options.denied ?? [])
   const beforeRead = options.beforeRead ?? (() => Effect.void)
   const onRead = options.onRead ?? (() => {})
+  const beforeOperation = options.beforeOperation ?? (() => Effect.void)
+  const afterOperation = options.afterOperation ?? (() => Effect.void)
 
   const directories = new Set<string>()
   for (const path of files.keys()) {
@@ -59,6 +83,15 @@ export function testFileSystem(tree: FakeTree, options: {
 
   const rejectMutation = (method: string, path: string) =>
     Effect.die(new Error(`test filesystem is read-only: ${method}(${path})`))
+  const readOperation = <A, E, R>(
+    method: string,
+    path: string,
+    operation: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    beforeOperation(method, path).pipe(
+      Effect.andThen(operation),
+      Effect.ensuring(afterOperation(method, path)),
+    )
 
   return FileSystem.layerNoop({
     chmod: path => rejectMutation('chmod', path),
@@ -80,10 +113,10 @@ export function testFileSystem(tree: FakeTree, options: {
       if (Option.isSome(denial)) return Effect.fail(denial.value)
       const file = files.get(path)
       if (!file) return Effect.fail(notFound('readFileString', path))
-      return beforeRead(path).pipe(
+      return readOperation('readFileString', path, beforeRead(path).pipe(
         Effect.tap(() => Effect.sync(() => onRead(path))),
         Effect.as(file.content),
-      )
+      ))
     },
 
     stream: (path, streamOptions) => {
@@ -113,7 +146,7 @@ export function testFileSystem(tree: FakeTree, options: {
         const rest = candidate.slice(prefix.length)
         if (rest) names.add(rest.split('/')[0]!)
       }
-      return Effect.succeed([...names].sort())
+      return readOperation('readDirectory', path, Effect.succeed([...names].sort()))
     },
 
     stat: (path: string) => {
@@ -121,18 +154,18 @@ export function testFileSystem(tree: FakeTree, options: {
       if (Option.isSome(denial)) return Effect.fail(denial.value)
       const file = files.get(path)
       if (file) {
-        return Effect.succeed({
+        return readOperation('stat', path, Effect.succeed({
           type: 'File',
           mtime: file.mtime === undefined ? Option.none() : Option.some(new Date(file.mtime * 1_000)),
           size: FileSystem.Size(Buffer.byteLength(file.content)),
-        } as FileSystem.File.Info)
+        } as FileSystem.File.Info))
       }
       if (directories.has(path)) {
-        return Effect.succeed({
+        return readOperation('stat', path, Effect.succeed({
           type: 'Directory',
           mtime: Option.none(),
           size: FileSystem.Size(0),
-        } as FileSystem.File.Info)
+        } as FileSystem.File.Info))
       }
       return Effect.fail(notFound('stat', path))
     },

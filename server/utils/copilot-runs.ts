@@ -2,7 +2,6 @@ import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Clock, Effect, Option, Result } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
-import { FILE_CONCURRENCY } from './runs'
 import {
   CopilotScanCache,
   type CopilotSessionLocation,
@@ -13,6 +12,11 @@ import {
 import { parseCopilotWorkspace } from '#shared/schemas/copilot'
 import type { RunNode, TranscriptStats } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import {
+  FILE_CONCURRENCY,
+  makeFileDiscoveryLimiter,
+  type FileDiscoveryLimiter,
+} from './filesystem-concurrency'
 
 export interface CopilotDiscovery {
   locations: CopilotSessionLocation[]
@@ -61,18 +65,24 @@ function normalizeWorkspace(value: string): string {
   return value
 }
 
-const optionalDirectory = Effect.fn('optionalDirectory')(function*(path: string) {
+const optionalDirectory = Effect.fn('optionalDirectory')(function*(
+  path: string,
+  limiter: FileDiscoveryLimiter,
+) {
   const fs = yield* FileSystem.FileSystem
-  const result = yield* Effect.result(fs.readDirectory(path))
+  const result = yield* Effect.result(limiter.withPermit(fs.readDirectory(path)))
   if (Result.isSuccess(result)) return { exists: true, names: result.success }
   if (result.failure.reason._tag === 'NotFound') return { exists: false, names: [] }
   return yield* result.failure
 })
 
-const workspaceFor = Effect.fn('workspaceFor')(function*(directory: string) {
+const workspaceFor = Effect.fn('workspaceFor')(function*(
+  directory: string,
+  limiter: FileDiscoveryLimiter,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = join(directory, 'workspace.json')
-  const result = yield* Effect.result(fs.readFileString(path))
+  const result = yield* Effect.result(limiter.withPermit(fs.readFileString(path)))
   if (Result.isFailure(result)) {
     if (result.failure.reason._tag === 'NotFound') return ''
     return yield* result.failure
@@ -92,22 +102,23 @@ const sessionFiles = Effect.fn('sessionFiles')(function*(
   application: string,
   workspace: string,
   cutoff: number,
+  limiter: FileDiscoveryLimiter,
 ) {
   const fs = yield* FileSystem.FileSystem
-  const directoryResult = yield* Effect.result(optionalDirectory(directory))
+  const directoryResult = yield* Effect.result(optionalDirectory(directory, limiter))
   if (Result.isFailure(directoryResult)) return { locations: [], unreadable: 1 } satisfies LocationResult
   if (!directoryResult.success.exists) return { locations: [], unreadable: 0 } satisfies LocationResult
   const names = directoryResult.success.names.filter(name => name.endsWith('.jsonl'))
   const results = yield* Effect.forEach(names, name => Effect.result(Effect.gen(function*() {
     const path = join(directory, name)
-    const info = yield* fs.stat(path)
+    const info = yield* limiter.withPermit(fs.stat(path))
     if (info.type !== 'File') return []
     const fresh = Option.match(info.mtime, {
       onNone: () => true,
       onSome: value => value.getTime() >= cutoff,
     })
     return fresh ? [{ path, application, workspace, format: 'vscode' as const }] : []
-  })), { concurrency: 'unbounded' })
+  })), { concurrency: FILE_CONCURRENCY })
   return {
     locations: results.flatMap(result => Result.isSuccess(result) ? result.success : []),
     unreadable: results.filter(Result.isFailure).length,
@@ -119,24 +130,26 @@ const scanWorkspaceStorage = Effect.fn('scanWorkspaceStorage')(function*(
   storage: string,
   application: string,
   cutoff: number,
+  limiter: FileDiscoveryLimiter,
 ) {
-  const directoryResult = yield* Effect.result(optionalDirectory(storage))
+  const directoryResult = yield* Effect.result(optionalDirectory(storage, limiter))
   if (Result.isFailure(directoryResult)) return { locations: [], unreadable: 1 } satisfies LocationResult
   if (!directoryResult.success.exists) return { locations: [], unreadable: 0 } satisfies LocationResult
   const results = yield* Effect.forEach(directoryResult.success.names, name => Effect.result(Effect.gen(function*() {
     const directory = join(storage, name)
-    const workspaceResult = yield* Effect.result(workspaceFor(directory))
+    const workspaceResult = yield* Effect.result(workspaceFor(directory, limiter))
     const sessions = yield* sessionFiles(
       join(directory, 'chatSessions'),
       application,
       Result.isSuccess(workspaceResult) ? workspaceResult.success : '',
       cutoff,
+      limiter,
     )
     return {
       locations: sessions.locations,
       unreadable: sessions.unreadable + (Result.isFailure(workspaceResult) ? 1 : 0),
     } satisfies LocationResult
-  })), { concurrency: 'unbounded' })
+  })), { concurrency: FILE_CONCURRENCY })
   return {
     locations: results.flatMap(result => Result.isSuccess(result) ? result.success.locations : []),
     unreadable: results.reduce(
@@ -151,6 +164,7 @@ const scanProfile = Effect.fn('scanProfile')(function*(
   profileDirectory: string,
   application: string,
   cutoff: number,
+  limiter: FileDiscoveryLimiter,
 ) {
   const stores = yield* Effect.all([
     sessionFiles(
@@ -158,18 +172,29 @@ const scanProfile = Effect.fn('scanProfile')(function*(
       `${application} profile`,
       '',
       cutoff,
+      limiter,
     ),
-    scanWorkspaceStorage(root, join(profileDirectory, 'workspaceStorage'), `${application} profile`, cutoff),
-  ], { concurrency: 'unbounded' })
+    scanWorkspaceStorage(
+      root,
+      join(profileDirectory, 'workspaceStorage'),
+      `${application} profile`,
+      cutoff,
+      limiter,
+    ),
+  ], { concurrency: FILE_CONCURRENCY })
   return {
     locations: stores.flatMap(store => store.locations),
     unreadable: stores.reduce((total, store) => total + store.unreadable, 0),
   } satisfies LocationResult
 })
 
-const scanUserDataRoot = Effect.fn('scanUserDataRoot')(function*(root: string, cutoff: number) {
+const scanUserDataRoot = Effect.fn('scanUserDataRoot')(function*(
+  root: string,
+  cutoff: number,
+  limiter: FileDiscoveryLimiter,
+) {
   const application = applicationName(root)
-  const rootResult = yield* Effect.result(optionalDirectory(root))
+  const rootResult = yield* Effect.result(optionalDirectory(root, limiter))
   if (Result.isFailure(rootResult)) {
     return { present: false, failed: true, locations: [], unreadable: 1 }
   }
@@ -177,17 +202,17 @@ const scanUserDataRoot = Effect.fn('scanUserDataRoot')(function*(root: string, c
     return { present: false, failed: false, locations: [], unreadable: 0 }
   }
   const stores = yield* Effect.all([
-    scanWorkspaceStorage(root, join(root, 'workspaceStorage'), application, cutoff),
-    sessionFiles(join(root, 'globalStorage', 'emptyWindowChatSessions'), application, '', cutoff),
-    sessionFiles(join(root, 'globalStorage', 'transferredChatSessions'), application, '', cutoff),
-  ], { concurrency: 'unbounded' })
+    scanWorkspaceStorage(root, join(root, 'workspaceStorage'), application, cutoff, limiter),
+    sessionFiles(join(root, 'globalStorage', 'emptyWindowChatSessions'), application, '', cutoff, limiter),
+    sessionFiles(join(root, 'globalStorage', 'transferredChatSessions'), application, '', cutoff, limiter),
+  ], { concurrency: FILE_CONCURRENCY })
 
-  const profilesResult = yield* Effect.result(optionalDirectory(join(root, 'profiles')))
+  const profilesResult = yield* Effect.result(optionalDirectory(join(root, 'profiles'), limiter))
   const profiles = Result.isSuccess(profilesResult) && profilesResult.success.exists
     ? yield* Effect.forEach(
         profilesResult.success.names,
-        name => Effect.result(scanProfile(root, join(root, 'profiles', name), application, cutoff)),
-        { concurrency: 'unbounded' },
+        name => Effect.result(scanProfile(root, join(root, 'profiles', name), application, cutoff, limiter)),
+        { concurrency: FILE_CONCURRENCY },
       )
     : []
   return {
@@ -206,9 +231,13 @@ const scanUserDataRoot = Effect.fn('scanUserDataRoot')(function*(root: string, c
   }
 })
 
-const scanCopilotCliRoot = Effect.fn('scanCopilotCliRoot')(function*(root: string, cutoff: number) {
+const scanCopilotCliRoot = Effect.fn('scanCopilotCliRoot')(function*(
+  root: string,
+  cutoff: number,
+  limiter: FileDiscoveryLimiter,
+) {
   const fs = yield* FileSystem.FileSystem
-  const rootResult = yield* Effect.result(optionalDirectory(root))
+  const rootResult = yield* Effect.result(optionalDirectory(root, limiter))
   if (Result.isFailure(rootResult)) {
     return { present: false, locations: [], unreadable: 1 }
   }
@@ -217,10 +246,10 @@ const scanCopilotCliRoot = Effect.fn('scanCopilotCliRoot')(function*(root: strin
   }
   const results = yield* Effect.forEach(rootResult.success.names, name => Effect.result(Effect.gen(function*() {
     const directory = join(root, name)
-    const directoryInfo = yield* fs.stat(directory)
+    const directoryInfo = yield* limiter.withPermit(fs.stat(directory))
     if (directoryInfo.type !== 'Directory') return []
     const path = join(directory, 'events.jsonl')
-    const infoResult = yield* Effect.result(fs.stat(path))
+    const infoResult = yield* Effect.result(limiter.withPermit(fs.stat(path)))
     if (Result.isFailure(infoResult)) {
       if (infoResult.failure.reason._tag === 'NotFound') return []
       return yield* infoResult.failure
@@ -233,7 +262,7 @@ const scanCopilotCliRoot = Effect.fn('scanCopilotCliRoot')(function*(root: strin
     return fresh
       ? [{ path, application: 'Copilot CLI', workspace: '', format: 'cli' as const }]
       : []
-  })), { concurrency: 'unbounded' })
+  })), { concurrency: FILE_CONCURRENCY })
   return {
     present: true,
     locations: results.flatMap(result => Result.isSuccess(result) ? result.success : []),
@@ -244,12 +273,17 @@ const scanCopilotCliRoot = Effect.fn('scanCopilotCliRoot')(function*(root: strin
 export const collectCopilotSessions = Effect.fn('collectCopilotSessions')(function*(maxAgeHours: number) {
   const roots = yield* VsCodeUserDataDirectories
   const cliRoot = yield* CopilotSessionStateDirectory
+  const limiter = yield* makeFileDiscoveryLimiter()
   const now = yield* Clock.currentTimeMillis
   const cutoff = maxAgeHours <= 0 ? Number.NEGATIVE_INFINITY : now - maxAgeHours * 3_600_000
   const [results, cli] = yield* Effect.all([
-    Effect.forEach(roots, root => scanUserDataRoot(root, cutoff), { concurrency: 'unbounded' }),
-    scanCopilotCliRoot(cliRoot, cutoff),
-  ], { concurrency: 'unbounded' })
+    Effect.forEach(
+      roots,
+      root => scanUserDataRoot(root, cutoff, limiter),
+      { concurrency: FILE_CONCURRENCY },
+    ),
+    scanCopilotCliRoot(cliRoot, cutoff, limiter),
+  ], { concurrency: FILE_CONCURRENCY })
   return {
     locations: [...results.flatMap(result => result.locations), ...cli.locations],
     rootsPresent: results.filter(result => result.present).length + (cli.present ? 1 : 0),

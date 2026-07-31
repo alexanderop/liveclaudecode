@@ -9,8 +9,13 @@ import {
   CopilotSessionStateDirectory,
   VsCodeUserDataDirectories,
 } from '#server/utils/services'
+import { FILE_CONCURRENCY } from '#server/utils/filesystem-concurrency'
 import * as fixture from '../fixtures/copilot'
-import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
+import {
+  operationConcurrencyProbe,
+  testFileSystem,
+  type FakeTree,
+} from '../fixtures/filesystem'
 
 const STABLE = '/Library/Application Support/Code/User'
 const INSIDERS = '/Library/Application Support/Code - Insiders/User'
@@ -91,6 +96,30 @@ describe('VS Code Copilot discovery', () => {
         fixture.initial(fixture.snapshot({ id: 'unassigned' })),
       ]) },
     }))))
+
+  it.effect('shares one filesystem budget across nested VS Code stores', () => {
+    const probe = operationConcurrencyProbe()
+    const history = Object.fromEntries(
+      Array.from({ length: 16 }, (_, parent) =>
+        Array.from({ length: 16 }, (_, child) => {
+          const id = `session-${parent}-${child}`
+          return [
+            session(STABLE, `workspace-${parent}`, id),
+            fixture.log([fixture.initial(fixture.snapshot({ id }))]),
+          ] as const
+        })).flat(),
+    )
+    return Effect.gen(function*() {
+      const discovery = yield* collectCopilotSessions(0)
+      assert.strictEqual(discovery.locations.length, 256)
+      assert.isAtMost(probe.maximum(), FILE_CONCURRENCY)
+      assert.isAbove(probe.maximum(), 1)
+    }).pipe(Effect.provide(Layer.mergeAll(
+      Layer.succeed(CopilotSessionStateDirectory)(CLI),
+      Layer.succeed(VsCodeUserDataDirectories)([STABLE]),
+      testFileSystem(history, probe),
+    )))
+  })
 
   it.effect('discovers Stable, Insiders, profiles, and workspace associations', () =>
     Effect.gen(function*() {

@@ -12,7 +12,6 @@ import {
 } from './copilot-runs'
 import {
   buildTree,
-  FILE_CONCURRENCY,
   flatten,
   pathFor,
   rootOf,
@@ -21,6 +20,7 @@ import {
   settleReturnedAgent,
   stripNode,
 } from './runs'
+import { FILE_CONCURRENCY } from './filesystem-concurrency'
 import { projectName, resolveProjectDirectories } from './project'
 import {
   CodexScanCache,

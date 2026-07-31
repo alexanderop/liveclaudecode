@@ -6,8 +6,13 @@ import {
   resolveProjectDirectories,
   resolveProjectDirectory,
 } from '#server/utils/project'
+import { FILE_CONCURRENCY } from '#server/utils/filesystem-concurrency'
 import { ProjectsDirectory, WorkingDirectory } from '#server/utils/services'
-import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
+import {
+  operationConcurrencyProbe,
+  testFileSystem,
+  type FakeTree,
+} from '../fixtures/filesystem'
 
 const PROJECTS = '/home/me/.claude/projects'
 const CWD = '/home/me/work'
@@ -17,7 +22,9 @@ const CWD = '/home/me/work'
  * them by providing a layer instead of threading them through every call as
  * positional parameters.
  */
-const withTree = (tree: FakeTree, options: { denied?: ReadonlyArray<string> } = {}) =>
+type FileSystemOptions = NonNullable<Parameters<typeof testFileSystem>[1]>
+
+const withTree = (tree: FakeTree, options: FileSystemOptions = {}) =>
   Layer.mergeAll(
     Layer.succeed(ProjectsDirectory)(PROJECTS),
     Layer.succeed(WorkingDirectory)(CWD),
@@ -79,6 +86,20 @@ describe('project resolution', () => {
       [`${PROJECTS}/second/two.jsonl`]: '{}\n',
       [`${PROJECTS}/empty/notes.md`]: '#',
     }))))
+
+  it.effect('bounds project discovery filesystem concurrency', () => {
+    const probe = operationConcurrencyProbe()
+    const history = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [
+      `${PROJECTS}/project-${index}/session.jsonl`,
+      '{}\n',
+    ]))
+    return Effect.gen(function*() {
+      const projects = yield* listProjectDirectories()
+      assert.strictEqual(projects.length, 40)
+      assert.isAtMost(probe.maximum(), FILE_CONCURRENCY)
+      assert.isAbove(probe.maximum(), 1)
+    }).pipe(Effect.provide(withTree(history, probe)))
+  })
 
   it.effect('reports an unknown project as a typed failure', () =>
     Effect.gen(function*() {
