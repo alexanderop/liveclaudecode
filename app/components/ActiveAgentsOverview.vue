@@ -16,8 +16,7 @@ const emit = defineEmits<{
   select: [project: string, key: string]
 }>()
 
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | undefined
+const now = useTimestamp({ interval: 10_000 })
 
 const stateOrder: Partial<Record<AgentDisplayState, number>> = {
   running: 0,
@@ -73,8 +72,6 @@ function relativeAge(milliseconds: number | null): string {
   return `Updated ${Math.floor(minutes / 60)}h ago`
 }
 
-onMounted(() => { timer = setInterval(() => { now.value = Date.now() }, 10_000) })
-onUnmounted(() => { if (timer) clearInterval(timer) })
 </script>
 
 <template>

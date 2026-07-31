@@ -107,7 +107,7 @@ describe('run canvas', () => {
     expect(storeIds).toEqual(ids)
   })
 
-  it('releases and restores document lifecycle work across KeepAlive deactivation', async () => {
+  it('keeps a single visibility listener across KeepAlive deactivation and removes it on unmount', async () => {
     const addListener = vi.spyOn(document, 'addEventListener')
     const removeListener = vi.spyOn(document, 'removeEventListener')
     const component = await mountSuspended(defineComponent({
@@ -130,14 +130,14 @@ describe('run canvas', () => {
 
     await component.get('button').trigger('click')
     await nextTick()
-    expect(visibilityRemoves()).toEqual([['visibilitychange', handler]])
-
     await component.get('button').trigger('click')
     await nextTick()
-    expect(visibilityAdds()).toEqual([
-      ['visibilitychange', handler],
-      ['visibilitychange', handler],
-    ])
+    expect(visibilityAdds()).toHaveLength(1)
+    expect(visibilityRemoves()).toHaveLength(0)
+
+    component.unmount()
+    expect(visibilityRemoves()).toHaveLength(1)
+    expect(visibilityRemoves()[0]![1]).toBe(handler)
   })
 
   it('stops replay and minimap timers while a cached canvas is deactivated', async () => {

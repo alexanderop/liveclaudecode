@@ -30,6 +30,7 @@ const emit = defineEmits<{
 }>()
 
 const toast = useToast()
+const clipboard = useClipboard({ legacy: true })
 const overviewRoot = computed<RunNode | null>(() => {
   if (props.root) return props.root
   if (!props.run?.root) return null
@@ -128,7 +129,7 @@ function stateIcon(state: string): string {
 async function copyTranscriptPath(): Promise<void> {
   if (!props.run?.transcriptPath) return
   try {
-    await navigator.clipboard.writeText(props.run.transcriptPath)
+    await clipboard.copy(props.run.transcriptPath)
     toast.add({ title: 'Transcript path copied', icon: 'i-lucide-check', color: 'success' })
   } catch {
     toast.add({ title: 'Could not copy transcript path', icon: 'i-lucide-copy-x', color: 'error' })

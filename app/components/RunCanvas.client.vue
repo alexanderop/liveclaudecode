@@ -24,6 +24,7 @@ import {
   useId,
   watch,
 } from 'vue'
+import { useDocumentVisibility, useIntervalFn, useTimeoutFn } from '@vueuse/core'
 import type { DiagnosticIncident, RunNode, RunResponse } from '#shared/types/run'
 import ExecutionAgentNode from '~/components/ExecutionAgentNode.vue'
 import { ExecutionCanvasKey } from '~/composables/useExecutionCanvas'
@@ -79,9 +80,9 @@ const minimapVisible = ref(false)
 const storedViewports = new Map<string, ViewportTransform>()
 let fitWhenVisible = false
 let previousStates = new Map<string, ExecutionNodeData['state']>()
-let replayTimer: ReturnType<typeof setInterval> | undefined
-let minimapTimer: ReturnType<typeof setTimeout> | undefined
 let canvasActive = false
+const documentVisibility = useDocumentVisibility()
+const minimapHide = useTimeoutFn(() => { minimapVisible.value = false }, 1_000, { immediate: false })
 
 const coordination = computed(() => analyzeCoordination(props.root || null, props.run))
 const graph = structuralComputed(
@@ -270,12 +271,11 @@ function miniMapColor(node: GraphNode<ExecutionNodeData>): string {
 }
 
 function showMinimap(): void {
-  if (minimapTimer) clearTimeout(minimapTimer)
+  minimapHide.stop()
   minimapVisible.value = true
 }
 function hideMinimapSoon(): void {
-  if (minimapTimer) clearTimeout(minimapTimer)
-  minimapTimer = setTimeout(() => { minimapVisible.value = false }, 1_000)
+  minimapHide.start()
 }
 
 function afterPaint(): Promise<void> {
@@ -445,46 +445,44 @@ function onReplayInput(event: Event): void {
   stopPlayback()
   setReplayTime(Number((event.target as HTMLInputElement).value))
 }
+const replayLoop = useIntervalFn(() => {
+  const step = Math.max(250, Math.round((replayRange.value.end - replayRange.value.start) / 120))
+  const next = (replayAt.value ?? replayRange.value.start) + step
+  if (next >= replayRange.value.end) {
+    stopPlayback()
+    setReplayTime(null)
+  } else setReplayTime(next)
+}, 250, { immediate: false })
+
 function stopPlayback(): void {
   playing.value = false
-  if (replayTimer) clearInterval(replayTimer)
-  replayTimer = undefined
+  replayLoop.pause()
 }
 function togglePlayback(): void {
   if (playing.value) return stopPlayback()
   if (replayAt.value === null || replayAt.value >= replayRange.value.end) setReplayTime(replayRange.value.start)
   playing.value = true
-  replayTimer = setInterval(() => {
-    const step = Math.max(250, Math.round((replayRange.value.end - replayRange.value.start) / 120))
-    const next = (replayAt.value ?? replayRange.value.start) + step
-    if (next >= replayRange.value.end) {
-      stopPlayback()
-      setReplayTime(null)
-    } else setReplayTime(next)
-  }, 250)
+  replayLoop.resume()
 }
 
-function handleVisibilityChange(): void {
-  if (document.hidden || !fitWhenVisible) return
+function refitWhenVisible(): void {
+  if (!canvasActive || documentVisibility.value !== 'visible' || !fitWhenVisible) return
   fitWhenVisible = false
   void refit()
 }
 
+watch(documentVisibility, refitWhenVisible)
+
 function activateCanvas(): void {
   if (canvasActive) return
   canvasActive = true
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-  handleVisibilityChange()
+  refitWhenVisible()
 }
 
 function deactivateCanvas(): void {
-  if (canvasActive) {
-    canvasActive = false
-    document.removeEventListener('visibilitychange', handleVisibilityChange)
-  }
+  canvasActive = false
   stopPlayback()
-  if (minimapTimer) clearTimeout(minimapTimer)
-  minimapTimer = undefined
+  minimapHide.stop()
   minimapVisible.value = false
 }
 

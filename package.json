@@ -33,6 +33,8 @@
     "@vue-flow/controls": "1.1.3",
     "@vue-flow/core": "1.48.2",
     "@vue-flow/minimap": "1.5.4",
+    "@vueuse/core": "^14.4.0",
+    "@vueuse/nuxt": "^14.4.0",
     "effect": "4.0.0-beta.101",
     "nuxt": "4.4.8",
     "tailwindcss": "4.3.3",

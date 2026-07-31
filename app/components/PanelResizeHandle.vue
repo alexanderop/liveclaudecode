@@ -21,6 +21,7 @@ function clamp(width: number): number {
 }
 
 function updateFromPointer(event: PointerEvent): void {
+  if (!dragging.value) return
   const multiplier = props.direction === 'right' ? 1 : -1
   emit('update:modelValue', clamp(startWidth + ((event.clientX - startX) * multiplier)))
 }
@@ -29,9 +30,6 @@ function stopDragging(): void {
   if (!dragging.value) return
   dragging.value = false
   document.documentElement.classList.remove('panel-resizing')
-  window.removeEventListener('pointermove', updateFromPointer)
-  window.removeEventListener('pointerup', stopDragging)
-  window.removeEventListener('pointercancel', stopDragging)
 }
 
 function startDragging(event: PointerEvent): void {
@@ -41,10 +39,11 @@ function startDragging(event: PointerEvent): void {
   startWidth = props.modelValue
   dragging.value = true
   document.documentElement.classList.add('panel-resizing')
-  window.addEventListener('pointermove', updateFromPointer)
-  window.addEventListener('pointerup', stopDragging)
-  window.addEventListener('pointercancel', stopDragging)
 }
+
+useEventListener('pointermove', updateFromPointer)
+useEventListener('pointerup', stopDragging)
+useEventListener('pointercancel', stopDragging)
 
 function resizeWithKeyboard(event: KeyboardEvent): void {
   const step = event.shiftKey ? 40 : 12

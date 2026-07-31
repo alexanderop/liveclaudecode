@@ -30,6 +30,8 @@ const emit = defineEmits<{
 const feed = useTemplateRef('feed')
 const pinnedToBottom = ref(true)
 const BOTTOM_THRESHOLD = 32
+const { arrivedState } = useScroll(feed, { offset: { bottom: BOTTOM_THRESHOLD }, eventListenerOptions: { passive: true } })
+watch(() => arrivedState.bottom, bottom => { pinnedToBottom.value = bottom })
 
 const visibleEvents = computed(() => props.events.filter((event) => {
   if (props.asOf != null && event.ts) {
@@ -160,12 +162,6 @@ async function scrollToBottom(): Promise<void> {
   }
 }
 
-function updatePinnedState(): void {
-  const element = feed.value
-  if (!element) return
-  pinnedToBottom.value = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD
-}
-
 function resumeFollowing(): void {
   pinnedToBottom.value = true
   void scrollToBottom()
@@ -227,7 +223,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div ref="feed" class="feed" @scroll.passive="updatePinnedState">
+  <div ref="feed" class="feed">
     <div v-if="truncated" class="feed-notice" role="status">
       <UIcon name="i-lucide-history" /> Showing the latest {{ formatCount(events.length) }} session events
     </div>

@@ -10,8 +10,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ select: [key: string] }>()
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | undefined
+const now = useTimestamp({ interval: 10_000 })
 
 const stateOrder: Record<AgentDisplayState, number> = {
   failed: 0,
@@ -62,8 +61,6 @@ function relativeAge(milliseconds: number | null): string {
   return `${Math.floor(minutes / 60)}h ago`
 }
 
-onMounted(() => { timer = setInterval(() => { now.value = Date.now() }, 10_000) })
-onUnmounted(() => { if (timer) clearInterval(timer) })
 </script>
 
 <template>

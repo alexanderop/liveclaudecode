@@ -159,10 +159,6 @@ export function useLiveRuns() {
   const errorsOnly = ref(false)
   const density = ref<FeedDensity>('normal')
   const hours = ref<SessionRangeHours>(168)
-  let treeTimer: ReturnType<typeof setInterval> | undefined
-  let eventTimer: ReturnType<typeof setInterval> | undefined
-  let runTimer: ReturnType<typeof setInterval> | undefined
-  let sessionEventTimer: ReturnType<typeof setInterval> | undefined
   let treePending = false
   let treeReloadQueued = false
   let treeGeneration = 0
@@ -411,15 +407,20 @@ export function useLiveRuns() {
     void loadTree()
   })
 
+  const treePoll = useIntervalFn(loadTree, 4_000, { immediate: false })
+  const eventPoll = useIntervalFn(() => {
+    void selectedEventPoller.poll()
+    void inspectedEventPoller.poll()
+  }, 2_000, { immediate: false })
+  const runPoll = useIntervalFn(loadRun, 6_000, { immediate: false })
+  const sessionEventPoll = useIntervalFn(pollSessionEvents, 4_000, { immediate: false })
+
   onMounted(() => {
     void loadTree()
-    treeTimer = setInterval(loadTree, 4_000)
-    eventTimer = setInterval(() => {
-      void selectedEventPoller.poll()
-      void inspectedEventPoller.poll()
-    }, 2_000)
-    runTimer = setInterval(loadRun, 6_000)
-    sessionEventTimer = setInterval(pollSessionEvents, 4_000)
+    treePoll.resume()
+    eventPoll.resume()
+    runPoll.resume()
+    sessionEventPoll.resume()
   })
 
   onUnmounted(() => {
@@ -432,10 +433,6 @@ export function useLiveRuns() {
     inspectedEventPoller.reset()
     requestControllers.forEach(controller => controller.abort())
     requestControllers.clear()
-    if (treeTimer) clearInterval(treeTimer)
-    if (eventTimer) clearInterval(eventTimer)
-    if (runTimer) clearInterval(runTimer)
-    if (sessionEventTimer) clearInterval(sessionEventTimer)
   })
 
   return {

@@ -45,9 +45,6 @@ const focusedFile = ref<string | null>(null)
 const activityAgentBySession = reactive<Record<string, string>>({})
 const searchOpen = ref(false)
 const sidebarCollapsed = ref(false)
-const viewportWidth = ref(1440)
-const sidebarWidth = ref(272)
-const panelWidth = ref(380)
 const statusAnnouncement = ref('')
 const sessionSelectionIsManual = ref(false)
 const routeSelectionApplied = ref(false)
@@ -61,6 +58,9 @@ const PANEL_DEFAULT = 380
 const RESIZE_HANDLES_WIDTH = 14
 const SIDEBAR_STORAGE_KEY = 'liveclaudecode:sidebar-width'
 const PANEL_STORAGE_KEY = 'liveclaudecode:panel-width'
+const { width: viewportWidth } = useWindowSize({ initialWidth: 1440 })
+const sidebarWidth = useLocalStorage(SIDEBAR_STORAGE_KEY, SIDEBAR_DEFAULT, { initOnMounted: true })
+const panelWidth = useLocalStorage(PANEL_STORAGE_KEY, PANEL_DEFAULT, { initOnMounted: true })
 const sidebarVisible = computed(() => !sidebarCollapsed.value)
 const effectivePanelWidth = computed(() => Math.min(panelWidth.value, viewportWidth.value * 0.4, PANEL_MAX))
 const selectedSessionKey = computed(() => live.selectedRoot.value?.key || null)
@@ -112,29 +112,12 @@ const panelMax = computed(() => {
   )
 })
 const workspaceStyle = computed(() => ({ '--panel-width': `${effectivePanelWidth.value}px` }))
-let widthsHydrated = false
 
 function clampWidth(width: number, min: number, max: number): number {
+  if (!Number.isFinite(width)) return min
   return Math.round(Math.min(Math.max(width, min), max))
 }
-function readStoredWidth(key: string, fallback: number): number {
-  try {
-    const width = Number.parseInt(window.localStorage.getItem(key) || '', 10)
-    return Number.isFinite(width) ? width : fallback
-  } catch {
-    return fallback
-  }
-}
-function persistWidth(key: string, width: number): void {
-  if (!widthsHydrated) return
-  try {
-    window.localStorage.setItem(key, String(width))
-  } catch {
-    // Storage is an enhancement; the workspace remains usable without it.
-  }
-}
 function fitPanelsToViewport(): void {
-  viewportWidth.value = window.innerWidth
   panelWidth.value = clampWidth(panelWidth.value, PANEL_MIN, PANEL_MAX)
   if (viewportWidth.value > 680) {
     sidebarWidth.value = clampWidth(sidebarWidth.value, SIDEBAR_MIN, sidebarMax.value)
@@ -380,22 +363,13 @@ watch(
       : 'Session completed'
   },
 )
-watch(panelWidth, width => persistWidth(PANEL_STORAGE_KEY, width))
-watch(sidebarWidth, width => persistWidth(SIDEBAR_STORAGE_KEY, width))
+watch(viewportWidth, fitPanelsToViewport)
 watch([selectedContextVisible, sidebarCollapsed], () => {
   if (import.meta.client) fitPanelsToViewport()
 })
+useEventListener('keydown', handleShortcut)
 onMounted(() => {
-  sidebarWidth.value = clampWidth(readStoredWidth(SIDEBAR_STORAGE_KEY, SIDEBAR_DEFAULT), SIDEBAR_MIN, SIDEBAR_MAX)
-  panelWidth.value = clampWidth(readStoredWidth(PANEL_STORAGE_KEY, PANEL_DEFAULT), PANEL_MIN, PANEL_MAX)
   fitPanelsToViewport()
-  widthsHydrated = true
-  window.addEventListener('keydown', handleShortcut)
-  window.addEventListener('resize', fitPanelsToViewport)
-})
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleShortcut)
-  window.removeEventListener('resize', fitPanelsToViewport)
 })
 </script>
 

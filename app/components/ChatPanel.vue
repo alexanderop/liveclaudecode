@@ -3,7 +3,6 @@ import security from '@comark/nuxt/plugins/security'
 import type {
   ChatAction,
   ChatAgentId,
-  ChatEvent,
   ChatEventsResponse,
   ChatStatus,
 } from '#shared/types/chat'
@@ -52,7 +51,7 @@ const {
 const actionPending = ref(false)
 const pollPending = ref(false)
 const requestError = ref('')
-let timer: ReturnType<typeof setInterval> | undefined
+const pollLoop = useIntervalFn(() => void poll(), 800, { immediate: false })
 let pollController: AbortController | undefined
 let pollGeneration = 0
 let actionController: AbortController | undefined
@@ -224,13 +223,12 @@ function startPolling(): void {
   active = true
   touchSessionState()
   void poll()
-  if (!timer) timer = setInterval(() => void poll(), 800)
+  pollLoop.resume()
 }
 
 function stopPolling(): void {
   active = false
-  if (timer) clearInterval(timer)
-  timer = undefined
+  pollLoop.pause()
   pollGeneration += 1
   pollController?.abort()
   pollController = undefined
