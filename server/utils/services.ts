@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { Context, Effect, Layer, Schema, Semaphore } from 'effect'
+import { Clock, Context, Effect, Layer, Schema, Semaphore } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import { TranscriptScan } from './transcript'
@@ -105,6 +105,35 @@ interface RefreshableScan<A> {
 interface ScanEntry<A> {
   readonly scan: A
   readonly semaphore: Semaphore.Semaphore
+  users: number
+  lastAccess: number
+}
+
+const SCAN_CACHE_CAPACITY = 64
+const SCAN_CACHE_IDLE_TTL_MILLIS = 30 * 60 * 1_000
+const PROMPT_CACHE_CAPACITY = 256
+
+function trimScanEntries<A>(
+  entries: Map<string, ScanEntry<A>>,
+  now: number,
+  maximumSize: number,
+): void {
+  for (const [key, entry] of entries) {
+    if (
+      entry.users === 0
+      && now - entry.lastAccess >= SCAN_CACHE_IDLE_TTL_MILLIS
+    ) {
+      entries.delete(key)
+    }
+  }
+  if (entries.size <= maximumSize) return
+  const idle = [...entries.entries()]
+    .filter((entry): entry is [string, ScanEntry<A>] => entry[1].users === 0)
+    .sort((left, right) => left[1].lastAccess - right[1].lastAccess)
+  for (const [key] of idle) {
+    if (entries.size <= maximumSize) break
+    entries.delete(key)
+  }
 }
 
 /**
@@ -119,16 +148,38 @@ function refreshCachedScan<A extends RefreshableScan<A>>(
   key: string,
   create: () => A,
 ): Effect.Effect<A, PlatformError.PlatformError, FileSystem.FileSystem> {
-  return Effect.suspend(() => {
-    let entry = entries.get(key)
-    if (!entry) {
-      entry = {
-        scan: create(),
-        semaphore: Semaphore.makeUnsafe(1),
+  return Effect.flatMap(Clock.currentTimeMillis, startedAt =>
+    Effect.suspend(() => {
+      let entry = entries.get(key)
+      if (!entry) {
+        trimScanEntries(entries, startedAt, SCAN_CACHE_CAPACITY - 1)
+        entry = {
+          scan: create(),
+          semaphore: Semaphore.makeUnsafe(1),
+          users: 0,
+          lastAccess: startedAt,
+        }
+        entries.set(key, entry)
       }
-      entries.set(key, entry)
-    }
-    return entry.semaphore.withPermit(entry.scan.refresh)
+      entry.users += 1
+      entry.lastAccess = startedAt
+      return entry.semaphore.withPermit(entry.scan.refresh).pipe(
+        Effect.ensuring(Effect.flatMap(Clock.currentTimeMillis, finishedAt => Effect.sync(() => {
+          entry.users -= 1
+          entry.lastAccess = finishedAt
+          trimScanEntries(entries, finishedAt, SCAN_CACHE_CAPACITY)
+        }))),
+      )
+    }))
+}
+
+function peekCachedScan<A>(
+  entries: Map<string, ScanEntry<A>>,
+  key: string,
+): Effect.Effect<A | undefined> {
+  return Effect.map(Clock.currentTimeMillis, now => {
+    trimScanEntries(entries, now, SCAN_CACHE_CAPACITY)
+    return entries.get(key)?.scan
   })
 }
 
@@ -150,7 +201,7 @@ export class ScanCache extends Context.Service<ScanCache, {
       const entries = new Map<string, ScanEntry<TranscriptScan>>()
       return ScanCache.of({
         get: path => refreshCachedScan(entries, path, () => new TranscriptScan(path)),
-        peek: path => Effect.sync(() => entries.get(path)?.scan),
+        peek: path => peekCachedScan(entries, path),
       })
     }),
   )
@@ -169,7 +220,7 @@ export class CodexScanCache extends Context.Service<CodexScanCache, {
       const entries = new Map<string, ScanEntry<CodexTranscriptScan>>()
       return CodexScanCache.of({
         get: path => refreshCachedScan(entries, path, () => new CodexTranscriptScan(path)),
-        peek: path => Effect.sync(() => entries.get(path)?.scan),
+        peek: path => peekCachedScan(entries, path),
       })
     }),
   )
@@ -203,15 +254,15 @@ export class CopilotScanCache extends Context.Service<CopilotScanCache, {
             ? new CopilotCliTranscriptScan(location.path, location.application, location.workspace)
             : new CopilotTranscriptScan(location.path, location.application, location.workspace),
         ),
-        peek: path => Effect.sync(() => entries.get(path)?.scan),
+        peek: path => peekCachedScan(entries, path),
       })
     }),
   )
 }
 
 /**
- * First user prompt per transcript. Immutable once read, so it is cached for
- * the lifetime of the layer.
+ * First user prompt per transcript. Values are immutable once read; the
+ * process keeps only the most recently requested paths.
  */
 export class PromptCache extends Context.Service<PromptCache, {
   readonly get: (
@@ -226,9 +277,24 @@ export class PromptCache extends Context.Service<PromptCache, {
       return PromptCache.of({
         get: Effect.fn('PromptCache.get')(function*(path, read) {
           const cached = prompts.get(path)
-          if (cached !== undefined) return cached
+          if (cached !== undefined) {
+            prompts.delete(path)
+            prompts.set(path, cached)
+            return cached
+          }
           const text = yield* read
+          const concurrent = prompts.get(path)
+          if (concurrent !== undefined) {
+            prompts.delete(path)
+            prompts.set(path, concurrent)
+            return concurrent
+          }
           prompts.set(path, text)
+          while (prompts.size > PROMPT_CACHE_CAPACITY) {
+            const oldest = prompts.keys().next().value
+            if (oldest === undefined) break
+            prompts.delete(oldest)
+          }
           return text
         }),
       })
