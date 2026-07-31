@@ -10,7 +10,7 @@ describe('Codex transcript scan', () => {
   it.effect('normalizes messages, tools, plans, explicit failures, and changed files', () => {
     const scan = new CodexTranscriptScan(PATH)
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       const stats = scan.statsAt(10)
 
       assert.strictEqual(scan.metadata.id, 'session-1')
@@ -60,7 +60,7 @@ describe('Codex transcript scan', () => {
   it.effect('defers a partial trailing line and reports malformed complete records', () => {
     const scan = new CodexTranscriptScan(PATH)
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.metadata.id, 'session-1')
       assert.strictEqual(scan.line, 2)
       assert.strictEqual(scan.malformed, 1)
@@ -76,8 +76,8 @@ describe('Codex transcript scan', () => {
     const active = new CodexTranscriptScan('/active.jsonl')
     const complete = new CodexTranscriptScan('/complete.jsonl')
     return Effect.gen(function*() {
-      yield* active.refresh
-      yield* complete.refresh
+      yield* active.refresh()
+      yield* complete.refresh()
       assert.strictEqual(active.statsAt(20).live, true)
       assert.strictEqual(active.statsAt(20_000).live, true)
       assert.strictEqual(complete.statsAt(20).live, false)
@@ -94,7 +94,7 @@ describe('Codex transcript scan', () => {
   it.effect('uses only explicit command outcomes and preserves unknown results', () => {
     const scan = new CodexTranscriptScan(PATH)
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.deepStrictEqual(scan.statsAt(20).commands.map(command => command.ok), [false, true, null])
       assert.strictEqual(scan.statsAt(20).errors, 1)
     }).pipe(Effect.provide(testFileSystem({

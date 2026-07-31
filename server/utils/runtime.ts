@@ -1,7 +1,7 @@
 import { Effect, Layer, ManagedRuntime, Result } from 'effect'
 import type * as PlatformError from 'effect/PlatformError'
 import { NodeServices } from '@effect/platform-node'
-import { createError } from 'h3'
+import { createError, type H3Event } from 'h3'
 import {
   CodexScanCache,
   CopilotScanCache,
@@ -18,7 +18,6 @@ import {
   ChatBusy,
   ChatCapacity,
   InvalidChatAction,
-  UnknownChatAgent,
 } from './chat'
 import { ChatStore } from './chat-store'
 
@@ -56,7 +55,6 @@ export type AppError =
   | UnknownRun
   | InvalidRunKey
   | InvalidChatAction
-  | UnknownChatAgent
   | ChatBusy
   | ChatCapacity
   | AcpAgentError
@@ -66,12 +64,15 @@ export type AppError =
  * Every failure a handler can produce has a status code. Filesystem faults are
  * genuine server errors, so they surface as 500 with their reason preserved
  * rather than disappearing into a generic message.
+ *
+ * The `default` branch is dead for every `AppError` known today; it exists so
+ * that adding a tag without a case here fails to typecheck instead of falling
+ * through silently at runtime.
  */
-function toHttpError(error: AppError) {
+function toHttpError(error: AppError): ReturnType<typeof createError> {
   switch (error._tag) {
     case 'InvalidRunKey':
     case 'InvalidChatAction':
-    case 'UnknownChatAgent':
       return createError({ statusCode: 400, statusMessage: error.message })
     case 'ChatBusy':
       return createError({ statusCode: 409, statusMessage: error.message })
@@ -85,14 +86,40 @@ function toHttpError(error: AppError) {
       return createError({ statusCode: 500, statusMessage: `Filesystem error: ${error.reason._tag}` })
     case 'AcpAgentError':
       return createError({ statusCode: 502, statusMessage: error.message })
+    default:
+      return error satisfies never
   }
 }
 
-/** Run an Effect for an HTTP handler, mapping typed failures onto status codes. */
+/**
+ * Run an Effect for an HTTP handler, mapping typed failures onto status codes.
+ *
+ * `event`'s underlying request is wired to an `AbortSignal` so a client that
+ * disconnects mid-poll interrupts the in-flight filesystem scan instead of
+ * letting it run to completion for nobody. An interruption triggered by that
+ * disconnect surfaces as a rejected `runPromise`, not as a typed `AppError`;
+ * that path is swallowed rather than rethrown, since a request nobody is
+ * waiting on isn't worth logging as a server error. Any other rejection (a
+ * genuine defect) is rethrown unchanged, keeping the contract for live
+ * requests exactly as it was.
+ */
 export async function runRequest<A>(
+  event: H3Event,
   effect: Effect.Effect<A, AppError, AppServices>,
 ): Promise<A> {
-  const result = await runtime.runPromise(Effect.result(effect))
-  if (Result.isSuccess(result)) return result.success
-  throw toHttpError(result.failure)
+  const controller = new AbortController()
+  const onClientDisconnect = () => controller.abort()
+  event.node.req.once('close', onClientDisconnect)
+  try {
+    const result = await runtime.runPromise(Effect.result(effect), { signal: controller.signal })
+    if (Result.isSuccess(result)) return result.success
+    throw toHttpError(result.failure)
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw createError({ statusCode: 499, statusMessage: 'Client Closed Request' })
+    }
+    throw error
+  } finally {
+    event.node.req.removeListener('close', onClientDisconnect)
+  }
 }

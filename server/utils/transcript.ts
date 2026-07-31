@@ -1,6 +1,4 @@
 import { Clock, Effect, Predicate } from 'effect'
-import * as FileSystem from 'effect/FileSystem'
-import type * as PlatformError from 'effect/PlatformError'
 import { consumeNewRecords } from './incremental-jsonl'
 import {
   clip,
@@ -11,10 +9,19 @@ import {
   toolSummary,
 } from './transcript-content'
 import {
+  compactText,
+  type MutableFileChange,
+  pushIncident,
+  recordFileChange,
+  recordMilestones,
+  toolStatsFromCounts,
+} from './transcript-scan-core'
+import {
   parseClaudeAssistantBlock,
   parseClaudeRecord,
   parseClaudeUserBlock,
   type ClaudeAssistantRecord,
+  type ClaudeSessionStateRecord,
   type ClaudeSystemRecord,
   type ClaudeToolUseBlock,
   type ClaudeUserRecord,
@@ -64,32 +71,12 @@ interface ToolRecord {
   input: JsonRecord
 }
 
-interface MutableFileChange {
-  ops: number
-  tools: string[]
-  lastTs: Timestamp
-}
-
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function asTimestamp(value: unknown): Timestamp {
-  return typeof value === 'string' ? value : null
-}
-
 function asNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function compactText(value: unknown, limit = 240): string {
-  if (typeof value === 'string') return value.trim().replace(/\s+/g, ' ').slice(0, limit)
-  if (!Predicate.isObject(value)) return ''
-  try {
-    return JSON.stringify(value).replace(/\s+/g, ' ').slice(0, limit)
-  } catch {
-    return ''
-  }
 }
 
 function toolStats(value: unknown): ToolStats {
@@ -165,40 +152,62 @@ export class TranscriptScan {
   }
 
   /** Parse the records appended since the last refresh; see consumeNewRecords. */
-  get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
-    const self = this
-    return Effect.gen(function*() {
-      for (const [index, value] of yield* consumeNewRecords(self.path, self)) {
-        const parsed = parseClaudeRecord(value)
-        if (parsed.success) self.ingest(parsed.record, index)
-        else self.malformed += 1
+  readonly refresh = Effect.fn('TranscriptScan.refresh')(function*(this: TranscriptScan) {
+    const { records, next } = yield* consumeNewRecords(this.path, this)
+    this.line = next.line
+    this.malformed = next.malformed
+    this.mtime = next.mtime
+    this.size = next.size
+    this.bytesConsumed = next.bytesConsumed
+    this.lastLoadedMtime = next.lastLoadedMtime
+    this.lastLoadedSize = next.lastLoadedSize
+
+    for (const [index, value] of records) {
+      const parsed = parseClaudeRecord(value)
+      if (parsed.success) {
+        this.ingest(parsed.record, index)
+      } else {
+        yield* Effect.logDebug('Skipping malformed Claude transcript record', {
+          path: this.path,
+          line: index,
+          error: parsed.error,
+        })
+        this.malformed += 1
       }
-      return self
-    })
-  }
+    }
+    return this
+  })
 
   private ingest(record: ParsedClaudeRecord, line: number): void {
-    const raw = record.data as JsonRecord
-    const timestamp = asTimestamp(raw.timestamp)
     this.causalRecords += 1
-    if (typeof raw.uuid === 'string') this.causalRecordsWithUuid += 1
-    if (typeof raw.parentUuid === 'string') {
-      const children = (this.causalChildren.get(raw.parentUuid) || 0) + 1
-      this.causalChildren.set(raw.parentUuid, children)
-      if (children === 2) this.causalBranchPoints += 1
-    }
-    if (raw.isSidechain === true) this.causalSidechainRecords += 1
+    let timestamp: Timestamp = null
 
-    const cwd = asString(raw.cwd)
-    this.cwd ||= cwd
-    this.environment.cwd = cwd || this.environment.cwd
-    this.environment.gitBranch = asString(raw.gitBranch) || this.environment.gitBranch
-    this.environment.version = asString(raw.version) || this.environment.version
-    this.environment.entrypoint = asString(raw.entrypoint) || this.environment.entrypoint
-    this.environment.permissionMode = asString(raw.permissionMode) || this.environment.permissionMode
-    if (timestamp) {
-      this.firstTs ||= timestamp
-      this.lastTs = timestamp
+    if (
+      record.kind === 'assistant'
+      || record.kind === 'user'
+      || record.kind === 'system'
+      || record.kind === 'attachment'
+    ) {
+      const data = record.data
+      timestamp = data.timestamp ?? null
+      if (data.uuid !== undefined) this.causalRecordsWithUuid += 1
+      if (typeof data.parentUuid === 'string') {
+        const children = (this.causalChildren.get(data.parentUuid) || 0) + 1
+        this.causalChildren.set(data.parentUuid, children)
+        if (children === 2) this.causalBranchPoints += 1
+      }
+      if (data.isSidechain === true) this.causalSidechainRecords += 1
+
+      const cwd = data.cwd ?? ''
+      this.cwd ||= cwd
+      this.environment.cwd = cwd || this.environment.cwd
+      this.environment.gitBranch = data.gitBranch || this.environment.gitBranch
+      this.environment.version = data.version || this.environment.version
+      this.environment.entrypoint = data.entrypoint || this.environment.entrypoint
+      if (timestamp) {
+        this.firstTs ||= timestamp
+        this.lastTs = timestamp
+      }
     }
 
     if (record.kind === 'assistant') this.ingestAssistant(record.data, line, timestamp)
@@ -208,16 +217,18 @@ export class TranscriptScan {
     else if (record.kind === 'session_state') this.ingestSessionState(record.data, line, timestamp)
   }
 
-  private identity(record: JsonRecord): Pick<TranscriptEvent, 'uuid' | 'parentUuid' | 'sidechain'> {
+  private identity(
+    record: { uuid?: string, parentUuid?: string | null, isSidechain?: boolean },
+  ): Pick<TranscriptEvent, 'uuid' | 'parentUuid' | 'sidechain'> {
     const identity: Pick<TranscriptEvent, 'uuid' | 'parentUuid' | 'sidechain'> = {}
-    if (typeof record.uuid === 'string') identity.uuid = record.uuid
-    if (typeof record.parentUuid === 'string' || record.parentUuid === null) identity.parentUuid = record.parentUuid
-    if (typeof record.isSidechain === 'boolean') identity.sidechain = record.isSidechain
+    if (record.uuid !== undefined) identity.uuid = record.uuid
+    if (record.parentUuid !== undefined) identity.parentUuid = record.parentUuid
+    if (record.isSidechain !== undefined) identity.sidechain = record.isSidechain
     return identity
   }
 
   private addIncident(incident: Omit<DiagnosticIncident, 'id'>): void {
-    this.incidents.push({ ...incident, id: `${incident.line}:${incident.category}:${this.incidents.length}` })
+    pushIncident(this.incidents, incident)
   }
 
   private ingestSystem(record: ClaudeSystemRecord, line: number, timestamp: Timestamp): void {
@@ -283,7 +294,7 @@ export class TranscriptScan {
         body,
         full,
         line,
-        ...this.identity(record as JsonRecord),
+        ...this.identity(record),
       })
     }
   }
@@ -342,7 +353,7 @@ export class TranscriptScan {
       })
     }
     const made: TranscriptEvent[] = []
-    const identity = this.identity(record as JsonRecord)
+    const identity = this.identity(record)
     const eventMetadata = {
       ...identity,
       ...(record.requestId ? { requestId: record.requestId } : {}),
@@ -358,11 +369,7 @@ export class TranscriptScan {
         this.finalText = text
         const [body, full] = clip(text)
         made.push({ role: 'assistant', kind: 'text', ts, body, full, line, ...eventMetadata })
-        for (const [title, strong] of findMilestones(text)) {
-          if (this.milestones.at(-1)?.title !== title) {
-            this.milestones.push({ title: title.slice(0, 90), ts, strong })
-          }
-        }
+        recordMilestones(this.milestones, text, ts)
       } else if (block.kind === 'thinking' && block.data.thinking.trim()) {
         const [body, full] = clip(block.data.thinking)
         made.push({ role: 'assistant', kind: 'thinking', ts, body, full, line, ...eventMetadata })
@@ -404,12 +411,7 @@ export class TranscriptScan {
     if (EDIT_TOOLS.has(name)) {
       const filePath = asString(input.file_path) || asString(input.notebook_path) || asString(input.path)
       if (filePath) {
-        const key = shortPath(filePath, this.cwd)
-        const change = this.files.get(key) || { ops: 0, tools: [], lastTs: ts }
-        change.ops += 1
-        change.lastTs = ts
-        if (!change.tools.includes(name)) change.tools.push(name)
-        this.files.set(key, change)
+        recordFileChange(this.files, shortPath(filePath, this.cwd), name, ts)
       }
     }
     if (name === 'Bash') {
@@ -515,7 +517,7 @@ export class TranscriptScan {
           error: isError,
           body,
           full,
-          ...this.identity(record as JsonRecord),
+          ...this.identity(record),
           ...(record.promptId ? { promptId: record.promptId } : {}),
           ...(record.sourceToolAssistantUUID ? { sourceUuid: record.sourceToolAssistantUUID } : {}),
         })
@@ -537,7 +539,7 @@ export class TranscriptScan {
           body,
           full,
           line,
-          ...this.identity(record as JsonRecord),
+          ...this.identity(record),
           ...(record.promptId ? { promptId: record.promptId } : {}),
         })
       }
@@ -703,18 +705,17 @@ export class TranscriptScan {
     }
   }
 
-  private ingestSessionState(value: unknown, line: number, ts: Timestamp): void {
-    if (!Predicate.isObject(value)) return
-    if (value.type === 'permission-mode') {
-      this.environment.permissionMode = asString(value.permissionMode)
+  private ingestSessionState(record: ClaudeSessionStateRecord, line: number, ts: Timestamp): void {
+    if (record.type === 'permission-mode') {
+      this.environment.permissionMode = record.permissionMode
     }
-    if (value.type === 'pr-link') {
+    if (record.type === 'pr-link') {
       this.gitEvents.push({
         toolUseId: `state-${line}`,
         ts,
         kind: 'pr',
-        label: `PR #${asNumber(value.prNumber)}`,
-        ...(asString(value.prUrl) ? { url: asString(value.prUrl) } : {}),
+        label: `PR #${record.prNumber}`,
+        ...(record.prUrl ? { url: record.prUrl } : {}),
       })
     }
   }
@@ -757,14 +758,13 @@ export class TranscriptScan {
   statsAt(now: number): TranscriptStats {
     const files: FileChange[] = Array.from(this.files, ([path, value]) => ({ path, ...value }))
       .sort((a, b) => b.ops - a.ops)
+    const { tools, reads } = toolStatsFromCounts(this.counts, READ_TOOLS)
 
     return {
       records: this.line,
-      tools: Object.values(this.counts).reduce((total, count) => total + count, 0),
+      tools,
       toolCounts: { ...this.counts },
-      reads: Object.entries(this.counts)
-        .filter(([name]) => READ_TOOLS.has(name))
-        .reduce((total, [, count]) => total + count, 0),
+      reads,
       errors: this.errors,
       tokensOut: this.tokensOut,
       firstTs: this.firstTs,

@@ -1,5 +1,5 @@
 import { basename } from 'node:path'
-import { Clock, Context, Deferred, Effect, Layer, Result } from 'effect'
+import { Cache, Clock, Context, Duration, Effect, Iterable, Layer, Option, Result } from 'effect'
 import {
   buildCodexTree,
   codexRunDiagnostics,
@@ -37,7 +37,13 @@ import type {
   SessionSourceStatus,
   TranscriptEvent,
 } from '#shared/types/run'
-import { summarizeCosts, type ClaudeCostSample } from './cost'
+import {
+  buildCostOverview,
+  summarizeCosts,
+  type CostUsageSample,
+  providerCostSample,
+} from './cost'
+import { bySubLastDesc, visitNodes } from './run-shared'
 
 interface ClaudeTree {
   roots: RunNode[]
@@ -45,7 +51,7 @@ interface ClaudeTree {
   cwd: string
   malformed: number
   unreadable: number
-  costSamples: ClaudeCostSample[]
+  costSamples: CostUsageSample[]
 }
 
 export type SessionLocator =
@@ -74,7 +80,7 @@ export interface SessionCatalog {
   projects: ProjectRuns[]
   sources: SessionSourceStatus[]
   locators: Map<string, SessionLocator>
-  costSamples: ClaudeCostSample[]
+  costSamples: CostUsageSample[]
 }
 
 interface MutableProject {
@@ -149,7 +155,7 @@ export class SessionLocatorCache extends Context.Service<SessionLocatorCache, {
     hours: number,
     project: string,
     key: string,
-  ) => Effect.Effect<SessionEventLocation | undefined>
+  ) => Effect.Effect<Option.Option<SessionEventLocation>>
 }>()('lcc/SessionLocatorCache') {
   static readonly layer = Layer.effect(
     SessionLocatorCache,
@@ -171,12 +177,12 @@ export class SessionLocatorCache extends Context.Service<SessionLocatorCache, {
         get: (projectInput, hours, project, key) => Effect.sync(() => {
           const keyForCatalog = catalogKey(projectInput, hours)
           const locations = catalogs.get(keyForCatalog)
-          if (!locations) return undefined
+          if (!locations) return Option.none()
           catalogs.delete(keyForCatalog)
           catalogs.set(keyForCatalog, locations)
-          if (project) return locations.get(locatorKey(project, key))
+          if (project) return Option.fromUndefinedOr(locations.get(locatorKey(project, key)))
           const matches = [...locations.values()].filter(location => location.key === key)
-          return matches.length === 1 ? matches[0] : undefined
+          return matches.length === 1 ? Option.some(matches[0]!) : Option.none()
         }),
       })
     }),
@@ -204,10 +210,19 @@ function addProject(
   return project
 }
 
-function failureMessage(error: { readonly _tag: string, readonly message?: string }): string {
-  if (error._tag === 'PlatformError' && 'reason' in error) {
-    const reason = error.reason as { readonly _tag?: string }
-    return `Storage unavailable: ${reason._tag || 'filesystem error'}`
+/**
+ * The exact error union the three source builders can fail with. Naming it
+ * lets `failureMessage` narrow on `_tag` directly instead of casting through
+ * a structural `'reason' in error` check.
+ */
+type CatalogSourceError =
+  | Effect.Error<ReturnType<typeof buildClaudeTrees>>
+  | Effect.Error<ReturnType<typeof buildCodexTree>>
+  | Effect.Error<ReturnType<typeof buildCopilotTree>>
+
+function failureMessage(error: CatalogSourceError): string {
+  if (error._tag === 'PlatformError') {
+    return `Storage unavailable: ${error.reason._tag}`
   }
   return error.message || 'Storage unavailable'
 }
@@ -251,10 +266,21 @@ function matchesProjectInput(project: MutableProject, input: string): boolean {
     || project.id.endsWith(`/${input}`)
 }
 
-function visit(node: RunNode, use: (node: RunNode) => void): void {
-  use(node)
-  node.children.forEach(child => visit(child, use))
-}
+/** The Claude source builder: resolve which project directories are in scope, then scan each. */
+const buildClaudeTrees = Effect.fn('buildClaudeTrees')(function*(
+  projectInput: string,
+  hours: number,
+) {
+  const directories = yield* resolveProjectDirectories(projectInput)
+  const trees = yield* buildTrees(
+    directories.map(directory => directory.directory),
+    hours,
+  )
+  return trees.map((tree, index) => ({
+    directory: directories[index]!.directory,
+    tree,
+  }))
+})
 
 const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   projectInput: string,
@@ -264,24 +290,14 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   const projects = new Map<string, MutableProject>()
   const locators = new Map<string, SessionLocator>()
   const statuses: SessionSourceStatus[] = []
-  const costSamples: ClaudeCostSample[] = []
+  const costSamples: CostUsageSample[] = []
 
   // The three sources read disjoint storage roots, so their scans overlap.
   const [claudeResult, codexResult, copilotResult] = yield* Effect.all([
-    Effect.result(Effect.gen(function*() {
-      const directories = yield* resolveProjectDirectories(projectInput)
-      const trees = yield* buildTrees(
-        directories.map(directory => directory.directory),
-        hours,
-      )
-      return trees.map((tree, index) => ({
-        directory: directories[index]!.directory,
-        tree,
-      }))
-    })),
-    Effect.result(buildCodexTree(hours)),
-    Effect.result(buildCopilotTree(hours)),
-  ], { concurrency: 3 })
+    buildClaudeTrees(projectInput, hours),
+    buildCodexTree(hours),
+    buildCopilotTree(hours),
+  ], { concurrency: 3, mode: 'result' })
 
   if (Result.isSuccess(claudeResult)) {
     let malformed = 0
@@ -294,7 +310,7 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
       const path = item.tree.cwd || item.directory
       const project = addProject(projects, path, item.tree.roots)
       for (const root of item.tree.roots) {
-        visit(root, node => locators.set(locatorKey(project.id, node.key), {
+        visitNodes(root, node => locators.set(locatorKey(project.id, node.key), {
           source: 'claude',
           projectId: project.id,
           projectDirectory: item.directory,
@@ -311,9 +327,14 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
 
   if (Result.isSuccess(codexResult)) {
     const tree = codexResult.success
+    for (const [key, scan] of tree.scanByKey) {
+      costSamples.push(...scan.diagnostics().context.map(sample =>
+        providerCostSample('codex', key, sample),
+      ))
+    }
     for (const root of tree.roots) {
       const project = addProject(projects, tree.cwdByKey.get(root.key) || '', [root])
-      visit(root, node => locators.set(locatorKey(project.id, node.key), {
+      visitNodes(root, node => locators.set(locatorKey(project.id, node.key), {
         source: 'codex',
         projectId: project.id,
         tree,
@@ -331,9 +352,18 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
 
   if (Result.isSuccess(copilotResult)) {
     const tree = copilotResult.success
+    for (const [key, scan] of tree.scanByKey) {
+      const diagnostic = scan.diagnostics()
+      const node = tree.byKey.get(key)
+      costSamples.push(providerCostSample('copilot', key, {
+        ts: node?.lastTs || null,
+        model: scan.model,
+        usage: diagnostic.usage,
+      }))
+    }
     for (const root of tree.roots) {
       const project = addProject(projects, tree.cwdByKey.get(root.key) || '', [root])
-      visit(root, node => locators.set(locatorKey(project.id, node.key), {
+      visitNodes(root, node => locators.set(locatorKey(project.id, node.key), {
         source: 'copilot',
         projectId: project.id,
         tree,
@@ -369,7 +399,7 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   }
 
   for (const project of visible) {
-    project.roots.sort((a, b) => (b.subLast || '').localeCompare(a.subLast || ''))
+    project.roots.sort(bySubLastDesc)
   }
   visible.sort((a, b) => {
     const aLast = a.roots[0]?.subLast || ''
@@ -398,9 +428,12 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
  * Deduplicates catalog builds without ever serving a stale one.
  *
  * The UI polls the tree, run, and event endpoints on overlapping timers, so
- * several requests routinely ask for the same catalog at once. Entries are
- * removed in the build finalizer, so only in-flight work is retained and every
- * later request observes a fresh filesystem snapshot.
+ * several requests routinely ask for the same catalog at once. `Cache.get`
+ * coalesces concurrent callers onto the one in-flight lookup fiber for a key,
+ * and a zero time-to-live marks the entry expired the instant that fiber
+ * exits — on success, on failure, or on interruption — so the next request
+ * for the same key always starts a fresh build; no later request can ever
+ * observe a stale result.
  */
 export class SessionCatalogCache extends Context.Service<SessionCatalogCache, {
   readonly get: (
@@ -412,33 +445,29 @@ export class SessionCatalogCache extends Context.Service<SessionCatalogCache, {
 }>()('lcc/SessionCatalogCache') {
   static readonly layer = Layer.effect(
     SessionCatalogCache,
-    Effect.sync(() => {
-      type BuildError = ReturnType<typeof buildSessionCatalog> extends
-        Effect.Effect<unknown, infer Error, unknown> ? Error : never
-      const inFlight = new Map<string, Deferred.Deferred<SessionCatalog, BuildError>>()
+    Effect.gen(function*() {
+      const cache = yield* Cache.makeWith(
+        (key: string) => {
+          const separator = key.indexOf('\0')
+          return buildSessionCatalog(key.slice(0, separator), Number(key.slice(separator + 1)))
+        },
+        {
+          capacity: Number.POSITIVE_INFINITY,
+          timeToLive: () => Duration.zero,
+          // Keep the *build's* service requirements (ScanCache, CodexScanCache,
+          // SessionLocatorCache, ...) at each `Cache.get` call site rather than
+          // at cache construction, since the merged layer graph only exposes
+          // sibling services once every layer has finished building.
+          requireServicesAt: 'lookup',
+        },
+      )
       return SessionCatalogCache.of({
-        get: (projectInput, hours) => Effect.uninterruptibleMask(restore =>
-          Effect.gen(function*() {
-            const key = catalogKey(projectInput, hours)
-            const candidate = yield* Deferred.make<SessionCatalog, BuildError>()
-            const selected = yield* Effect.sync(() => {
-              const existing = inFlight.get(key)
-              if (existing) return { deferred: existing, owner: false } as const
-              inFlight.set(key, candidate)
-              return { deferred: candidate, owner: true } as const
-            })
-            if (!selected.owner) return yield* restore(Deferred.await(selected.deferred))
-            return yield* restore(buildSessionCatalog(projectInput, hours)).pipe(
-              Effect.onExit(exit => Effect.gen(function*() {
-                yield* Deferred.done(candidate, exit)
-                yield* Effect.sync(() => {
-                  if (inFlight.get(key) === candidate) inFlight.delete(key)
-                })
-              })),
-            )
-          }),
-        ),
-        size: Effect.sync(() => inFlight.size),
+        get: (projectInput, hours) => Cache.get(cache, catalogKey(projectInput, hours)),
+        // `Cache.size` reports the raw map size, including entries whose zero
+        // TTL already elapsed but that no later `Cache.get` has swept out yet.
+        // `Cache.keys` is documented to evict expired entries as it filters
+        // them, so it is the query that actually reflects live ownership.
+        size: Effect.map(Cache.keys(cache), keys => Iterable.reduce(keys, 0, count => count + 1)),
       })
     }),
   )
@@ -473,8 +502,21 @@ export const listSessions = Effect.fn('listSessions')(function*(
     sources: catalog.sources,
     now: nowMillis / 1_000,
     hours,
-    costs: summarizeCosts(catalog.costSamples, nowMillis, hours),
+    costs: summarizeCosts(
+      catalog.costSamples.filter(sample => sample.source === 'claude'),
+      nowMillis,
+      hours,
+    ),
   }
+})
+
+export const listCostOverview = Effect.fn('listCostOverview')(function*(
+  projectInput: string,
+  hours: number,
+) {
+  const catalog = yield* loadSessionCatalog(projectInput, hours)
+  const nowMillis = yield* Clock.currentTimeMillis
+  return buildCostOverview(catalog.costSamples, catalog.sources, nowMillis, hours)
 })
 
 export const getSessionRun = Effect.fn('getSessionRun')(function*(
@@ -573,14 +615,14 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
 ) {
   const locatorCache = yield* SessionLocatorCache
   let location = yield* locatorCache.get(projectInput, hours, project, key)
-  if (!location) {
+  if (Option.isNone(location)) {
     yield* loadSessionCatalog(projectInput, hours)
     location = yield* locatorCache.get(projectInput, hours, project, key)
   }
-  if (!location) return yield* new UnknownRun({ key })
+  if (Option.isNone(location)) return yield* new UnknownRun({ key })
 
-  const snapshot = yield* loadSessionEventSnapshot(location)
-  const reset = location.source === 'copilot'
+  const snapshot = yield* loadSessionEventSnapshot(location.value)
+  const reset = location.value.source === 'copilot'
     && (revision !== snapshot.revision || since > snapshot.events.length)
   const events = reset ? [...snapshot.events] : snapshot.events.slice(since)
   return {
@@ -731,11 +773,7 @@ export const getSessionActivity = Effect.fn('getSessionActivity')(function*(
   if (!root) return yield* new UnknownRun({ key })
 
   const nodes: Array<{ node: RunNode, depth: number }> = []
-  const gather = (node: RunNode, depth: number): void => {
-    nodes.push({ node, depth })
-    node.children.forEach(child => gather(child, depth + 1))
-  }
-  gather(root, 0)
+  visitNodes(root, (node, depth) => nodes.push({ node, depth }))
 
   const tails = yield* Effect.forEach(
     nodes,

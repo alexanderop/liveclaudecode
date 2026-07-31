@@ -1,7 +1,8 @@
 import { assert, describe, it } from '@effect/vitest'
-import { Deferred, Effect, Fiber, Layer, Result, Scope } from 'effect'
+import { Deferred, Effect, Fiber, Layer, Queue, Result, Scope, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 import { AcpConnector, type AcpConnectionOptions } from '#server/utils/acp-connection'
+import type { SessionNotification } from '#shared/schemas/acp'
 import {
   ChatAgentCommands,
   cancelChat,
@@ -35,8 +36,12 @@ function chatLayer(
   connectorOverride?: AcpConnector['Service'],
 ) {
   const connector = connectorOverride ?? AcpConnector.of({
-    connect: (options: AcpConnectionOptions) => Effect.sync(() => {
+    connect: (options: AcpConnectionOptions) => Effect.gen(function*() {
       connections.push(options)
+      // Mirrors the real connector: updates are queued, not delivered via a
+      // direct callback, so a consumer forked onto the stream sees them.
+      const updates = yield* Queue.make<SessionNotification>()
+      yield* Effect.addFinalizer(() => Queue.shutdown(updates))
       return {
         request: (method, params) => Effect.gen(function*() {
           if (method === 'initialize') return { protocolVersion: 1 }
@@ -44,26 +49,40 @@ function chatLayer(
           if (method === 'session/prompt') {
             prompts.push(params)
             if (options.command === 'copilot') {
-              yield* options.onUpdate({
+              yield* Queue.offer(updates, {
                 sessionId: 'answer-session',
                 update: {
-                  sessionUpdate: 'agent_message_chunk',
-                  content: { type: 'text', text: 'Info: Disabled tools: apply_patch, bash, edit' },
+                  kind: 'known',
+                  data: {
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: 'Info: Disabled tools: apply_patch, bash, edit' },
+                  },
                 },
               })
             }
-            yield* options.onUpdate({
+            yield* Queue.offer(updates, {
               sessionId: 'answer-session',
               update: {
-                sessionUpdate: 'agent_message_chunk',
-                content: { type: 'text', text: 'The tests failed in setup.' },
+                kind: 'known',
+                data: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: { type: 'text', text: 'The tests failed in setup.' },
+                },
               },
             })
+            // Give the forked stream consumer a turn to drain the queue
+            // before the prompt "response" unblocks the caller, so the
+            // resulting event order is deterministic for the assertions
+            // below (production has the same queue-then-consume shape, just
+            // spread across real I/O instead of a synchronous mock).
+            yield* Effect.yieldNow
+            yield* Effect.yieldNow
             return { stopReason: 'end_turn' }
           }
           return {}
         }),
         notify: () => Effect.void,
+        updates: Stream.fromQueue(updates),
       }
     }),
   })
@@ -264,6 +283,7 @@ describe('session chat', () => {
           return {}
         }),
         notify: () => Effect.void,
+        updates: Stream.empty,
       }),
     })
     return Effect.gen(function*() {
@@ -365,6 +385,7 @@ describe('session chat', () => {
           return {}
         }),
         notify: () => Effect.void,
+        updates: Stream.empty,
       }),
     })
     return Effect.gen(function*() {
@@ -408,6 +429,7 @@ describe('session chat', () => {
               yield* Deferred.await(releaseCancel)
             })
           : Effect.void,
+        updates: Stream.empty,
       }),
     })
     return Effect.gen(function*() {
@@ -457,6 +479,7 @@ describe('session chat', () => {
               yield* Deferred.await(releaseCancel)
             })
           : Effect.void,
+        updates: Stream.empty,
       }),
     })
     return Effect.gen(function*() {
@@ -504,6 +527,7 @@ describe('session chat', () => {
               return yield* Effect.never
             })
           : Effect.void,
+        updates: Stream.empty,
       }),
     })
     return Effect.gen(function*() {
@@ -549,6 +573,7 @@ describe('session chat', () => {
             return Effect.succeed({})
           },
           notify: () => Effect.void,
+          updates: Stream.empty,
         }
       }),
     })

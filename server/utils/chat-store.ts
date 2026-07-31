@@ -58,18 +58,30 @@ export function appendChatEvent(record: ChatRecord, event: ChatEvent): void {
   }
 }
 
-const closeChatRecord = Effect.fn('closeChatRecord')(function*(record: ChatRecord) {
-  record.generation += 1
-  if (record.turn) yield* Fiber.interrupt(record.turn)
-  record.turn = null
-  record.cancelling = false
-  record.status = 'idle'
+/**
+ * Tears down the record's ACP connection only — the scope, connection,
+ * session id, and priming flag — without touching `turn`/`status`/
+ * `generation`. This is the single implementation shared by a full record
+ * teardown (`closeChatRecord`, below) and the chat feature's own
+ * reconnect/error paths, which close a stale connection while keeping the
+ * record's turn bookkeeping under their own control.
+ */
+const closeConnection = Effect.fn('closeConnection')(function*(record: ChatRecord) {
   const scope = record.scope
   record.scope = null
   record.connection = null
   record.sessionId = null
   record.primed = false
   if (scope) yield* Scope.close(scope, Exit.void)
+})
+
+const closeChatRecord = Effect.fn('closeChatRecord')(function*(record: ChatRecord) {
+  record.generation += 1
+  if (record.turn) yield* Fiber.interrupt(record.turn)
+  record.turn = null
+  record.cancelling = false
+  record.status = 'idle'
+  yield* closeConnection(record)
 })
 
 /** Live chats keyed by `${project}\0${key}`, scoped to the provided Layer. */
@@ -93,6 +105,8 @@ export class ChatStore extends Context.Service<ChatStore, {
   ) => Effect.Effect<void>
   readonly claimCancellation: (chatKey: string) => Effect.Effect<ChatCancellation>
   readonly remove: (chatKey: string) => Effect.Effect<ChatRecord | undefined>
+  /** Closes a record's ACP connection without bumping its generation or turn. */
+  readonly closeConnection: (record: ChatRecord) => Effect.Effect<void>
 }>()('lcc/ChatStore') {
   static readonly layer = Layer.effect(
     ChatStore,
@@ -256,6 +270,7 @@ export class ChatStore extends Context.Service<ChatStore, {
           if (record) yield* closeChatRecord(record)
           return record
         })),
+        closeConnection: record => Effect.uninterruptible(closeConnection(record)),
       })
     }),
   )

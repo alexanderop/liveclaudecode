@@ -1,4 +1,5 @@
 import { Result, Schema } from 'effect'
+import { NonNegativeInt, parseOrNull } from './parse'
 
 /**
  * Schemas for the JSONL records Claude Code appends to a transcript.
@@ -33,19 +34,19 @@ const baseFields = {
 // -- Content blocks ---------------------------------------------------------
 
 export const ClaudeCacheCreationSchema = Schema.Struct({
-  ephemeral_5m_input_tokens: Schema.optionalKey(Schema.Finite),
-  ephemeral_1h_input_tokens: Schema.optionalKey(Schema.Finite),
+  ephemeral_5m_input_tokens: Schema.optionalKey(NonNegativeInt),
+  ephemeral_1h_input_tokens: Schema.optionalKey(NonNegativeInt),
 })
 
 export const ClaudeServerToolUseSchema = Schema.Struct({
-  web_search_requests: Schema.optionalKey(Schema.Finite),
+  web_search_requests: Schema.optionalKey(NonNegativeInt),
 })
 
 export const ClaudeUsageSchema = Schema.Struct({
-  input_tokens: Schema.optionalKey(Schema.Finite),
-  output_tokens: Schema.optionalKey(Schema.Finite),
-  cache_read_input_tokens: Schema.optionalKey(Schema.Finite),
-  cache_creation_input_tokens: Schema.optionalKey(Schema.Finite),
+  input_tokens: Schema.optionalKey(NonNegativeInt),
+  output_tokens: Schema.optionalKey(NonNegativeInt),
+  cache_read_input_tokens: Schema.optionalKey(NonNegativeInt),
+  cache_creation_input_tokens: Schema.optionalKey(NonNegativeInt),
   cache_creation: Schema.optionalKey(ClaudeCacheCreationSchema),
   server_tool_use: Schema.optionalKey(ClaudeServerToolUseSchema),
   service_tier: Schema.optionalKey(Schema.String),
@@ -107,16 +108,17 @@ export type ClaudeToolResultBlock = typeof ClaudeToolResultBlockSchema.Type
 export type ClaudeImageBlock = typeof ClaudeImageBlockSchema.Type
 export type ClaudeContentBlockEnvelope = typeof ClaudeContentBlockEnvelopeSchema.Type
 
+/** `{ kind, data }` pairs for every tagged member of a block union, derived from its decoded `Type` instead of hand-listed. */
+type ParsedTaggedBlock<Block extends { type: string }> = {
+  [T in Block['type']]: { kind: T, data: Extract<Block, { type: T }> }
+}[Block['type']]
+
 export type ParsedClaudeAssistantBlock =
-  | { kind: 'text', data: ClaudeTextBlock }
-  | { kind: 'thinking', data: ClaudeThinkingBlock }
-  | { kind: 'tool_use', data: ClaudeToolUseBlock }
+  | ParsedTaggedBlock<typeof ClaudeAssistantBlockSchema.Type>
   | { kind: 'unknown', data: ClaudeContentBlockEnvelope }
 
 export type ParsedClaudeUserBlock =
-  | { kind: 'text', data: ClaudeTextBlock }
-  | { kind: 'tool_result', data: ClaudeToolResultBlock }
-  | { kind: 'image', data: ClaudeImageBlock }
+  | ParsedTaggedBlock<typeof ClaudeUserBlockSchema.Type>
   | { kind: 'unknown', data: ClaudeContentBlockEnvelope }
 
 const decodeAssistantBlock = Schema.decodeUnknownResult(ClaudeAssistantBlockSchema, PRESERVE)
@@ -128,28 +130,34 @@ const decodeBlockEnvelope = Schema.decodeUnknownResult(ClaudeContentBlockEnvelop
  * `unknown`. A block whose `type` we *do* know but whose body is malformed is
  * a genuine defect and returns `null`, so the caller skips it.
  */
-function parseBlock<Parsed extends { kind: string, data: unknown }>(
-  cases: Record<string, unknown>,
-  decode: (value: unknown) => Result.Result<{ type: string }, Schema.SchemaError>,
-  value: unknown,
-): Parsed | null {
+export function parseClaudeAssistantBlock(value: unknown): ParsedClaudeAssistantBlock | null {
   const envelope = decodeBlockEnvelope(value)
   if (!Result.isSuccess(envelope)) return null
-  if (!Object.hasOwn(cases, envelope.success.type)) {
-    return { kind: 'unknown', data: envelope.success } as unknown as Parsed
+  if (!Object.hasOwn(ClaudeAssistantBlockSchema.cases, envelope.success.type)) {
+    return { kind: 'unknown', data: envelope.success }
   }
-  const block = decode(value)
-  return Result.isSuccess(block)
-    ? ({ kind: block.success.type, data: block.success } as unknown as Parsed)
-    : null
-}
-
-export function parseClaudeAssistantBlock(value: unknown): ParsedClaudeAssistantBlock | null {
-  return parseBlock(ClaudeAssistantBlockSchema.cases, decodeAssistantBlock, value)
+  const block = decodeAssistantBlock(value)
+  if (!Result.isSuccess(block)) return null
+  return ClaudeAssistantBlockSchema.match(block.success, {
+    text: (data): ParsedClaudeAssistantBlock => ({ kind: 'text', data }),
+    thinking: (data): ParsedClaudeAssistantBlock => ({ kind: 'thinking', data }),
+    tool_use: (data): ParsedClaudeAssistantBlock => ({ kind: 'tool_use', data }),
+  })
 }
 
 export function parseClaudeUserBlock(value: unknown): ParsedClaudeUserBlock | null {
-  return parseBlock(ClaudeUserBlockSchema.cases, decodeUserBlock, value)
+  const envelope = decodeBlockEnvelope(value)
+  if (!Result.isSuccess(envelope)) return null
+  if (!Object.hasOwn(ClaudeUserBlockSchema.cases, envelope.success.type)) {
+    return { kind: 'unknown', data: envelope.success }
+  }
+  const block = decodeUserBlock(value)
+  if (!Result.isSuccess(block)) return null
+  return ClaudeUserBlockSchema.match(block.success, {
+    text: (data): ParsedClaudeUserBlock => ({ kind: 'text', data }),
+    tool_result: (data): ParsedClaudeUserBlock => ({ kind: 'tool_result', data }),
+    image: (data): ParsedClaudeUserBlock => ({ kind: 'image', data }),
+  })
 }
 
 // -- Messages ---------------------------------------------------------------
@@ -327,31 +335,6 @@ export type ParsedClaudeRecord =
   | { kind: 'workflow_result', data: ClaudeWorkflowResultRecord }
   | { kind: 'unknown', data: ClaudeRecordEnvelope }
 
-/**
- * `satisfies` makes this exhaustive: adding a member to `ClaudeRecordSchema`
- * without giving it a kind here is a compile error.
- */
-const KIND_BY_TYPE = {
-  'assistant': 'assistant',
-  'user': 'user',
-  'system': 'system',
-  'attachment': 'attachment',
-  'started': 'workflow_started',
-  'result': 'workflow_result',
-  'last-prompt': 'session_state',
-  'mode': 'session_state',
-  'permission-mode': 'session_state',
-  'ai-title': 'session_state',
-  'custom-title': 'session_state',
-  'agent-name': 'session_state',
-  'bridge-session': 'session_state',
-  'queue-operation': 'session_state',
-  'file-history-snapshot': 'session_state',
-  'file-history-delta': 'session_state',
-  'pr-link': 'session_state',
-  'frame-link': 'session_state',
-} as const satisfies Record<ClaudeRecordType, Exclude<ParsedClaudeRecord['kind'], 'unknown'>>
-
 export type ClaudeRecordParseResult =
   | { success: true, record: ParsedClaudeRecord }
   | { success: false, error: Schema.SchemaError }
@@ -366,16 +349,39 @@ export function parseClaudeRecord(value: unknown): ClaudeRecordParseResult {
   // An unrecognised `type` is expected — Claude Code adds record kinds over
   // time, and those are surfaced as `unknown` rather than treated as errors.
   const { type } = envelope.success
-  if (!Object.hasOwn(KIND_BY_TYPE, type)) {
+  if (!Object.hasOwn(ClaudeRecordSchema.cases, type)) {
     return { success: true, record: { kind: 'unknown', data: envelope.success } }
   }
 
   // A known `type` that fails to decode is a real defect, not a new field.
   const record = decodeRecord(value)
   if (!Result.isSuccess(record)) return { success: false, error: record.failure }
+
+  // `.match` requires a handler for every tag `ClaudeRecordSchema` declares,
+  // so the mapping to `ParsedClaudeRecord['kind']` stays exhaustive without a
+  // separate lookup table or a cast at the end.
   return {
     success: true,
-    record: { kind: KIND_BY_TYPE[record.success.type], data: record.success } as ParsedClaudeRecord,
+    record: ClaudeRecordSchema.match(record.success, {
+      assistant: (data): ParsedClaudeRecord => ({ kind: 'assistant', data }),
+      user: (data): ParsedClaudeRecord => ({ kind: 'user', data }),
+      system: (data): ParsedClaudeRecord => ({ kind: 'system', data }),
+      attachment: (data): ParsedClaudeRecord => ({ kind: 'attachment', data }),
+      started: (data): ParsedClaudeRecord => ({ kind: 'workflow_started', data }),
+      result: (data): ParsedClaudeRecord => ({ kind: 'workflow_result', data }),
+      'last-prompt': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'mode': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'permission-mode': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'ai-title': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'custom-title': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'agent-name': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'bridge-session': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'queue-operation': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'file-history-snapshot': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'file-history-delta': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'pr-link': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+      'frame-link': (data): ParsedClaudeRecord => ({ kind: 'session_state', data }),
+    }),
   }
 }
 
@@ -384,7 +390,7 @@ export function parseClaudeRecord(value: unknown): ClaudeRecordParseResult {
 export const ClaudeSubagentMetaSchema = Schema.Struct({
   agentType: Schema.String,
   description: Schema.optionalKey(Schema.String),
-  spawnDepth: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  spawnDepth: Schema.optionalKey(NonNegativeInt),
   toolUseId: Schema.optionalKey(Schema.String),
   parentAgentId: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
@@ -394,9 +400,20 @@ export const ClaudeSubagentMetaSchema = Schema.Struct({
 
 export type ClaudeSubagentMeta = typeof ClaudeSubagentMetaSchema.Type
 
-const decodeSubagentMeta = Schema.decodeUnknownResult(ClaudeSubagentMetaSchema, PRESERVE)
+export const parseClaudeSubagentMeta = parseOrNull(ClaudeSubagentMetaSchema, PRESERVE)
 
-export function parseClaudeSubagentMeta(value: unknown): ClaudeSubagentMeta | null {
-  const meta = decodeSubagentMeta(value)
-  return Result.isSuccess(meta) ? meta.success : null
+/**
+ * Subagent metadata is persisted as a JSON file. Composing with
+ * `fromJsonString` lets a malformed file surface as a normal decode failure
+ * instead of a raw `JSON.parse` throw the caller has to catch by hand.
+ */
+export const ClaudeSubagentMetaFromJsonSchema = Schema.fromJsonString(ClaudeSubagentMetaSchema)
+
+const decodeSubagentMetaJson = Schema.decodeUnknownResult(ClaudeSubagentMetaFromJsonSchema, PRESERVE)
+
+/** Decode a JSON-encoded subagent metadata file, reporting a parse failure as a `Result` failure. */
+export function parseClaudeSubagentMetaJson(
+  value: string,
+): Result.Result<ClaudeSubagentMeta, Schema.SchemaError> {
+  return decodeSubagentMetaJson(value)
 }

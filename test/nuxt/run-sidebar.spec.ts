@@ -99,7 +99,9 @@ describe('RunSidebar', () => {
       'true',
       'false',
       'false',
+      undefined,
     ])
+    expect(component.get('a[href="/costs"]').text()).toContain('Costs')
 
     await component.get('button[aria-label="Hide sidebar"]').trigger('click')
     expect(component.emitted('collapse')).toEqual([[]])

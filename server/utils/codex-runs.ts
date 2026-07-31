@@ -1,14 +1,11 @@
 import { basename, join } from 'node:path'
-import { Clock, Effect, Result } from 'effect'
+import { Clock, Effect, Option } from 'effect'
+import * as Arr from 'effect/Array'
 import * as FileSystem from 'effect/FileSystem'
 import type { CodexTranscriptScan } from './codex-transcript'
 import { CodexScanCache, CodexSessionsDirectory } from './services'
 import { rollup } from './runs'
-import {
-  FILE_CONCURRENCY,
-  makeFileDiscoveryLimiter,
-  type FileDiscoveryLimiter,
-} from './filesystem-concurrency'
+import { FILE_CONCURRENCY, FileDiscoveryLimiter } from './filesystem-concurrency'
 import type {
   AgentDiagnosticSummary,
   DiagnosticIncident,
@@ -19,6 +16,15 @@ import type {
   Usage,
 } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import {
+  addFields,
+  byTimestamp,
+  bySubLastDesc,
+  freshnessCutoff,
+  isFreshMtime,
+  selectLatestById,
+  visitNodes,
+} from './run-shared'
 
 interface CodexCollectedItem {
   id: string
@@ -49,11 +55,9 @@ function idFromFilename(path: string): string {
   return match?.[1] || ''
 }
 
-const childDirectories = Effect.fn('childDirectories')(function*(
-  directory: string,
-  limiter: FileDiscoveryLimiter,
-) {
+const childDirectories = Effect.fn('childDirectories')(function*(directory: string) {
   const fs = yield* FileSystem.FileSystem
+  const limiter = yield* FileDiscoveryLimiter
   const names = yield* limiter.withPermit(fs.readDirectory(directory))
   const entries = yield* Effect.forEach(names, name => Effect.gen(function*() {
     const path = join(directory, name)
@@ -66,36 +70,32 @@ const childDirectories = Effect.fn('childDirectories')(function*(
 export const collectCodexRollouts = Effect.fn('collectCodexRollouts')(function*(maxAgeHours: number) {
   const fs = yield* FileSystem.FileSystem
   const root = yield* CodexSessionsDirectory
-  const limiter = yield* makeFileDiscoveryLimiter()
+  const limiter = yield* FileDiscoveryLimiter
   const now = yield* Clock.currentTimeMillis
-  const cutoff = maxAgeHours <= 0
-    ? Number.NEGATIVE_INFINITY
-    : now - maxAgeHours * 3_600_000
+  const cutoff = freshnessCutoff(maxAgeHours, now)
 
-  const years = yield* childDirectories(root, limiter)
+  const years = yield* childDirectories(root)
   const months = (yield* Effect.forEach(
     years,
-    directory => childDirectories(directory, limiter),
+    directory => childDirectories(directory),
     { concurrency: FILE_CONCURRENCY },
   )).flat()
   const days = (yield* Effect.forEach(
     months,
-    directory => childDirectories(directory, limiter),
+    directory => childDirectories(directory),
     { concurrency: FILE_CONCURRENCY },
   )).flat()
   const discovered = yield* Effect.forEach(days, day => Effect.gen(function*() {
     const names = yield* limiter.withPermit(fs.readDirectory(day))
     const candidates = names.filter(name => name.endsWith('.jsonl'))
-    const results = yield* Effect.forEach(candidates, name => Effect.result(Effect.gen(function*() {
+    const [failures, fresh] = yield* Effect.partition(candidates, name => Effect.gen(function*() {
       const path = join(day, name)
       const info = yield* limiter.withPermit(fs.stat(path))
-      if (info.type !== 'File') return []
-      const fresh = info.mtime._tag === 'Some' ? info.mtime.value.getTime() >= cutoff : true
-      return fresh ? [path] : []
-    })), { concurrency: FILE_CONCURRENCY })
+      return info.type === 'File' && isFreshMtime(info.mtime, cutoff) ? Option.some(path) : Option.none<string>()
+    }), { concurrency: FILE_CONCURRENCY })
     return {
-      paths: results.flatMap(result => Result.isSuccess(result) ? result.success : []),
-      unreadable: results.filter(Result.isFailure).length,
+      paths: Arr.getSomes(fresh),
+      unreadable: failures.length,
     }
   }), { concurrency: FILE_CONCURRENCY })
 
@@ -108,32 +108,19 @@ export const collectCodexRollouts = Effect.fn('collectCodexRollouts')(function*(
 export const buildCodexTree = Effect.fn('buildCodexTree')(function*(hours: number) {
   const cache = yield* CodexScanCache
   const discovery = yield* collectCodexRollouts(hours)
-  const results = yield* Effect.forEach(
+  const [unreadableScans, readable] = yield* Effect.partition(
     discovery.paths,
-    path => Effect.result(cache.get(path)),
+    path => Effect.map(cache.get(path), scan => ({ path, scan })),
     { concurrency: FILE_CONCURRENCY },
   )
-  const readable = results.flatMap((result, index) =>
-    Result.isSuccess(result) ? [{ path: discovery.paths[index]!, scan: result.success }] : [])
   const paths = readable.map(item => item.path)
   const scans = readable.map(item => item.scan)
-  const stats = yield* Effect.forEach(scans, scan => scan.stats)
-  const selected = new Map<string, CodexCollectedItem>()
-  let duplicates = 0
-
-  for (const [index, path] of paths.entries()) {
+  const stats = yield* Effect.forEach(scans, scan => scan.stats, { concurrency: 'unbounded' })
+  const candidates = paths.map((path, index) => {
     const scan = scans[index]!
-    const id = scan.metadata.id || idFromFilename(path)
-    if (!id) continue
-    const candidate = { id, path, scan, stats: stats[index]! }
-    const existing = selected.get(id)
-    if (existing) {
-      duplicates += 1
-      if (candidate.stats.mtime > existing.stats.mtime) selected.set(id, candidate)
-    } else {
-      selected.set(id, candidate)
-    }
-  }
+    return { id: scan.metadata.id || idFromFilename(path), path, scan, stats: stats[index]! }
+  })
+  const { selected, duplicates } = selectLatestById(candidates, item => item.id, item => item.stats.mtime)
 
   const byKey = new Map<string, RunNode>()
   const pathByKey = new Map<string, string>()
@@ -185,7 +172,7 @@ export const buildCodexTree = Effect.fn('buildCodexTree')(function*(hours: numbe
     else roots.push(node)
   }
   for (const root of roots) rollup(root)
-  roots.sort((a, b) => (b.subLast || '').localeCompare(a.subLast || ''))
+  roots.sort(bySubLastDesc)
 
   return {
     roots,
@@ -194,18 +181,14 @@ export const buildCodexTree = Effect.fn('buildCodexTree')(function*(hours: numbe
     scanByKey,
     cwdByKey,
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
-    unreadable: discovery.unreadable + results.filter(Result.isFailure).length,
+    unreadable: discovery.unreadable + unreadableScans.length,
     duplicates,
   }
 })
 
 export function codexRunDiagnostics(root: RunNode, scanByKey: Map<string, CodexTranscriptScan>): RunDiagnostics {
   const nodes: RunNode[] = []
-  const gather = (node: RunNode): void => {
-    nodes.push(node)
-    node.children.forEach(gather)
-  }
-  gather(root)
+  visitNodes(root, node => nodes.push(node))
 
   const incidents: DiagnosticIncident[] = []
   const compactions: RunDiagnostics['compactions'] = []
@@ -221,13 +204,8 @@ export function codexRunDiagnostics(root: RunNode, scanByKey: Map<string, CodexT
     const diagnostic = scan.diagnostics()
     const who = node.kind === 'session' ? 'Main session' : node.label
     if (node === root) environment = diagnostic.environment
-    for (const sample of diagnostic.context) {
-      usage.in += sample.usage.in
-      usage.out += sample.usage.out
-      usage.cr += sample.usage.cr
-      usage.cw += sample.usage.cw
-    }
-    for (const key of Object.keys(causal) as Array<keyof typeof causal>) causal[key] += diagnostic.causal[key]
+    for (const sample of diagnostic.context) addFields(usage, sample.usage)
+    addFields(causal, diagnostic.causal)
     incidents.push(...diagnostic.incidents.map(incident => ({ ...incident, who, key: node.key })))
     compactions.push(...diagnostic.compactions.map(compaction => ({ ...compaction, who, key: node.key })))
     changes.push(...diagnostic.changes.map(change => ({ ...change, who, key: node.key })))
@@ -245,9 +223,6 @@ export function codexRunDiagnostics(root: RunNode, scanByKey: Map<string, CodexT
       sidechainRecords: 0,
     })
   }
-
-  const byTimestamp = <T extends { ts: string | null }>(a: T, b: T): number =>
-    (a.ts || '').localeCompare(b.ts || '')
 
   return {
     incidents: incidents.sort(byTimestamp).slice(-200),

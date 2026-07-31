@@ -15,6 +15,8 @@ export interface CopilotRequestOptions {
   error?: { message: string, code?: string }
   elapsedMs?: number
   copilotMetadata?: boolean
+  promptTokens?: number
+  outputTokens?: number
 }
 
 export function markdown(value: string): unknown {
@@ -100,7 +102,11 @@ export function request(
     response: options.response ?? [],
     result: options.error
       ? { errorDetails: options.error }
-      : { metadata: { resolvedModel: options.model ?? 'copilot-test-model', outputTokens: 7 } },
+      : { metadata: {
+          resolvedModel: options.model ?? 'copilot-test-model',
+          promptTokens: options.promptTokens,
+          outputTokens: options.outputTokens ?? 7,
+        } },
     elapsedMs: options.elapsedMs,
   })
 }

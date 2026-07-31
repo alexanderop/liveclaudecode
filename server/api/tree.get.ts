@@ -7,5 +7,5 @@ export default defineEventHandler(async (event): Promise<TreeResponse> => {
   setHeader(event, 'Cache-Control', 'no-store')
 
   const options = browserOptionsFor(event)
-  return runRequest(listSessions(options.project, options.hours))
+  return runRequest(event, listSessions(options.project, options.hours))
 })

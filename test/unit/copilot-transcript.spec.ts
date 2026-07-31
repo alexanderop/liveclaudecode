@@ -15,6 +15,7 @@ describe('Copilot transcript replay and normalization', () => {
       requests: [fixture.request('request-1', 'Fix the tests', {
         mode: 'agent',
         elapsedMs: 2_500,
+        promptTokens: 11,
         response: [
           fixture.thinking('Checking the failure'),
           fixture.tool('run_in_terminal', 'command-1', {
@@ -28,7 +29,7 @@ describe('Copilot transcript replay and normalization', () => {
       })],
     })
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       const stats = scan.statsAt(999_999_999)
       assert.strictEqual(scan.supported, true)
       assert.strictEqual(stats.live, false)
@@ -43,6 +44,7 @@ describe('Copilot transcript replay and normalization', () => {
       assert.strictEqual(stats.finalText, 'Tests still fail explicitly.')
       assert.strictEqual(scan.diagnostics().turns[0]?.durationMs, 2_500)
       assert.strictEqual(scan.diagnostics().changes[0]?.linesAdded, 1)
+      assert.deepStrictEqual(scan.diagnostics().usage, { in: 11, out: 7, cr: 0, cw: 0 })
       assert.isTrue(scan.events.some(event => event.kind === 'tool_result'
         && event.error
         && event.body === 'Ran run_in_terminal'))
@@ -52,7 +54,7 @@ describe('Copilot transcript replay and normalization', () => {
   it.effect('uses the edited command from current VS Code command line objects', () => {
     const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.malformedParts, 0)
       assert.deepStrictEqual(scan.statsAt(10).commands, [{
         cmd: 'pnpm test',
@@ -85,8 +87,8 @@ describe('Copilot transcript replay and normalization', () => {
     const active = new CopilotTranscriptScan('/active.jsonl', 'VS Code', '/repo')
     const complete = new CopilotTranscriptScan('/complete.jsonl', 'VS Code', '/repo')
     return Effect.gen(function*() {
-      yield* active.refresh
-      yield* complete.refresh
+      yield* active.refresh()
+      yield* complete.refresh()
       assert.strictEqual(active.statsAt(9_999_999_999).live, true)
       assert.strictEqual(active.statsAt(9_999_999_999).current?.tool, 'Copilot')
       assert.strictEqual(complete.statsAt(fixture.T0 / 1_000 + 1).live, false)
@@ -126,13 +128,13 @@ describe('Copilot transcript replay and normalization', () => {
       fixture.set(['requests', 0, 'modelState'], { value: 1, completedAt: fixture.T0 + 3_000 }),
     ])
     return Effect.gen(function*() {
-      yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: { content: first, mtime: 1 } })))
+      yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: { content: first, mtime: 1 } })))
       const before = scan.events.length
       const revision = scan.eventRevision
       assert.strictEqual(scan.malformed, 0)
       assert.strictEqual(scan.statsAt(10).commands[0]?.ok, null)
 
-      yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: { content: second, mtime: 2 } })))
+      yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: { content: second, mtime: 2 } })))
       assert.strictEqual(scan.statsAt(10).commands[0]?.ok, true)
       assert.strictEqual(scan.statsAt(10).live, false)
       assert.strictEqual(scan.events.length, before + 1)
@@ -157,11 +159,11 @@ describe('Copilot transcript replay and normalization', () => {
       fixture.set(['requests', 0, 'response', 0, 'value'], 'Complete response'),
     ])
     return Effect.gen(function*() {
-      yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: { content: first, mtime: 1 } })))
+      yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: { content: first, mtime: 1 } })))
       const revision = scan.eventRevision
       assert.strictEqual(scan.events.filter(event => event.kind === 'text').length, 1)
 
-      yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: { content: second, mtime: 2 } })))
+      yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: { content: second, mtime: 2 } })))
       const messages = scan.events.filter(event => event.kind === 'text')
       assert.strictEqual(messages.length, 1)
       assert.strictEqual(messages[0]?.body, 'Complete response')
@@ -182,7 +184,7 @@ describe('Copilot transcript replay and normalization', () => {
     }
     const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       const revision = scan.eventRevision
       assert.strictEqual(scan.events.filter(event => event.kind === 'prompt').length, 2)
 
@@ -191,7 +193,7 @@ describe('Copilot transcript replay and normalization', () => {
         requests: [fixture.request('replacement', 'Replacement')],
       }))])
       entry.mtime = 2
-      yield* scan.refresh
+      yield* scan.refresh()
 
       assert.strictEqual(scan.eventRevision, revision + 1)
       assert.deepStrictEqual(
@@ -205,7 +207,7 @@ describe('Copilot transcript replay and normalization', () => {
     const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
     return Effect.gen(function*() {
       assert.strictEqual(Object.hasOwn(Object.prototype, 'copilotPolluted'), false)
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.supported, true)
       assert.strictEqual(scan.malformed, 2)
       assert.strictEqual(Object.hasOwn(Object.prototype, 'copilotPolluted'), false)
@@ -221,7 +223,7 @@ describe('Copilot transcript replay and normalization', () => {
   it.effect('omits commands and changes when exact source records are absent', () => {
     const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.deepStrictEqual(scan.statsAt(10).commands, [])
       assert.deepStrictEqual(scan.statsAt(10).files, [])
       assert.deepStrictEqual(scan.diagnostics().changes, [])
@@ -242,7 +244,7 @@ describe('Copilot transcript replay and normalization', () => {
   it.effect('does not classify generic VS Code chat without Copilot metadata', () => {
     const scan = new CopilotTranscriptScan(PATH, 'VS Code', '')
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.supported, false)
     }).pipe(Effect.provide(testFileSystem({
       [PATH]: fixture.log([fixture.initial(fixture.snapshot({
@@ -260,9 +262,9 @@ describe('Copilot transcript replay and normalization', () => {
     const edit = new CopilotTranscriptScan('/edit.jsonl', 'VS Code', '/repo')
     const chat = new CopilotTranscriptScan('/chat.jsonl', 'VS Code', '/repo')
     return Effect.gen(function*() {
-      yield* agent.refresh
-      yield* edit.refresh
-      yield* chat.refresh
+      yield* agent.refresh()
+      yield* edit.refresh()
+      yield* chat.refresh()
       assert.strictEqual(agent.sourceDetail, 'VS Code · agent')
       assert.strictEqual(edit.sourceDetail, 'VS Code · edit')
       assert.strictEqual(chat.sourceDetail, 'VS Code · chat')
@@ -282,7 +284,7 @@ describe('Copilot transcript replay and normalization', () => {
   it.effect('counts malformed known data while tolerating unknown future records', () => {
     const scan = new CopilotTranscriptScan(PATH, 'VS Code', '/repo')
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.supported, true)
       assert.strictEqual(scan.malformed, 1)
       assert.strictEqual(scan.malformedParts, 1)

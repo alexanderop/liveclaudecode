@@ -9,5 +9,5 @@ export default defineEventHandler(async (event): Promise<RunResponse> => {
   const { key, project } = parseSessionQuery(getQuery(event))
   const options = browserOptionsFor(event)
 
-  return runRequest(getSessionRun(options.project, options.hours, project, key))
+  return runRequest(event, getSessionRun(options.project, options.hours, project, key))
 })

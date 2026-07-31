@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer, Queue, Schema, Stream } from 'effect'
+import { Context, Deferred, Effect, Layer, Queue, Result, Schema, Stream } from 'effect'
 import type { Scope } from 'effect'
 import { Ndjson } from 'effect/unstable/encoding'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
@@ -25,8 +25,6 @@ export interface AcpConnectionOptions {
   args: ReadonlyArray<string>
   env: Record<string, string>
   cwd: string
-  /** Receives every `session/update` notification, in arrival order. */
-  onUpdate: (notification: SessionNotification) => Effect.Effect<void>
   /**
    * Decides `session/request_permission` calls. The connection answers with
    * the matching `allow_*`/`reject_*` option immediately, so a permission
@@ -38,6 +36,14 @@ export interface AcpConnectionOptions {
 export interface AcpConnection {
   readonly request: (method: string, params: unknown) => Effect.Effect<unknown, AcpAgentError>
   readonly notify: (method: string, params: unknown) => Effect.Effect<void, AcpAgentError>
+  /**
+   * Every `session/update` notification, in arrival order. The reader fiber
+   * only enqueues — it never waits on a consumer — so a slow handler cannot
+   * stall protocol dispatch (permission requests, request/response
+   * correlation). One connection has one logical consumer, so this is backed
+   * by a `Queue` rather than a `PubSub`.
+   */
+  readonly updates: Stream.Stream<SessionNotification>
 }
 
 interface OutboundMessage {
@@ -89,6 +95,8 @@ export class AcpConnector extends Context.Service<AcpConnector, {
         ).pipe(Effect.mapError(cause => new AcpAgentError({ reason: `spawn failed: ${cause.message}` })))
 
         const outbox = yield* Queue.make<OutboundMessage>()
+        const updates = yield* Queue.make<SessionNotification>()
+        yield* Effect.addFinalizer(() => Queue.shutdown(updates))
         const pending = new Map<string, Deferred.Deferred<unknown, AcpAgentError>>()
         let nextId = 1
         let dead: AcpAgentError | null = null
@@ -107,16 +115,22 @@ export class AcpConnector extends Context.Service<AcpConnector, {
           params: unknown,
         ) {
           const parsed = parsePermissionRequest(params)
-          const result = parsed.success
-            ? permissionOutcome(parsed.value, options.permission(parsed.value))
+          const result = Result.isSuccess(parsed)
+            ? permissionOutcome(parsed.success, options.permission(parsed.success))
             : { outcome: { outcome: 'cancelled' as const } }
           yield* send({ jsonrpc: '2.0', id, result })
         })
 
         const dispatch = Effect.fn('AcpConnector.dispatch')(function*(line: unknown) {
           const parsed = parseInboundMessage(line)
-          if (!parsed.success) return
-          const message = parsed.value
+          if (Result.isFailure(parsed)) {
+            yield* Effect.logDebug('ACP: dropped unparseable inbound line', {
+              line,
+              error: parsed.failure,
+            })
+            return
+          }
+          const message = parsed.success
 
           // Agent-initiated request: answer it, or the agent hangs forever.
           if (message.method !== undefined && message.id !== undefined) {
@@ -136,7 +150,7 @@ export class AcpConnector extends Context.Service<AcpConnector, {
           if (message.method !== undefined) {
             if (message.method === 'session/update') {
               const notification = parseSessionNotification(message.params)
-              if (notification.success) yield* options.onUpdate(notification.value)
+              if (Result.isSuccess(notification)) yield* Queue.offer(updates, notification.success)
             }
             return
           }
@@ -189,7 +203,7 @@ export class AcpConnector extends Context.Service<AcpConnector, {
           yield* send({ jsonrpc: '2.0', method, params })
         })
 
-        return { request, notify } satisfies AcpConnection
+        return { request, notify, updates: Stream.fromQueue(updates) } satisfies AcpConnection
       })
 
       return AcpConnector.of({ connect })

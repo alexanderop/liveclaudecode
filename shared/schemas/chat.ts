@@ -1,7 +1,15 @@
-import { Result, Schema } from 'effect'
+import { Result, Schema, SchemaTransformation } from 'effect'
 
-const ChatAgentIdSchema = Schema.Literals(['claude', 'codex', 'copilot'])
-const ChatTextSchema = Schema.String.check(
+export const ChatAgentIdSchema = Schema.Literals(['claude', 'codex', 'copilot'])
+
+/**
+ * Trims on decode so the trimmed value is what gets checked (and what every
+ * consumer sees) — canonical at the schema boundary instead of the caller
+ * trimming again after parsing.
+ */
+const ChatTextSchema = Schema.String.pipe(
+  Schema.decode(SchemaTransformation.trim()),
+).check(
   Schema.isPattern(/\S/),
   Schema.isMaxLength(20_000),
 )

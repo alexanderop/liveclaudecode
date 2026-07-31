@@ -1,9 +1,9 @@
 import type { H3Event } from 'h3'
 import { getQuery } from 'h3'
-import { resolveHours } from './request-hours'
+import { parseHours } from '#shared/schemas/request'
 
 function hoursFor(event: H3Event): number {
-  return resolveHours(useRuntimeConfig(event).lcc.hours, getQuery(event).hours)
+  return parseHours(useRuntimeConfig(event).lcc.hours, getQuery(event).hours)
 }
 
 export function browserOptionsFor(event: H3Event): { project: string, hours: number } {

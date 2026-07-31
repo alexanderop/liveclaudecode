@@ -1,31 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { resolveHours } from '../../server/utils/request-hours'
 import {
   parseActivityQuery,
   parseCursorQuery,
+  parseHours,
   parseSessionQuery,
 } from '../../shared/schemas/request'
 
 describe('request context hours', () => {
   it('uses a valid query override, including all time', () => {
-    expect(resolveHours(168, '24')).toBe(24)
-    expect(resolveHours(168, '0')).toBe(0)
-    expect(resolveHours(168, '720')).toBe(720)
-    expect(resolveHours(168, ' 24 ')).toBe(24)
-    expect(resolveHours(168, '1e2')).toBe(100)
+    expect(parseHours(168, '24')).toBe(24)
+    expect(parseHours(168, '0')).toBe(0)
+    expect(parseHours(168, '720')).toBe(720)
+    expect(parseHours(168, ' 24 ')).toBe(24)
+    expect(parseHours(168, '1e2')).toBe(100)
   })
 
   it('falls back to the configured range for unsafe query values', () => {
-    expect(resolveHours(24, '')).toBe(24)
-    expect(resolveHours(24, '-1')).toBe(24)
-    expect(resolveHours(24, 'not-a-number')).toBe(24)
-    expect(resolveHours(24, ['0'])).toBe(24)
+    expect(parseHours(24, '')).toBe(24)
+    expect(parseHours(24, '-1')).toBe(24)
+    expect(parseHours(24, 'not-a-number')).toBe(24)
+    expect(parseHours(24, ['0'])).toBe(24)
   })
 
   it('uses seven days when both the query and configuration are invalid', () => {
-    expect(resolveHours('invalid', undefined)).toBe(168)
-    expect(resolveHours('', undefined)).toBe(0)
-    expect(resolveHours(null, undefined)).toBe(0)
+    expect(parseHours('invalid', undefined)).toBe(168)
+    expect(parseHours('', undefined)).toBe(0)
+    expect(parseHours(null, undefined)).toBe(0)
   })
 
   it('normalizes session and cursor query fields through schemas', () => {

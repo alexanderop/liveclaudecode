@@ -2,9 +2,16 @@
  * Contracts for the session chat: a local ACP agent (claude-agent-acp,
  * codex-acp, …) answering follow-up questions about an observed session.
  * Plain interfaces only — this file is shared with the client.
+ *
+ * `ChatAgentId` and `ChatAction` are derived from the Effect schemas in
+ * `shared/schemas/chat.ts` (the single source of truth for the shape) via
+ * type-only imports, so app code can keep importing them from here without
+ * pulling any Effect runtime code into the client bundle.
  */
 
-export type ChatAgentId = 'claude' | 'codex' | 'copilot'
+import type { ChatActionSchema, ChatAgentIdSchema } from '#shared/schemas/chat'
+
+export type ChatAgentId = typeof ChatAgentIdSchema.Type
 
 export type ChatStatus = 'idle' | 'starting' | 'busy' | 'error'
 
@@ -31,10 +38,7 @@ export interface ChatEventsResponse {
   agent: ChatAgentId | null
 }
 
-export type ChatAction =
-  | { action: 'send', project: string, key: string, agent: ChatAgentId, text: string }
-  | { action: 'cancel', project: string, key: string }
-  | { action: 'reset', project: string, key: string }
+export type ChatAction = typeof ChatActionSchema.Type
 
 export interface ChatActionResponse {
   status: ChatStatus

@@ -1,6 +1,4 @@
 import { Clock, DateTime, Effect, Option } from 'effect'
-import * as FileSystem from 'effect/FileSystem'
-import type * as PlatformError from 'effect/PlatformError'
 import {
   parseCopilotCliArguments,
   parseCopilotCliEvent,
@@ -28,6 +26,14 @@ import {
   TranscriptFile,
 } from './copilot-transcript-state'
 import { clip, shortPath } from './transcript-content'
+import {
+  compact,
+  completeJsonlLines,
+  type MutableFileChange,
+  parseJsonlValues,
+  recordFileChange,
+  toolStatsFromCounts,
+} from './transcript-scan-core'
 
 interface ToolRecord {
   name: string
@@ -35,12 +41,6 @@ interface ToolRecord {
   input: unknown
   ts: Timestamp
   line: number
-}
-
-interface MutableFileChange {
-  ops: number
-  tools: string[]
-  lastTs: Timestamp
 }
 
 interface DerivedState {
@@ -61,10 +61,6 @@ const EMPTY_ENVIRONMENT: SessionEnvironment = {
   version: '',
   entrypoint: '',
   permissionMode: '',
-}
-
-function compact(value: string, limit = 240): string {
-  return value.trim().replace(/\s+/g, ' ').slice(0, limit)
 }
 
 function encoded(value: unknown): string {
@@ -111,11 +107,7 @@ function addFile(
 ): void {
   const key = shortPath(path, workspace)
   if (!key) return
-  const existing = files.get(key) || { ops: 0, tools: [], lastTs: ts }
-  existing.ops += 1
-  existing.lastTs = ts
-  if (!existing.tools.includes(tool)) existing.tools.push(tool)
-  files.set(key, existing)
+  recordFileChange(files, key, tool, ts)
 }
 
 function filePaths(name: string, input: unknown): string[] {
@@ -151,44 +143,37 @@ export class CopilotCliTranscriptScan {
     this.file = new TranscriptFile(this.path)
   }
 
-  get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
-    const self = this
-    return Effect.gen(function*() {
-      const changed = yield* self.file.refresh()
-      if (Option.isNone(changed)) return self
-      const { raw } = changed.value
-      const lines = raw.split('\n')
-      const completeLines = lines.slice(0, -1)
-      const parsedEvents: Array<[number, ParsedCopilotCliEvent]> = []
-      let malformed = 0
-      let unknown = 0
+  readonly refresh = Effect.fn('CopilotCliTranscriptScan.refresh')(function*(this: CopilotCliTranscriptScan) {
+    const changed = yield* this.file.refresh()
+    if (Option.isNone(changed)) return this
+    const { raw } = changed.value
+    const completeLines = completeJsonlLines(raw)
+    const { values, malformed: malformedLines } = parseJsonlValues(completeLines)
+    for (const entry of malformedLines) {
+      yield* Effect.logDebug('Skipping malformed Copilot CLI event line', { path: this.path, line: entry.index })
+    }
 
-      for (let index = 0; index < completeLines.length; index += 1) {
-        const line = completeLines[index]
-        if (!line?.trim()) continue
-        let value: unknown
-        try {
-          value = JSON.parse(line) as unknown
-        } catch {
-          malformed += 1
-          continue
-        }
-        const parsed = parseCopilotCliEvent(value)
-        if (!parsed.success) {
-          malformed += 1
-          continue
-        }
-        if (parsed.event.kind === 'unknown') unknown += 1
-        parsedEvents.push([index, parsed.event])
+    const parsedEvents: Array<[number, ParsedCopilotCliEvent]> = []
+    let malformed = malformedLines.length
+    let unknown = 0
+
+    for (const [index, value] of values) {
+      const parsed = parseCopilotCliEvent(value)
+      if (!parsed.success) {
+        yield* Effect.logDebug('Skipping malformed Copilot CLI event record', { path: this.path, line: index })
+        malformed += 1
+        continue
       }
+      if (parsed.event.kind === 'unknown') unknown += 1
+      parsedEvents.push([index, parsed.event])
+    }
 
-      self.line = completeLines.length
-      self.malformed = malformed
-      self.unknown = unknown
-      self.rebuild(parsedEvents)
-      return self
-    })
-  }
+    this.line = completeLines.length
+    this.malformed = malformed
+    this.unknown = unknown
+    this.rebuild(parsedEvents)
+    return this
+  })
 
   private rebuild(records: ReadonlyArray<readonly [number, ParsedCopilotCliEvent]>): void {
     const session = records.find(([, event]) => event.kind === 'session.start')?.[1]
@@ -429,13 +414,12 @@ export class CopilotCliTranscriptScan {
       : activeTurns.size > 0 ? { tool: 'Copilot CLI', summary: 'Generating response', ts: lastTs } : null
     const title = normalizeSessionLabel(firstPrompt, this.sessionId.slice(0, 8))
     const live = activeTurns.size > 0 || openTools.size > 0
+    const { tools, reads } = toolStatsFromCounts(counts, READ_TOOLS)
     const stats: TranscriptStats = {
       records: this.line,
-      tools: Object.values(counts).reduce((total, count) => total + count, 0),
+      tools,
       toolCounts: counts,
-      reads: Object.entries(counts)
-        .filter(([name]) => READ_TOOLS.has(name))
-        .reduce((total, [, count]) => total + count, 0),
+      reads,
       errors: incidents.filter(incident => incident.severity === 'error').length,
       tokensOut,
       firstTs,
@@ -500,11 +484,8 @@ export class CopilotCliTranscriptScan {
     return { ...this.derived.stats, ago: Math.max(0, now - this.derived.stats.mtime) }
   }
 
-  get stats(): Effect.Effect<TranscriptStats, never, FileSystem.FileSystem> {
-    const self = this
-    return Effect.gen(function*() {
-      return self.statsAt((yield* Clock.currentTimeMillis) / 1_000)
-    })
+  get stats(): Effect.Effect<TranscriptStats> {
+    return Clock.currentTimeMillis.pipe(Effect.map(millis => this.statsAt(millis / 1_000)))
   }
 
   get title(): string {

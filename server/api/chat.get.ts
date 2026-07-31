@@ -7,5 +7,5 @@ export default defineEventHandler(async (event): Promise<ChatEventsResponse> => 
   setHeader(event, 'Cache-Control', 'no-store')
   const { key, project, since, revision } = parseCursorQuery(getQuery(event))
 
-  return runRequest(pollChatEvents(project, key, since, revision))
+  return runRequest(event, pollChatEvents(project, key, since, revision))
 })

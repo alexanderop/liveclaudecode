@@ -1,5 +1,5 @@
 import { dirname } from 'node:path'
-import { Context, Deferred, Effect, Exit, Fiber, Result, Schema, Scope } from 'effect'
+import { Context, Deferred, Duration, Effect, Fiber, Option, Result, Schema, Scope, Stream } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import { AcpAgentError, AcpConnector, type AcpConnection } from './acp-connection'
 import {
@@ -46,16 +46,6 @@ export class ChatCapacity extends Schema.TaggedErrorClass<ChatCapacity>()(
 ) {
   override get message(): string {
     return `At most ${this.capacity} Ask conversations can run at once`
-  }
-}
-
-/** The requested agent id has no configured ACP command. */
-export class UnknownChatAgent extends Schema.TaggedErrorClass<UnknownChatAgent>()(
-  'UnknownChatAgent',
-  { agent: Schema.String },
-) {
-  override get message(): string {
-    return `Unknown chat agent ${JSON.stringify(this.agent)}`
   }
 }
 
@@ -141,11 +131,12 @@ function chatUpdateHandler(record: ChatRecord, generation: number) {
   return (notification: SessionNotification): Effect.Effect<void> => Effect.sync(() => {
     if (record.generation !== generation) return
     if (record.sessionId !== notification.sessionId) return
-    const update = notification.update
+    if (notification.update.kind !== 'known') return
+    const update = notification.update.data
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
       case 'agent_thought_chunk': {
-        if (!('content' in update) || typeof update.content.text !== 'string') return
+        if (update.content.text === undefined) return
         if (isAgentLaunchNotice(record.agent, update.content.text)) return
         appendChatEvent(record, {
           kind: update.sessionUpdate === 'agent_message_chunk' ? 'assistant-chunk' : 'thought-chunk',
@@ -156,7 +147,6 @@ function chatUpdateHandler(record: ChatRecord, generation: number) {
       }
       case 'tool_call':
       case 'tool_call_update': {
-        if (!('toolCallId' in update)) return
         appendChatEvent(record, {
           kind: 'tool',
           toolCallId: update.toolCallId,
@@ -189,12 +179,12 @@ const locateChatSession = Effect.fn('locateChatSession')(function*(
 ) {
   const locatorCache = yield* SessionLocatorCache
   let location = yield* locatorCache.get(projectInput, hours, project, key)
-  if (!location) {
+  if (Option.isNone(location)) {
     yield* loadSessionCatalog(projectInput, hours)
     location = yield* locatorCache.get(projectInput, hours, project, key)
   }
-  if (!location) return yield* new UnknownRun({ key })
-  return location
+  if (Option.isNone(location)) return yield* new UnknownRun({ key })
+  return location.value
 })
 
 /**
@@ -227,13 +217,10 @@ const resolveChatCwd = Effect.fn('resolveChatCwd')(function*(
   return dirname(transcriptPath)
 })
 
+/** Closes the record's ACP connection through `ChatStore`, the single owner of that teardown. */
 const closeChatConnection = Effect.fn('closeChatConnection')(function*(record: ChatRecord) {
-  const scope = record.scope
-  record.scope = null
-  record.connection = null
-  record.sessionId = null
-  record.primed = false
-  if (scope) yield* Scope.close(scope, Exit.void)
+  const store = yield* ChatStore
+  yield* store.closeConnection(record)
 })
 
 const failChatTurn = Effect.fn('failChatTurn')(function*(
@@ -243,7 +230,9 @@ const failChatTurn = Effect.fn('failChatTurn')(function*(
 ) {
   if (record.generation !== generation) return
   appendChatEvent(record, { kind: 'error', message: error.message })
-  record.status = 'error'
+  yield* Effect.sync(() => {
+    record.status = 'error'
+  })
   yield* closeChatConnection(record)
 })
 
@@ -252,15 +241,17 @@ const requestWithTimeout = Effect.fn('requestWithTimeout')(
     connection: AcpConnection,
     method: string,
     params: unknown,
-    timeout: '30 seconds' | '10 minutes',
+    timeout: Duration.Input,
   ) {
     return yield* connection.request(method, params)
   },
   (effect, _connection, method, _params, timeout) => effect.pipe(
-    Effect.timeout(timeout),
-    Effect.catchTag('TimeoutError', () => Effect.fail(new AcpAgentError({
-      reason: `${method} timed out after ${timeout}`,
-    }))),
+    Effect.timeoutOrElse({
+      duration: timeout,
+      orElse: () => Effect.fail(new AcpAgentError({
+        reason: `${method} timed out after ${timeout}`,
+      })),
+    }),
   ),
 )
 
@@ -280,23 +271,34 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
   let connection = record.connection
   if (!connection) {
     const scope = yield* Scope.make()
-    record.scope = scope
+    yield* Effect.sync(() => {
+      record.scope = scope
+    })
     connection = yield* Scope.provide(scope)(connector.connect({
       command: command.command,
       args: command.args,
       env: command.env,
       cwd,
-      onUpdate: chatUpdateHandler(record, generation),
       permission: chatPermissionPolicy,
     }))
-    record.connection = connection
+    yield* Effect.sync(() => {
+      record.connection = connection
+    })
+    // A scoped consumer, not the callback the connection used to take
+    // directly: the reader fiber only enqueues updates, so this fiber (and
+    // not protocol dispatch) absorbs however long `chatUpdateHandler` takes.
+    // Forked onto the connection's own scope, it is interrupted when that
+    // scope closes.
+    yield* Scope.provide(scope)(Effect.forkScoped(
+      Stream.runForEach(connection.updates, chatUpdateHandler(record, generation)),
+    ))
     const initialized = yield* requestWithTimeout(connection, 'initialize', {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       clientInfo: { name: 'liveclaudecode', version: '0.0.0' },
     }, '30 seconds')
     const initializeResult = parseInitializeResult(initialized)
-    if (!initializeResult.success || initializeResult.value.protocolVersion !== 1) {
+    if (Result.isFailure(initializeResult) || initializeResult.success.protocolVersion !== 1) {
       return yield* new AcpAgentError({ reason: 'agent does not support ACP protocol version 1' })
     }
     const created = yield* requestWithTimeout(
@@ -306,11 +308,13 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
       '30 seconds',
     )
     const parsed = parseNewSessionResult(created)
-    if (!parsed.success) {
+    if (Result.isFailure(parsed)) {
       return yield* new AcpAgentError({ reason: 'session/new returned no session id' })
     }
-    record.sessionId = parsed.value.sessionId
-    record.primed = false
+    yield* Effect.sync(() => {
+      record.sessionId = parsed.success.sessionId
+      record.primed = false
+    })
   }
 
   const prompt = record.primed
@@ -319,8 +323,10 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
         { type: 'text', text: chatPreamble(location, transcriptPath, cwd) },
         { type: 'text', text },
       ]
-  record.primed = true
-  record.status = 'busy'
+  yield* Effect.sync(() => {
+    record.primed = true
+    record.status = 'busy'
+  })
 
   const result = yield* requestWithTimeout(connection, 'session/prompt', {
     sessionId: record.sessionId,
@@ -331,9 +337,11 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
   if (record.generation !== generation) return
   appendChatEvent(record, {
     kind: 'turn-end',
-    stopReason: stop.success ? stop.value.stopReason : 'unknown',
+    stopReason: Result.isSuccess(stop) ? stop.success.stopReason : 'unknown',
   })
-  record.status = 'idle'
+  yield* Effect.sync(() => {
+    record.status = 'idle'
+  })
 })
 
 const runChatTurnSafely = Effect.fn('runChatTurnSafely')(
@@ -362,14 +370,13 @@ export const sendChatMessage = Effect.fn('sendChatMessage')(function*(
   hours: number,
   project: string,
   key: string,
-  agent: string,
+  agent: ChatAgentId,
   text: string,
 ) {
   const store = yield* ChatStore
   const connector = yield* AcpConnector
   const commands = yield* ChatAgentCommands
-  const command = (commands as Record<string, ChatAgentCommand | undefined>)[agent]
-  if (!command) return yield* new UnknownChatAgent({ agent })
+  const command = commands[agent]
 
   const id = chatKey(project, key)
   const location = yield* locateChatSession(projectInput, hours, project, key)
@@ -381,7 +388,7 @@ export const sendChatMessage = Effect.fn('sendChatMessage')(function*(
   const cwd = yield* resolveChatCwd(location, transcriptPath)
 
   return yield* Effect.uninterruptible(Effect.gen(function*() {
-    const reservation = yield* store.reserve(id, agent as ChatAgentId, text)
+    const reservation = yield* store.reserve(id, agent, text)
     if (reservation._tag === 'Busy') return yield* new ChatBusy({ key })
     if (reservation._tag === 'Full') {
       return yield* new ChatCapacity({ capacity: CHAT_RECORD_CAPACITY })
@@ -456,7 +463,9 @@ export const cancelChat = Effect.fn('cancelChat')(function*(project: string, key
       if (record.generation === generation) {
         yield* closeChatConnection(record)
         appendChatEvent(record, { kind: 'turn-end', stopReason: 'cancelled' })
-        record.status = 'idle'
+        yield* Effect.sync(() => {
+          record.status = 'idle'
+        })
         yield* store.settle(id, record, generation)
       }
     })
@@ -494,7 +503,7 @@ export const handleChatAction = Effect.fn('handleChatAction')(function*(
         action.project,
         action.key,
         action.agent,
-        action.text.trim(),
+        action.text,
       )
     case 'cancel':
       return yield* cancelChat(action.project, action.key)

@@ -1,6 +1,4 @@
 import { Clock, DateTime, Effect, Option, Predicate } from 'effect'
-import * as FileSystem from 'effect/FileSystem'
-import type * as PlatformError from 'effect/PlatformError'
 import {
   COPILOT_SPAWN_TOOLS,
   parseCopilotLogRecord,
@@ -11,6 +9,7 @@ import {
   type CopilotSessionSnapshot,
   type CopilotToolPart,
 } from '#shared/schemas/copilot'
+import { FAILED_OUTCOME_STATUS_SET, PASSED_OUTCOME_STATUS_SET } from '#shared/schemas/tool-outcome'
 import type {
   ChangeDetail,
   CommandRun,
@@ -30,6 +29,7 @@ import {
   TranscriptFile,
 } from './copilot-transcript-state'
 import { clip, shortPath } from './transcript-content'
+import { compact, completeJsonlLines, parseJsonlValues } from './transcript-scan-core'
 
 type JsonContainer = Record<PropertyKey, unknown>
 
@@ -53,11 +53,6 @@ const EMPTY_ENVIRONMENT: SessionEnvironment = {
   permissionMode: '',
 }
 
-const FAILED_STATUSES = new Set([
-  'failed', 'error', 'denied', 'cancelled', 'canceled', 'timed_out', 'timeout',
-])
-const PASSED_STATUSES = new Set(['completed', 'success', 'succeeded', 'ok', 'passed'])
-
 function iso(milliseconds: number | undefined): Timestamp {
   if (milliseconds === undefined || !Number.isFinite(milliseconds)) return null
   return DateTime.formatIso(DateTime.makeUnsafe(milliseconds))
@@ -71,10 +66,6 @@ function commandLineText(tool: CopilotToolPart): string {
   const commandLine = tool.toolSpecificData?.commandLine
   if (typeof commandLine === 'string') return commandLine.trim()
   return (commandLine?.toolEdited ?? commandLine?.original ?? commandLine?.forDisplay ?? '').trim()
-}
-
-function compact(value: string, limit = 240): string {
-  return value.trim().replace(/\s+/g, ' ').slice(0, limit)
 }
 
 function uriPath(uri: { readonly fsPath?: string, readonly path?: string, readonly external?: string }): string {
@@ -179,8 +170,8 @@ function explicitOutcome(tool: CopilotToolPart): boolean | null {
   if (outcome.exit_code !== undefined) return outcome.exit_code === 0
   if (outcome.success !== undefined) return outcome.success
   const status = outcome.status?.trim().toLowerCase()
-  if (status && FAILED_STATUSES.has(status)) return false
-  if (status && PASSED_STATUSES.has(status)) return true
+  if (status && FAILED_OUTCOME_STATUS_SET.has(status)) return false
+  if (status && PASSED_OUTCOME_STATUS_SET.has(status)) return true
   if (outcome.isError === false || outcome.error === false) return true
   return null
 }
@@ -255,73 +246,70 @@ export class CopilotTranscriptScan {
     this.file = new TranscriptFile(this.path)
   }
 
-  get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
-    const self = this
-    return Effect.gen(function*() {
-      const changed = yield* self.file.refresh()
-      if (Option.isNone(changed)) return self
-      const { raw, rewritten } = changed.value
-      const completeLines = raw.endsWith('\n') ? raw.split('\n').slice(0, -1) : raw.split('\n').slice(0, -1)
-      if (rewritten || completeLines.length < self.line) {
-        self.line = 0
-        self.state = undefined
-        self.malformed = 0
-        self.unknown = 0
-        self.unknownLogRecords = 0
+  readonly refresh = Effect.fn('CopilotTranscriptScan.refresh')(function*(this: CopilotTranscriptScan) {
+    const changed = yield* this.file.refresh()
+    if (Option.isNone(changed)) return this
+    const { raw, rewritten } = changed.value
+    const completeLines = completeJsonlLines(raw)
+    if (rewritten || completeLines.length < this.line) {
+      this.line = 0
+      this.state = undefined
+      this.malformed = 0
+      this.unknown = 0
+      this.unknownLogRecords = 0
+    }
+
+    const { values, malformed: malformedLines } = parseJsonlValues(completeLines, this.line)
+    for (const entry of malformedLines) {
+      yield* Effect.logDebug('Skipping malformed Copilot log line', { path: this.path, line: entry.index })
+    }
+    this.malformed += malformedLines.length
+
+    for (const [index, value] of values) {
+      const parsed = parseCopilotLogRecord(value)
+      if (!parsed.success) {
+        yield* Effect.logDebug('Skipping malformed Copilot log record', { path: this.path, line: index })
+        this.malformed += 1
+        continue
       }
-      for (let index = self.line; index < completeLines.length; index += 1) {
-        const line = completeLines[index]
-        if (!line?.trim()) continue
-        let value: unknown
-        try {
-          value = JSON.parse(line) as unknown
-        } catch {
-          self.malformed += 1
-          continue
-        }
-        const parsed = parseCopilotLogRecord(value)
-        if (!parsed.success) {
-          self.malformed += 1
-          continue
-        }
-        if (parsed.record.kind === 'unknown') {
-          self.unknownLogRecords += 1
-          continue
-        }
-        const applied = applyLogRecord(self.state, parsed.record)
-        if (!applied.applied) {
-          self.malformed += 1
-          continue
-        }
-        self.state = applied.state
+      if (parsed.record.kind === 'unknown') {
+        this.unknownLogRecords += 1
+        continue
       }
-      self.line = completeLines.length
-      const snapshot = parseCopilotSnapshot(self.state)
-      if (!snapshot) {
-        self.snapshot = null
-        self.supported = false
-        self.structuralMalformed = 1
-        self.derived = null
-        if (reconcileTranscriptEvents(self.events, [])) self.eventRevision += 1
-        return self
+      const applied = applyLogRecord(this.state, parsed.record)
+      if (!applied.applied) {
+        yield* Effect.logDebug('Skipping unsafe Copilot log replay path', { path: this.path, line: index })
+        this.malformed += 1
+        continue
       }
-      self.structuralMalformed = 0
-      if (self.sessionId && self.sessionId !== snapshot.sessionId) {
-        self.events.length = 0
-        self.eventRevision += 1
-      }
-      self.snapshot = snapshot
-      self.sessionId = snapshot.sessionId
-      self.supported = isCopilotSnapshot(snapshot)
-      if (!self.supported) {
-        self.derived = null
-        if (reconcileTranscriptEvents(self.events, [])) self.eventRevision += 1
-        return self
-      }
-      self.rebuild()
-      return self
-    })
-  }
+      this.state = applied.state
+    }
+    this.line = completeLines.length
+    const snapshot = parseCopilotSnapshot(this.state)
+    if (!snapshot) {
+      this.snapshot = null
+      this.supported = false
+      this.structuralMalformed = 1
+      this.derived = null
+      if (reconcileTranscriptEvents(this.events, [])) this.eventRevision += 1
+      return this
+    }
+    this.structuralMalformed = 0
+    if (this.sessionId && this.sessionId !== snapshot.sessionId) {
+      this.events.length = 0
+      this.eventRevision += 1
+    }
+    this.snapshot = snapshot
+    this.sessionId = snapshot.sessionId
+    this.supported = isCopilotSnapshot(snapshot)
+    if (!this.supported) {
+      this.derived = null
+      if (reconcileTranscriptEvents(this.events, [])) this.eventRevision += 1
+      return this
+    }
+    this.rebuild()
+    return this
+  })
 
   private rebuild(): void {
     const snapshot = this.snapshot
@@ -336,6 +324,7 @@ export class CopilotTranscriptScan {
     let tools = 0
     let reads = 0
     let errors = 0
+    let tokensIn = 0
     let tokensOut = 0
     let finalText = ''
     let current: TranscriptStats['current'] = null
@@ -357,6 +346,7 @@ export class CopilotTranscriptScan {
       })
       model = request.result?.metadata?.resolvedModel || request.modelId || model
       permissionMode = request.modeInfo?.permissionLevel || permissionMode
+      tokensIn += request.result?.metadata?.promptTokens || 0
       tokensOut += request.result?.metadata?.outputTokens || 0
       if (request.elapsedMs !== undefined) {
         turns.push({
@@ -569,14 +559,14 @@ export class CopilotTranscriptScan {
           agentType: `Copilot ${mode}`,
           models: model ? [model] : [],
           efforts: [],
-          usage: { in: 0, out: tokensOut, cr: 0, cw: 0 },
+          usage: { in: tokensIn, out: tokensOut, cr: 0, cw: 0 },
           turns: turns.length,
           turnDurationMs: turns.reduce((total, turn) => total + turn.durationMs, 0),
           compactions: 0,
           branchPoints: 0,
           sidechainRecords: 0,
         }],
-        usage: { in: 0, out: tokensOut, cr: 0, cw: 0 },
+        usage: { in: tokensIn, out: tokensOut, cr: 0, cw: 0 },
       },
     }
   }
@@ -613,10 +603,7 @@ export class CopilotTranscriptScan {
     return this.derived?.diagnostics || emptyTranscriptDiagnostics(EMPTY_ENVIRONMENT)
   }
 
-  get stats(): Effect.Effect<TranscriptStats, never, FileSystem.FileSystem> {
-    const self = this
-    return Effect.gen(function*() {
-      return self.statsAt((yield* Clock.currentTimeMillis) / 1_000)
-    })
+  get stats(): Effect.Effect<TranscriptStats> {
+    return Clock.currentTimeMillis.pipe(Effect.map(millis => this.statsAt(millis / 1_000)))
   }
 }

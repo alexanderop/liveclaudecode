@@ -23,7 +23,7 @@ const scanOf = (records: Record<string, unknown>[], options: {
   const tree: FakeTree = {
     [PATH]: { content: fixture.transcript(records, options), mtime: options.mtime },
   }
-  return new TranscriptScan(PATH).refresh.pipe(Effect.provide(testFileSystem(tree)))
+  return new TranscriptScan(PATH).refresh().pipe(Effect.provide(testFileSystem(tree)))
 }
 
 describe('TranscriptScan', () => {
@@ -88,10 +88,10 @@ describe('TranscriptScan', () => {
       ])
 
       const scan = new TranscriptScan(PATH)
-      const first = yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: partial })))
+      const first = yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: partial })))
       assert.strictEqual(first.events.length, 1)
 
-      const second = yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: complete })))
+      const second = yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: complete })))
       assert.deepStrictEqual(second.events.map(event => event.body), ['one', 'two'])
     }))
 
@@ -99,11 +99,11 @@ describe('TranscriptScan', () => {
     Effect.gen(function*() {
       const one = fixture.transcript([fixture.assistant([fixture.text('one')])])
       const scan = new TranscriptScan(PATH)
-      yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: one })))
+      yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: one })))
       assert.strictEqual(scan.line, 1)
 
       const two = one + fixture.transcript([fixture.assistant([fixture.text('two')])])
-      yield* scan.refresh.pipe(Effect.provide(testFileSystem({ [PATH]: two })))
+      yield* scan.refresh().pipe(Effect.provide(testFileSystem({ [PATH]: two })))
       assert.strictEqual(scan.line, 2)
       assert.strictEqual(scan.events.length, 2)
     }))
@@ -112,14 +112,14 @@ describe('TranscriptScan', () => {
     Effect.gen(function*() {
       const body = '{"type":"assistant""broken"}\n'
         + fixture.transcript([fixture.assistant([fixture.text('fine')])])
-      const result = yield* new TranscriptScan(PATH).refresh
+      const result = yield* new TranscriptScan(PATH).refresh()
         .pipe(Effect.provide(testFileSystem({ [PATH]: body })))
       assert.deepStrictEqual(result.events.map(event => event.body), ['fine'])
     }))
 
   it.effect('treats a missing transcript as empty rather than an error', () =>
     Effect.gen(function*() {
-      const result = yield* new TranscriptScan('/p/absent.jsonl').refresh
+      const result = yield* new TranscriptScan('/p/absent.jsonl').refresh()
         .pipe(Effect.provide(testFileSystem({})))
       assert.strictEqual(result.events.length, 0)
       assert.strictEqual(result.line, 0)
@@ -132,11 +132,11 @@ describe('TranscriptScan', () => {
       const layer = testFileSystem({ [PATH]: entry }, { onRead: path => reads.push(path) })
 
       const scan = new TranscriptScan(PATH)
-      yield* scan.refresh.pipe(Effect.provide(layer))
+      yield* scan.refresh().pipe(Effect.provide(layer))
       assert.strictEqual(reads.length, 1)
 
-      yield* scan.refresh.pipe(Effect.provide(layer))
-      yield* scan.refresh.pipe(Effect.provide(layer))
+      yield* scan.refresh().pipe(Effect.provide(layer))
+      yield* scan.refresh().pipe(Effect.provide(layer))
       assert.strictEqual(reads.length, 1)
       assert.strictEqual(scan.events.length, 1)
     }))
@@ -149,14 +149,14 @@ describe('TranscriptScan', () => {
       const layer = testFileSystem({ [PATH]: entry })
 
       const scan = new TranscriptScan(PATH)
-      yield* scan.refresh.pipe(Effect.provide(layer))
+      yield* scan.refresh().pipe(Effect.provide(layer))
 
       // Replace the consumed prefix with same-length noise: only the appended
       // record is parseable, so seeing both events proves the refresh never
       // went back over the already-consumed bytes.
       entry.content = 'x'.repeat(one.length) + two
       entry.mtime = 200
-      yield* scan.refresh.pipe(Effect.provide(layer))
+      yield* scan.refresh().pipe(Effect.provide(layer))
       assert.deepStrictEqual(scan.events.map(event => event.body), ['one', 'two'])
       assert.strictEqual(scan.malformed, 0)
     }))
@@ -171,19 +171,19 @@ describe('TranscriptScan', () => {
       const layer = testFileSystem({ [PATH]: entry })
 
       const scan = new TranscriptScan(PATH)
-      yield* scan.refresh.pipe(Effect.provide(layer))
+      yield* scan.refresh().pipe(Effect.provide(layer))
       assert.strictEqual(scan.line, 2)
 
       entry.content = fixture.transcript([fixture.assistant([fixture.text('one')])])
       entry.mtime = 200
-      yield* scan.refresh.pipe(Effect.provide(layer))
+      yield* scan.refresh().pipe(Effect.provide(layer))
       assert.strictEqual(scan.line, 1)
       assert.strictEqual(scan.events.length, 2)
     }))
 
   it.effect('fails loudly when the transcript cannot be read', () =>
     Effect.gen(function*() {
-      const error = yield* new TranscriptScan(PATH).refresh.pipe(
+      const error = yield* new TranscriptScan(PATH).refresh().pipe(
         Effect.provide(testFileSystem({ [PATH]: 'x' }, { denied: [PATH] })),
         Effect.flip,
       )

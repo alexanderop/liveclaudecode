@@ -1,8 +1,12 @@
-import { DateTime, Option } from 'effect'
+import { DateTime, Option, Predicate } from 'effect'
 import type {
   ContextUsageSample,
   CostEstimate,
+  CostOverviewGroup,
+  CostOverviewResponse,
   CostSummary,
+  SessionSource,
+  SessionSourceStatus,
   Usage,
 } from '#shared/types/run'
 
@@ -12,6 +16,13 @@ interface CostRates {
   cacheRead: number
   cacheWrite5m: number
   cacheWrite1h: number
+}
+
+interface ProviderTokenRates {
+  input: number
+  cachedInput: number
+  output: number
+  cacheWrite?: number
 }
 
 export interface ClaudePricingContext {
@@ -30,6 +41,13 @@ export interface ClaudeCostSample {
   id?: string
 }
 
+export interface CostUsageSample extends ClaudeCostSample {
+  source: SessionSource
+  sessionKey: string
+  usage: Usage
+  requests: number
+}
+
 const MTOK = 1_000_000
 const SONNET_5_STANDARD_PRICING_START = DateTime.makeUnsafe('2026-09-01T00:00:00.000Z')
 
@@ -44,8 +62,7 @@ function rates(
 
 function isAtOrAfter(timestamp: string | null, boundary: DateTime.Utc): boolean {
   const parsed = DateTime.make(timestamp || '')
-  return Option.isSome(parsed)
-    && DateTime.toEpochMillis(parsed.value) >= DateTime.toEpochMillis(boundary)
+  return Option.isSome(parsed) && DateTime.isGreaterThanOrEqualTo(parsed.value, boundary)
 }
 
 /**
@@ -111,7 +128,7 @@ export function estimateClaudeUsageCost(
   if (!price) return null
 
   const tokens = (value: number | undefined): number =>
-    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+    Predicate.isNumber(value) && Number.isFinite(value) && value > 0 ? value : 0
   const cacheWrite1h = tokens(context.cacheWrite1h)
   const reportedCacheWrite5m = tokens(context.cacheWrite5m)
   const totalCacheWrite = Math.max(
@@ -133,15 +150,136 @@ export function estimateClaudeUsageCost(
   return tokenCost * geoMultiplier + webSearchCost
 }
 
-export function claudeCostSample(sample: ContextUsageSample): ClaudeCostSample {
+export function claudeCostSample(
+  sample: ContextUsageSample,
+  sessionKey = '',
+): CostUsageSample {
   return {
     ts: sample.ts,
     model: sample.model,
     usd: estimateClaudeUsageCost(sample.model, sample.usage, sample.ts, sample),
+    source: 'claude',
+    sessionKey,
+    usage: { ...sample.usage },
+    requests: 1,
     ...(sample.messageId || sample.requestId
       ? { id: sample.messageId || sample.requestId }
       : {}),
   }
+}
+
+export function providerCostSample(
+  source: Exclude<SessionSource, 'claude'>,
+  sessionKey: string,
+  sample: Pick<ContextUsageSample, 'ts' | 'model' | 'usage'>,
+): CostUsageSample {
+  const usd = source === 'codex'
+    ? estimateCodexUsageCost(sample.model, sample.usage)
+    : estimateCopilotUsageCost(sample.model, sample.usage, sample.ts)
+  return {
+    source,
+    sessionKey,
+    ts: sample.ts,
+    model: sample.model,
+    usage: { ...sample.usage },
+    usd,
+    requests: Object.values(sample.usage).some(value => value > 0) ? 1 : 0,
+  }
+}
+
+function providerTokenCost(
+  usage: Usage,
+  price: ProviderTokenRates | null,
+  cachedIncludedInInput: boolean,
+): number | null {
+  if (!price) return null
+  const tokens = (value: number): number =>
+    Number.isFinite(value) && value > 0 ? value : 0
+  const cached = tokens(usage.cr)
+  const input = Math.max(0, tokens(usage.in) - (cachedIncludedInInput ? cached : 0))
+  return (
+    input * price.input
+    + cached * price.cachedInput
+    + tokens(usage.out) * price.output
+    + tokens(usage.cw) * (price.cacheWrite ?? price.input)
+  ) / MTOK
+}
+
+/** Public OpenAI API-equivalent rates for models recorded by Codex. */
+export function codexCostRates(model: string): ProviderTokenRates | null {
+  const id = model.toLowerCase()
+  if (id.includes('gpt-5.3-codex-spark')) return null
+  if (id.includes('gpt-5.6-sol')) return { input: 5, cachedInput: 0.5, output: 30 }
+  if (id.includes('gpt-5.6-terra')) return { input: 2.5, cachedInput: 0.25, output: 15 }
+  if (id.includes('gpt-5.6-luna')) return { input: 1, cachedInput: 0.1, output: 6 }
+  if (id.includes('gpt-5.5')) return { input: 5, cachedInput: 0.5, output: 30 }
+  if (id.includes('gpt-5.4-mini')) return { input: 0.75, cachedInput: 0.075, output: 4.5 }
+  if (id.includes('gpt-5.4-nano')) return { input: 0.2, cachedInput: 0.02, output: 1.25 }
+  if (id.includes('gpt-5.4')) return { input: 2.5, cachedInput: 0.25, output: 15 }
+  if (id.includes('gpt-5.3-codex') || id.includes('gpt-5.2')) {
+    return { input: 1.75, cachedInput: 0.175, output: 14 }
+  }
+  if (id.includes('gpt-5-mini')) return { input: 0.25, cachedInput: 0.025, output: 2 }
+  return null
+}
+
+export function estimateCodexUsageCost(model: string, usage: Usage): number | null {
+  // Codex reports cached input as a subset of total input tokens.
+  return providerTokenCost(usage, codexCostRates(model), true)
+}
+
+/** Current GitHub AI-credit token rates, expressed as their USD equivalent. */
+export function copilotCostRates(
+  model: string,
+  timestamp: string | null,
+): ProviderTokenRates | null {
+  const id = model.toLowerCase().replaceAll('_', '-')
+  if (id.includes('gpt-5.6-sol')) return { input: 5, cachedInput: 0.5, output: 30 }
+  if (id.includes('gpt-5.6-terra')) return { input: 2, cachedInput: 0.2, output: 12 }
+  if (id.includes('gpt-5.6-luna')) return { input: 0.2, cachedInput: 0.02, output: 1.2 }
+  if (id.includes('gpt-5.5')) return { input: 5, cachedInput: 0.5, output: 30 }
+  if (id.includes('gpt-5.4-mini')) return { input: 0.75, cachedInput: 0.075, output: 4.5 }
+  if (id.includes('gpt-5.4-nano')) return { input: 0.2, cachedInput: 0.02, output: 1.25 }
+  if (id.includes('gpt-5.4')) return { input: 2.5, cachedInput: 0.25, output: 15 }
+  if (id.includes('gpt-5.3-codex')) return { input: 1.75, cachedInput: 0.175, output: 14 }
+  if (id.includes('gpt-5-mini')) return { input: 0.25, cachedInput: 0.025, output: 2 }
+
+  if (id.includes('claude-sonnet-5')) {
+    const introductory = !isAtOrAfter(timestamp, SONNET_5_STANDARD_PRICING_START)
+    return introductory
+      ? { input: 2, cachedInput: 0.2, cacheWrite: 2.5, output: 10 }
+      : { input: 3, cachedInput: 0.3, cacheWrite: 3.75, output: 15 }
+  }
+  if (/claude-sonnet-4(?:[.-](?:5|6))?(?:-|$)/.test(id)) {
+    return { input: 3, cachedInput: 0.3, cacheWrite: 3.75, output: 15 }
+  }
+  if (/claude-opus-(?:4[.-](?:5|6|7|8)|5)(?:-|$)/.test(id)) {
+    return { input: 5, cachedInput: 0.5, cacheWrite: 6.25, output: 25 }
+  }
+  if (id.includes('claude-haiku-4.5')) {
+    return { input: 1, cachedInput: 0.1, cacheWrite: 1.25, output: 5 }
+  }
+  if (id.includes('claude-fable-5')) {
+    return { input: 10, cachedInput: 1, cacheWrite: 12.5, output: 50 }
+  }
+  if (id.includes('gemini-2.5-pro')) return { input: 1.25, cachedInput: 0.125, output: 10 }
+  if (id.includes('gemini-3.1-pro')) return { input: 2, cachedInput: 0.2, output: 12 }
+  if (id.includes('gemini-3-flash')) return { input: 0.5, cachedInput: 0.05, output: 3 }
+  if (id.includes('gemini-3.5-flash')) return { input: 1.5, cachedInput: 0.15, output: 9 }
+  if (id.includes('gemini-3.6-flash')) return { input: 1.5, cachedInput: 0.15, output: 7.5 }
+  if (id.includes('raptor-mini')) return { input: 0.25, cachedInput: 0.025, output: 2 }
+  if (id.includes('mai-code-1-flash')) return { input: 0.75, cachedInput: 0.075, output: 4.5 }
+  if (id.includes('grok-4.5')) return { input: 2, cachedInput: 0.5, output: 6 }
+  if (id.includes('kimi-k2.7-code')) return { input: 0.95, cachedInput: 0.19, output: 4 }
+  return null
+}
+
+export function estimateCopilotUsageCost(
+  model: string,
+  usage: Usage,
+  timestamp: string | null,
+): number | null {
+  return providerTokenCost(usage, copilotCostRates(model, timestamp), false)
 }
 
 /**
@@ -221,5 +359,126 @@ export function summarizeCosts(
     todayUsd,
     last7DaysUsd: coverageHours === 0 || coverageHours >= 168 ? last7DaysUsd : null,
     coverageHours,
+  }
+}
+
+const SOURCE_LABELS: Record<SessionSource, string> = {
+  claude: 'Claude Code',
+  codex: 'OpenAI Codex',
+  copilot: 'GitHub Copilot',
+}
+
+function emptyUsage(): Usage {
+  return { in: 0, out: 0, cr: 0, cw: 0 }
+}
+
+function addUsage(target: Usage, usage: Usage): void {
+  target.in += usage.in
+  target.out += usage.out
+  target.cr += usage.cr
+  target.cw += usage.cw
+}
+
+function overviewGroup(
+  samples: ReadonlyArray<CostUsageSample>,
+  source: SessionSource,
+  model: string | null,
+  sessionsFallback = 0,
+): CostOverviewGroup {
+  const usage = emptyUsage()
+  const sessions = new Set<string>()
+  const days = new Map<string, { estimatedUsd: number, usage: Usage }>()
+  let estimatedUsd = 0
+  let pricedRequests = 0
+  let unpricedRequests = 0
+
+  for (const sample of samples) {
+    addUsage(usage, sample.usage)
+    if (sample.sessionKey) sessions.add(sample.sessionKey)
+    if (sample.usd === null) unpricedRequests += sample.requests
+    else {
+      estimatedUsd += sample.usd
+      pricedRequests += sample.requests
+    }
+    const date = sample.ts?.slice(0, 10)
+    if (!date) continue
+    const day = days.get(date) || { estimatedUsd: 0, usage: emptyUsage() }
+    if (sample.usd !== null) day.estimatedUsd += sample.usd
+    addUsage(day.usage, sample.usage)
+    days.set(date, day)
+  }
+
+  return {
+    source,
+    label: model || SOURCE_LABELS[source],
+    model,
+    sessions: sessionsFallback || sessions.size,
+    usage,
+    estimatedUsd: pricedRequests ? estimatedUsd : null,
+    pricedRequests,
+    unpricedRequests,
+    days: [...days.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([date, day]) => ({ date, ...day })),
+  }
+}
+
+export function buildCostOverview(
+  inputSamples: ReadonlyArray<CostUsageSample>,
+  sources: ReadonlyArray<SessionSourceStatus>,
+  nowMillis: number,
+  hours: number,
+): CostOverviewResponse {
+  const coverageStart = hours <= 0
+    ? Number.NEGATIVE_INFINITY
+    : nowMillis - hours * 3_600_000
+  const samples = dedupeCostSamples(inputSamples).filter((sample): sample is CostUsageSample => {
+    const timestamp = sampleMillis(sample)
+    return 'source' in sample
+      && timestamp !== null
+      && timestamp >= coverageStart
+      && timestamp <= nowMillis
+  })
+  const harnesses = (['claude', 'codex', 'copilot'] as const).map((source) => {
+    const sourceSamples = samples.filter(sample => sample.source === source)
+    return overviewGroup(
+      sourceSamples,
+      source,
+      null,
+      sources.find(status => status.source === source)?.sessions || 0,
+    )
+  })
+  const modelSamples = new Map<string, CostUsageSample[]>()
+  for (const sample of samples) {
+    const model = sample.model.trim() || 'Unknown model'
+    const key = `${sample.source}\0${model}`
+    const group = modelSamples.get(key) || []
+    group.push({ ...sample, model })
+    modelSamples.set(key, group)
+  }
+  const models = [...modelSamples.values()]
+    .map(group => overviewGroup(group, group[0]!.source, group[0]!.model))
+    .sort((left, right) =>
+      (right.estimatedUsd || 0) - (left.estimatedUsd || 0)
+      || (right.usage.in + right.usage.out + right.usage.cr + right.usage.cw)
+      - (left.usage.in + left.usage.out + left.usage.cr + left.usage.cw)
+      || left.label.localeCompare(right.label),
+    )
+  const usage = emptyUsage()
+  harnesses.forEach(group => addUsage(usage, group.usage))
+
+  return {
+    now: nowMillis / 1_000,
+    hours,
+    currency: 'USD',
+    estimated: true,
+    estimatedUsd: harnesses.reduce((total, group) => total + (group.estimatedUsd || 0), 0),
+    pricedRequests: harnesses.reduce((total, group) => total + group.pricedRequests, 0),
+    unpricedRequests: harnesses.reduce((total, group) => total + group.unpricedRequests, 0),
+    sessions: sources.reduce((total, source) => total + source.sessions, 0),
+    usage,
+    harnesses,
+    models,
+    sources: [...sources],
   }
 }

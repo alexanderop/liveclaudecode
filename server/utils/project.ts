@@ -1,9 +1,9 @@
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
-import { Effect } from 'effect'
+import { Effect, Option, Result } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import { NoTranscriptsFound, ProjectsDirectory, UnknownProject, WorkingDirectory } from './services'
-import { FILE_CONCURRENCY } from './filesystem-concurrency'
+import { FILE_CONCURRENCY, ignoreNotFound } from './filesystem-concurrency'
 
 export interface ProjectDirectory {
   id: string
@@ -19,10 +19,7 @@ const isDirectory = Effect.fn('isDirectory')(function*(path: string) {
   const fs = yield* FileSystem.FileSystem
   return yield* fs.stat(path).pipe(
     Effect.map(info => info.type === 'Directory'),
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.succeed(false),
-    ),
+    ignoreNotFound(() => Effect.succeed(false)),
   )
 })
 
@@ -30,10 +27,7 @@ const containsTranscript = Effect.fn('containsTranscript')(function*(path: strin
   const fs = yield* FileSystem.FileSystem
   return yield* fs.readDirectory(path).pipe(
     Effect.map(names => names.some(name => name.endsWith('.jsonl'))),
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.succeed(false),
-    ),
+    ignoreNotFound(() => Effect.succeed(false)),
   )
 })
 
@@ -46,22 +40,19 @@ export const newestProjectDirectory = Effect.fn('newestProjectDirectory')(functi
   const projectsDirectory = yield* ProjectsDirectory
 
   const names = yield* fs.readDirectory(projectsDirectory).pipe(
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.fail(new NoTranscriptsFound({ directory: projectsDirectory })),
-    ),
+    ignoreNotFound(() => Effect.fail(new NoTranscriptsFound({ directory: projectsDirectory }))),
   )
 
-  const directories = yield* Effect.forEach(names, name =>
+  const directories = yield* Effect.filterMapEffect(names, name =>
     Effect.gen(function*() {
       const path = join(projectsDirectory, name)
       const info = yield* fs.stat(path)
-      if (info.type !== 'Directory') return []
-      const mtime = info.mtime._tag === 'Some' ? info.mtime.value.getTime() : 0
-      return [{ path, mtime }]
+      if (info.type !== 'Directory') return Result.fail(name)
+      const mtime = Option.match(info.mtime, { onNone: () => 0, onSome: date => date.getTime() })
+      return Result.succeed({ path, mtime })
     }), { concurrency: FILE_CONCURRENCY })
 
-  const newest = directories.flat().sort((a, b) => b.mtime - a.mtime)[0]
+  const newest = directories.sort((a, b) => b.mtime - a.mtime)[0]
   if (!newest) return yield* new NoTranscriptsFound({ directory: projectsDirectory })
   return newest.path
 })
@@ -71,20 +62,17 @@ export const listProjectDirectories = Effect.fn('listProjectDirectories')(functi
   const projectsDirectory = yield* ProjectsDirectory
 
   const names = yield* fs.readDirectory(projectsDirectory).pipe(
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.fail(new NoTranscriptsFound({ directory: projectsDirectory })),
-    ),
+    ignoreNotFound(() => Effect.fail(new NoTranscriptsFound({ directory: projectsDirectory }))),
   )
 
-  const projects = yield* Effect.forEach(names, name =>
+  const projects = yield* Effect.filterMapEffect(names, name =>
     Effect.gen(function*() {
       const directory = join(projectsDirectory, name)
-      if (!(yield* isDirectory(directory))) return []
-      return (yield* containsTranscript(directory)) ? [{ id: name, directory }] : []
+      if (!(yield* isDirectory(directory))) return Result.fail(name)
+      return (yield* containsTranscript(directory)) ? Result.succeed({ id: name, directory }) : Result.fail(name)
     }), { concurrency: FILE_CONCURRENCY })
 
-  return projects.flat().sort((a, b) => a.id.localeCompare(b.id))
+  return projects.sort((a, b) => a.id.localeCompare(b.id))
 })
 
 export const resolveProjectDirectory = Effect.fn('resolveProjectDirectory')(
@@ -97,9 +85,7 @@ export const resolveProjectDirectory = Effect.fn('resolveProjectDirectory')(
       const candidate = isAbsolute(expanded) ? expanded : resolve(cwd, expanded)
       if (yield* isDirectory(candidate)) {
         if (yield* containsTranscript(candidate)) return candidate
-        const guessed = projectDirectoryFor(candidate, projectsDirectory)
-        if (yield* isDirectory(guessed)) return guessed
-        return guessed
+        return projectDirectoryFor(candidate, projectsDirectory)
       }
 
       const slug = join(projectsDirectory, input)

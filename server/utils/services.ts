@@ -1,12 +1,16 @@
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { Clock, Context, Effect, Layer, Schema, Semaphore } from 'effect'
+import { Cache, Clock, Context, Duration, Effect, Exit, Layer, Option, Schema, Semaphore } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
+import { parseClaudeRecord } from '#shared/schemas/claude'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { TranscriptScan } from './transcript'
 import { CodexTranscriptScan } from './codex-transcript'
 import { CopilotCliTranscriptScan } from './copilot-cli-transcript'
 import { CopilotTranscriptScan } from './copilot-transcript'
+import { readHead } from './incremental-jsonl'
+import { plainText } from './transcript-content'
 
 /**
  * Root of Claude Code's transcript store.
@@ -99,7 +103,7 @@ export class UnknownRun extends Schema.TaggedErrorClass<UnknownRun>()(
 }
 
 interface RefreshableScan<A> {
-  readonly refresh: Effect.Effect<A, PlatformError.PlatformError, FileSystem.FileSystem>
+  readonly refresh: () => Effect.Effect<A, PlatformError.PlatformError, FileSystem.FileSystem>
 }
 
 interface ScanEntry<A> {
@@ -143,45 +147,45 @@ function trimScanEntries<A>(
  * permit, two refreshes can observe the same byte offset and ingest one append
  * twice before either publishes its new offset.
  */
-function refreshCachedScan<A extends RefreshableScan<A>>(
+const refreshCachedScan = Effect.fn('refreshCachedScan')(function*<A extends RefreshableScan<A>>(
   entries: Map<string, ScanEntry<A>>,
   key: string,
   create: () => A,
-): Effect.Effect<A, PlatformError.PlatformError, FileSystem.FileSystem> {
-  return Effect.flatMap(Clock.currentTimeMillis, startedAt =>
-    Effect.suspend(() => {
-      let entry = entries.get(key)
-      if (!entry) {
-        trimScanEntries(entries, startedAt, SCAN_CACHE_CAPACITY - 1)
-        entry = {
-          scan: create(),
-          semaphore: Semaphore.makeUnsafe(1),
-          users: 0,
-          lastAccess: startedAt,
-        }
-        entries.set(key, entry)
-      }
-      entry.users += 1
-      entry.lastAccess = startedAt
-      return entry.semaphore.withPermit(entry.scan.refresh).pipe(
-        Effect.ensuring(Effect.flatMap(Clock.currentTimeMillis, finishedAt => Effect.sync(() => {
-          entry.users -= 1
-          entry.lastAccess = finishedAt
-          trimScanEntries(entries, finishedAt, SCAN_CACHE_CAPACITY)
-        }))),
-      )
-    }))
-}
+): Effect.fn.Return<A, PlatformError.PlatformError, FileSystem.FileSystem> {
+  const startedAt = yield* Clock.currentTimeMillis
+  let entry = entries.get(key)
+  if (!entry) {
+    trimScanEntries(entries, startedAt, SCAN_CACHE_CAPACITY - 1)
+    entry = {
+      scan: create(),
+      semaphore: Semaphore.makeUnsafe(1),
+      users: 0,
+      lastAccess: startedAt,
+    }
+    entries.set(key, entry)
+  }
+  entry.users += 1
+  entry.lastAccess = startedAt
+  const active = entry
 
-function peekCachedScan<A>(
+  return yield* active.semaphore.withPermit(active.scan.refresh()).pipe(
+    Effect.ensuring(Effect.gen(function*() {
+      const finishedAt = yield* Clock.currentTimeMillis
+      active.users -= 1
+      active.lastAccess = finishedAt
+      trimScanEntries(entries, finishedAt, SCAN_CACHE_CAPACITY)
+    })),
+  )
+})
+
+const peekCachedScan = Effect.fn('peekCachedScan')(function*<A>(
   entries: Map<string, ScanEntry<A>>,
   key: string,
-): Effect.Effect<A | undefined> {
-  return Effect.map(Clock.currentTimeMillis, now => {
-    trimScanEntries(entries, now, SCAN_CACHE_CAPACITY)
-    return entries.get(key)?.scan
-  })
-}
+): Effect.fn.Return<Option.Option<A>> {
+  const now = yield* Clock.currentTimeMillis
+  trimScanEntries(entries, now, SCAN_CACHE_CAPACITY)
+  return Option.fromUndefinedOr(entries.get(key)?.scan)
+})
 
 /**
  * Incrementally-parsed transcripts, keyed by path.
@@ -193,7 +197,7 @@ export class ScanCache extends Context.Service<ScanCache, {
   readonly get: (
     path: string,
   ) => Effect.Effect<TranscriptScan, PlatformError.PlatformError, FileSystem.FileSystem>
-  readonly peek: (path: string) => Effect.Effect<TranscriptScan | undefined>
+  readonly peek: (path: string) => Effect.Effect<Option.Option<TranscriptScan>>
 }>()('lcc/ScanCache') {
   static readonly layer = Layer.effect(
     ScanCache,
@@ -212,7 +216,7 @@ export class CodexScanCache extends Context.Service<CodexScanCache, {
   readonly get: (
     path: string,
   ) => Effect.Effect<CodexTranscriptScan, PlatformError.PlatformError, FileSystem.FileSystem>
-  readonly peek: (path: string) => Effect.Effect<CodexTranscriptScan | undefined>
+  readonly peek: (path: string) => Effect.Effect<Option.Option<CodexTranscriptScan>>
 }>()('lcc/CodexScanCache') {
   static readonly layer = Layer.effect(
     CodexScanCache,
@@ -240,7 +244,7 @@ export class CopilotScanCache extends Context.Service<CopilotScanCache, {
   readonly get: (
     location: CopilotSessionLocation,
   ) => Effect.Effect<CopilotSessionScan, PlatformError.PlatformError, FileSystem.FileSystem>
-  readonly peek: (path: string) => Effect.Effect<CopilotSessionScan | undefined>
+  readonly peek: (path: string) => Effect.Effect<Option.Option<CopilotSessionScan>>
 }>()('lcc/CopilotScanCache') {
   static readonly layer = Layer.effect(
     CopilotScanCache,
@@ -261,42 +265,53 @@ export class CopilotScanCache extends Context.Service<CopilotScanCache, {
 }
 
 /**
+ * The first prompt appears within the first records of a transcript, so only
+ * this much of the file is read when labelling a session.
+ */
+const FIRST_PROMPT_BYTES = 256 * 1_024
+
+/**
+ * Read the first user prompt out of a transcript file, for use as a session
+ * label. Lives here (rather than in `./runs`) so `PromptCache.layer` can bake
+ * it in as the cache's lookup function.
+ */
+const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
+  const raw = yield* readHead(path, FIRST_PROMPT_BYTES)
+
+  for (const line of raw.split('\n', 61)) {
+    let value: unknown
+    try {
+      value = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const parsed = parseClaudeRecord(value)
+    if (!parsed.success || parsed.record.kind !== 'user') continue
+    const candidate = normalizeSessionLabel(plainText(parsed.record.data.message.content))
+    if (candidate) return candidate
+  }
+  return ''
+})
+
+/**
  * First user prompt per transcript. Values are immutable once read; the
  * process keeps only the most recently requested paths.
  */
 export class PromptCache extends Context.Service<PromptCache, {
-  readonly get: (
-    path: string,
-    read: Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem>,
-  ) => Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem>
+  readonly get: (path: string) => Effect.Effect<string, PlatformError.PlatformError>
 }>()('lcc/PromptCache') {
   static readonly layer = Layer.effect(
     PromptCache,
-    Effect.sync(() => {
-      const prompts = new Map<string, string>()
+    Effect.gen(function*() {
+      const cache = yield* Cache.makeWith(readFirstPrompt, {
+        capacity: PROMPT_CACHE_CAPACITY,
+        // Failed lookups (a transient read error, a not-yet-flushed file) are
+        // never worth caching: the next request should retry, not repeat the
+        // failure until the entry is evicted.
+        timeToLive: exit => Exit.isSuccess(exit) ? Duration.infinity : Duration.zero,
+      })
       return PromptCache.of({
-        get: Effect.fn('PromptCache.get')(function*(path, read) {
-          const cached = prompts.get(path)
-          if (cached !== undefined) {
-            prompts.delete(path)
-            prompts.set(path, cached)
-            return cached
-          }
-          const text = yield* read
-          const concurrent = prompts.get(path)
-          if (concurrent !== undefined) {
-            prompts.delete(path)
-            prompts.set(path, concurrent)
-            return concurrent
-          }
-          prompts.set(path, text)
-          while (prompts.size > PROMPT_CACHE_CAPACITY) {
-            const oldest = prompts.keys().next().value
-            if (oldest === undefined) break
-            prompts.delete(oldest)
-          }
-          return text
-        }),
+        get: path => Cache.get(cache, path),
       })
     }),
   )

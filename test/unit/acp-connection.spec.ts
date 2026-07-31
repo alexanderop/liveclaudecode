@@ -91,14 +91,18 @@ describe('ACP connection', () => {
         args: [],
         env: {},
         cwd: '/repo',
-        onUpdate: notification => Effect.sync(() => {
-          const update = notification.update
-          if ('content' in update && typeof update.content.text === 'string') {
-            updates.push(update.content.text)
-          }
-        }),
         permission: () => 'reject',
       })
+      // The connection no longer takes a callback — updates arrive on a
+      // Stream fed by a Queue, so the test forks its own consumer, same as
+      // the chat feature does.
+      yield* Effect.forkScoped(Stream.runForEach(connection.updates, notification => Effect.sync(() => {
+        const update = notification.update
+        if (update.kind !== 'known') return
+        if ('content' in update.data && typeof update.data.content.text === 'string') {
+          updates.push(update.data.content.text)
+        }
+      })))
 
       assert.deepStrictEqual(
         yield* connection.request('initialize', { protocolVersion: 1 }),
@@ -112,6 +116,7 @@ describe('ACP connection', () => {
         yield* connection.request('session/prompt', { sessionId: 'chat-session', prompt: [] }),
         { stopReason: 'end_turn' },
       )
+      yield* Effect.yieldNow
       yield* Effect.yieldNow
 
       assert.deepStrictEqual(updates, ['Answer'])

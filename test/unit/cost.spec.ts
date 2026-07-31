@@ -2,10 +2,14 @@ import { DateTime } from 'effect'
 import { assert, describe, it } from '@effect/vitest'
 import {
   claudeCostSample,
+  buildCostOverview,
+  estimateCodexUsageCost,
+  estimateCopilotUsageCost,
   dedupeCostSamples,
   estimateClaudeUsageCost,
   estimateCosts,
   summarizeCosts,
+  providerCostSample,
 } from '../../server/utils/cost'
 
 describe('Claude cost estimates', () => {
@@ -102,6 +106,46 @@ describe('Claude cost estimates', () => {
     )
   })
 
+  it('estimates Codex at the equivalent OpenAI API rate without double-counting cached input', () => {
+    assert.strictEqual(
+      estimateCodexUsageCost('gpt-5.6-sol', {
+        in: 1_000_000,
+        out: 100_000,
+        cr: 500_000,
+        cw: 0,
+      }),
+      5.75,
+    )
+    assert.strictEqual(
+      estimateCodexUsageCost('gpt-5.3-codex-spark', {
+        in: 1_000_000,
+        out: 100_000,
+        cr: 0,
+        cw: 0,
+      }),
+      null,
+    )
+  })
+
+  it('uses GitHub AI-credit token rates for Copilot models', () => {
+    assert.strictEqual(
+      estimateCopilotUsageCost(
+        'claude-sonnet-5',
+        { in: 1_000_000, out: 1_000_000, cr: 1_000_000, cw: 1_000_000 },
+        '2026-07-31T12:00:00.000Z',
+      ),
+      14.7,
+    )
+    assert.strictEqual(
+      estimateCopilotUsageCost(
+        'gpt-5.6-terra',
+        { in: 1_000_000, out: 1_000_000, cr: 0, cw: 0 },
+        '2026-07-31T12:00:00.000Z',
+      ),
+      14,
+    )
+  })
+
   it('deduplicates repeated assistant message snapshots by their highest cost', () => {
     const samples = [
       { id: 'msg-1', ts: '2026-07-31T01:00:00.000Z', model: 'claude-opus-5', usd: 0.01 },
@@ -149,5 +193,52 @@ describe('Claude cost estimates', () => {
       DateTime.zoneMakeOffset(0),
     )
     assert.strictEqual(result.last7DaysUsd, null)
+  })
+
+  it('builds a model and harness overview without inventing plan-billed prices', () => {
+    const claude = claudeCostSample({
+      ts: '2026-07-31T10:00:00.000Z',
+      model: 'claude-sonnet-4-6',
+      effort: '',
+      usage: { in: 1_000_000, out: 0, cr: 0, cw: 0 },
+      stopReason: null,
+    }, 'claude-session')
+    const codex = providerCostSample('codex', 'codex-session', {
+      ts: '2026-07-31T11:00:00.000Z',
+      model: 'gpt-5-codex',
+      usage: { in: 2_000, out: 500, cr: 1_000, cw: 0 },
+    })
+    const result = buildCostOverview([
+      claude,
+      codex,
+      providerCostSample('copilot', 'empty-session', {
+        ts: '2026-07-31T11:30:00.000Z',
+        model: 'unknown',
+        usage: { in: 0, out: 0, cr: 0, cw: 0 },
+      }),
+    ], [
+      { source: 'claude', state: 'ready', sessions: 1, malformed: 0, message: '' },
+      { source: 'codex', state: 'ready', sessions: 1, malformed: 0, message: '' },
+      { source: 'copilot', state: 'ready', sessions: 1, malformed: 0, message: '' },
+    ], Date.parse('2026-07-31T12:00:00.000Z'), 24)
+
+    assert.strictEqual(result.estimatedUsd, 3)
+    assert.strictEqual(result.sessions, 3)
+    assert.deepStrictEqual(result.usage, { in: 1_002_000, out: 500, cr: 1_000, cw: 0 })
+    assert.deepStrictEqual(result.harnesses.map(group => ({
+      source: group.source,
+      sessions: group.sessions,
+      estimatedUsd: group.estimatedUsd,
+      unpricedRequests: group.unpricedRequests,
+    })), [
+      { source: 'claude', sessions: 1, estimatedUsd: 3, unpricedRequests: 0 },
+      { source: 'codex', sessions: 1, estimatedUsd: null, unpricedRequests: 1 },
+      { source: 'copilot', sessions: 1, estimatedUsd: null, unpricedRequests: 0 },
+    ])
+    assert.deepStrictEqual(result.models.map(model => [model.source, model.label]), [
+      ['claude', 'claude-sonnet-4-6'],
+      ['codex', 'gpt-5-codex'],
+      ['copilot', 'unknown'],
+    ])
   })
 })

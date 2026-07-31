@@ -1,5 +1,5 @@
 import { assert, describe, it } from '@effect/vitest'
-import { Deferred, Effect, Fiber, Layer } from 'effect'
+import { Deferred, Effect, Fiber, Layer, Option } from 'effect'
 import { TestClock } from 'effect/testing'
 import {
   getSessionActivity,
@@ -55,9 +55,9 @@ function recordingCopilotCache(locations: CopilotSessionLocation[]) {
               : new CopilotTranscriptScan(location.path, location.application, location.workspace)
             scans.set(location.path, scan)
           }
-          return yield* scan.refresh
+          return yield* scan.refresh()
         }),
-        peek: path => Effect.sync(() => scans.get(path)),
+        peek: path => Effect.sync(() => Option.fromUndefinedOr(scans.get(path))),
       })
     }),
   )
@@ -239,6 +239,10 @@ describe('unified session catalog', () => {
       const cache = yield* SessionCatalogCache
       const building = yield* Effect.forkChild(loadSessionCatalog('', 999_999))
       yield* Deferred.await(buildStarted)
+      // `Deferred.succeed` resumes this fiber inline, before the lookup
+      // fiber's own call to `Cache.get` returns and registers the entry —
+      // one more scheduler turn lets that registration land.
+      yield* Effect.yieldNow
       assert.strictEqual(yield* cache.size, 1)
 
       yield* Fiber.interrupt(building)
@@ -288,8 +292,8 @@ describe('unified session catalog', () => {
       const locators = yield* SessionLocatorCache
       const original = yield* locators.get('', 999_999, '/repo', 'codex:codex-1')
       const other = yield* locators.get('', 24, '/repo', 'codex:codex-1')
-      assert.strictEqual(original?.source, 'codex')
-      assert.strictEqual(other, undefined)
+      assert.strictEqual(Option.getOrThrow(original).source, 'codex')
+      assert.isTrue(Option.isNone(other))
     }).pipe(Effect.provide(layer({
       [`${CODEX}/2026/07/26/rollout-codex-1.jsonl`]: {
         content: codex.rollout([
@@ -307,19 +311,18 @@ describe('unified session catalog', () => {
 
       const locators = yield* SessionLocatorCache
       const location = yield* locators.get('', 999_999, '/repo', 'codex:codex-1')
-      assert.isDefined(location)
+      assert.isTrue(Option.isSome(location))
 
       for (let index = 0; index < 7; index += 1) {
-        yield* locators.replace(`project-${index}`, index, [location!])
+        yield* locators.replace(`project-${index}`, index, [Option.getOrThrow(location)])
       }
-      assert.isDefined(yield* locators.get('', 999_999, '/repo', 'codex:codex-1'))
+      assert.isTrue(Option.isSome(yield* locators.get('', 999_999, '/repo', 'codex:codex-1')))
 
-      yield* locators.replace('project-7', 7, [location!])
-      assert.strictEqual(
+      yield* locators.replace('project-7', 7, [Option.getOrThrow(location)])
+      assert.isTrue(Option.isNone(
         yield* locators.get('project-0', 0, '/repo', 'codex:codex-1'),
-        undefined,
-      )
-      assert.isDefined(yield* locators.get('', 999_999, '/repo', 'codex:codex-1'))
+      ))
+      assert.isTrue(Option.isSome(yield* locators.get('', 999_999, '/repo', 'codex:codex-1')))
     }).pipe(Effect.provide(layer({
       [`${CODEX}/2026/07/26/rollout-codex-1.jsonl`]: codex.rollout([
         codex.sessionMeta('codex-1', { cwd: '/repo' }),

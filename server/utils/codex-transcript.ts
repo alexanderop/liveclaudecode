@@ -1,19 +1,19 @@
-import { Clock, Effect, Predicate } from 'effect'
-import type * as FileSystem from 'effect/FileSystem'
-import type * as PlatformError from 'effect/PlatformError'
+import { Clock, Effect, Predicate, Result } from 'effect'
 import {
   parseCodexPlanInput,
   parseCodexRecord,
   parseCodexSessionSource,
   parseCodexTextContent,
-  parseCodexToolArguments,
+  parseCodexToolArgumentsJson,
   parseCodexToolOutput,
+  parseCodexToolOutputJson,
   type CodexEventPayload,
   type ParsedCodexRecord,
   type CodexResponseItem,
   type CodexSessionMetaPayload,
   type CodexTurnContextPayload,
 } from '#shared/schemas/codex'
+import { FAILED_OUTCOME_STATUS_SET, PASSED_OUTCOME_STATUS_SET } from '#shared/schemas/tool-outcome'
 import type {
   CommandRun,
   CurrentActivity,
@@ -31,24 +31,25 @@ import type {
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import {
   clip,
-  findMilestones,
   resultText,
   shortPath,
   toolSummary,
 } from './transcript-content'
 import { consumeNewRecords } from './incremental-jsonl'
+import {
+  compactText,
+  type MutableFileChange,
+  pushIncident,
+  recordFileChange,
+  recordMilestones,
+  toolStatsFromCounts,
+} from './transcript-scan-core'
 
 interface CodexToolRecord {
   name: string
   summary: string
   ts: Timestamp
   input: Readonly<Record<string, unknown>>
-}
-
-interface MutableFileChange {
-  ops: number
-  tools: string[]
-  lastTs: Timestamp
 }
 
 export interface CodexSessionMetadata {
@@ -97,43 +98,35 @@ function finite(value: number | undefined): number {
   return value === undefined ? 0 : value
 }
 
-function compactText(value: unknown, limit = 240): string {
-  if (typeof value === 'string') return value.trim().replace(/\s+/g, ' ').slice(0, limit)
-  if (!Predicate.isObject(value)) return ''
-  try {
-    return JSON.stringify(value).replace(/\s+/g, ' ').slice(0, limit)
-  } catch {
-    return ''
-  }
+/**
+ * `arguments`/`input` arrive JSON-encoded. A malformed string falls back to
+ * `{}` as before, but now feeds `onMalformed` so the caller can surface it
+ * (the scan's `malformed` counter) instead of dropping it silently.
+ */
+function parseArguments(value: string, onMalformed: () => void): Readonly<Record<string, unknown>> {
+  const decoded = parseCodexToolArgumentsJson(value)
+  if (Result.isSuccess(decoded)) return decoded.success
+  onMalformed()
+  return {}
 }
 
-function parseArguments(value: string): Readonly<Record<string, unknown>> {
-  try {
-    return parseCodexToolArguments(JSON.parse(value) as unknown) || {}
-  } catch {
-    return {}
-  }
-}
-
-function explicitToolOutcome(value: unknown): boolean | null {
-  let decoded = value
-  if (typeof value === 'string') {
-    try {
-      decoded = JSON.parse(value) as unknown
-    } catch {
-      return null
-    }
-  }
-  const output = parseCodexToolOutput(decoded)
+function explicitToolOutcome(value: unknown, onMalformed: () => void): boolean | null {
+  const output = typeof value === 'string'
+    ? Result.match(parseCodexToolOutputJson(value), {
+      onSuccess: success => success,
+      onFailure: () => {
+        onMalformed()
+        return null
+      },
+    })
+    : parseCodexToolOutput(value)
   if (!output) return null
   if (output.isError === true || output.error === true) return false
   if (output.exit_code !== undefined) return output.exit_code === 0
   if (output.success !== undefined) return output.success
   const status = output.status?.trim().toLowerCase()
-  if (status && ['failed', 'error', 'denied', 'cancelled', 'canceled', 'timed_out', 'timeout'].includes(status)) {
-    return false
-  }
-  if (status && ['completed', 'success', 'succeeded', 'ok', 'passed'].includes(status)) return true
+  if (status && FAILED_OUTCOME_STATUS_SET.has(status)) return false
+  if (status && PASSED_OUTCOME_STATUS_SET.has(status)) return true
   if (output.isError === false || output.error === false) return true
   return null
 }
@@ -192,21 +185,28 @@ export class CodexTranscriptScan {
   }
 
   /** Parse the records appended since the last refresh; see consumeNewRecords. */
-  get refresh(): Effect.Effect<this, PlatformError.PlatformError, FileSystem.FileSystem> {
-    const self = this
-    return Effect.gen(function*() {
-      for (const [index, value] of yield* consumeNewRecords(self.path, self)) {
-        const parsed = parseCodexRecord(value)
-        if (!parsed.success) {
-          self.malformed += 1
-          continue
-        }
-        if (parsed.record.kind === 'unknown') self.unknown += 1
-        self.ingest(parsed.record, index)
+  readonly refresh = Effect.fn('CodexTranscriptScan.refresh')(function*(this: CodexTranscriptScan) {
+    const { records, next } = yield* consumeNewRecords(this.path, this)
+    this.line = next.line
+    this.malformed = next.malformed
+    this.mtime = next.mtime
+    this.size = next.size
+    this.bytesConsumed = next.bytesConsumed
+    this.lastLoadedMtime = next.lastLoadedMtime
+    this.lastLoadedSize = next.lastLoadedSize
+
+    for (const [index, value] of records) {
+      const parsed = parseCodexRecord(value)
+      if (!parsed.success) {
+        yield* Effect.logDebug('Skipping malformed Codex transcript record', { path: this.path, line: index })
+        this.malformed += 1
+        continue
       }
-      return self
-    })
-  }
+      if (parsed.record.kind === 'unknown') this.unknown += 1
+      this.ingest(parsed.record, index)
+    }
+    return this
+  })
 
   private ingest(record: ParsedCodexRecord, line: number): void {
     const timestamp = record.timestamp || null
@@ -275,11 +275,7 @@ export class CodexTranscriptScan {
       if (item.role === 'user') this.firstPrompt ||= normalizeSessionLabel(text)
       if (item.role === 'assistant') {
         this.finalText = text
-        for (const [title, strong] of findMilestones(text)) {
-          if (this.milestones.at(-1)?.title !== title) {
-            this.milestones.push({ title: title.slice(0, 90), ts, strong })
-          }
-        }
+        recordMilestones(this.milestones, text, ts)
       }
       return
     }
@@ -295,7 +291,7 @@ export class CodexTranscriptScan {
       const name = displayToolName(rawName)
       const id = item.call_id
       const encoded = item.type === 'function_call' ? item.arguments : item.input
-      const input = parseArguments(encoded)
+      const input = parseArguments(encoded, () => { this.malformed += 1 })
       const commandText = name === 'exec_command' && typeof input.cmd === 'string'
         ? input.cmd.trim().replace(/\s+/g, ' ').slice(0, 160)
         : ''
@@ -332,7 +328,7 @@ export class CodexTranscriptScan {
 
     const id = item.call_id
     const source = this.toolUses.get(id)
-    const outcome = explicitToolOutcome(item.output)
+    const outcome = explicitToolOutcome(item.output, () => { this.malformed += 1 })
     const error = outcome === false
     this.openTools.delete(id)
     const text = resultText(item.output)
@@ -410,11 +406,7 @@ export class CodexTranscriptScan {
     }
     if (event.type === 'agent_message') {
       this.finalText = event.message
-      for (const [title, strong] of findMilestones(event.message)) {
-        if (this.milestones.at(-1)?.title !== title) {
-          this.milestones.push({ title: title.slice(0, 90), ts, strong })
-        }
-      }
+      recordMilestones(this.milestones, event.message, ts)
       return
     }
     if (event.type === 'patch_apply_end') {
@@ -448,16 +440,11 @@ export class CodexTranscriptScan {
   }
 
   private addFile(path: string, tool: string, ts: Timestamp): void {
-    const key = shortPath(path, this.metadata.cwd || this.environment.cwd)
-    const change = this.files.get(key) || { ops: 0, tools: [], lastTs: ts }
-    change.ops += 1
-    change.lastTs = ts
-    if (!change.tools.includes(tool)) change.tools.push(tool)
-    this.files.set(key, change)
+    recordFileChange(this.files, shortPath(path, this.metadata.cwd || this.environment.cwd), tool, ts)
   }
 
   private addIncident(incident: Omit<DiagnosticIncident, 'id'>): void {
-    this.incidents.push({ ...incident, id: `${incident.line}:${incident.category}:${this.incidents.length}` })
+    pushIncident(this.incidents, incident)
   }
 
   currentActivity(): CurrentActivity | null {
@@ -509,13 +496,12 @@ export class CodexTranscriptScan {
   statsAt(now: number): TranscriptStats {
     const files: FileChange[] = Array.from(this.files, ([path, value]) => ({ path, ...value }))
       .sort((a, b) => b.ops - a.ops)
+    const { tools, reads } = toolStatsFromCounts(this.counts, READ_TOOLS)
     return {
       records: this.line,
-      tools: Object.values(this.counts).reduce((total, count) => total + count, 0),
+      tools,
       toolCounts: { ...this.counts },
-      reads: Object.entries(this.counts)
-        .filter(([name]) => READ_TOOLS.has(name))
-        .reduce((total, [, count]) => total + count, 0),
+      reads,
       errors: this.incidents.filter(incident => incident.severity === 'error').length,
       tokensOut: this.usage.out,
       firstTs: this.firstTs,

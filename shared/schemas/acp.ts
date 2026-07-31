@@ -52,36 +52,66 @@ const ContentBlockSchema = Schema.Struct({
   text: Schema.optionalKey(Schema.String),
 })
 
-const MessageChunkUpdateSchema = Schema.Struct({
-  sessionUpdate: Schema.Literals(['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk']),
+// `toTaggedUnion` requires a single literal discriminant per member, so each
+// `sessionUpdate` value gets its own struct rather than one struct sharing a
+// `Schema.Literals([...])` field across variants.
+const AgentMessageChunkSchema = Schema.Struct({
+  sessionUpdate: Schema.Literal('agent_message_chunk'),
+  content: ContentBlockSchema,
+})
+const AgentThoughtChunkSchema = Schema.Struct({
+  sessionUpdate: Schema.Literal('agent_thought_chunk'),
+  content: ContentBlockSchema,
+})
+const UserMessageChunkSchema = Schema.Struct({
+  sessionUpdate: Schema.Literal('user_message_chunk'),
   content: ContentBlockSchema,
 })
 
-const ToolCallUpdateSchema = Schema.Struct({
-  sessionUpdate: Schema.Literals(['tool_call', 'tool_call_update']),
+const toolCallFields = {
   toolCallId: Schema.String,
   title: Schema.optionalKey(Schema.String),
   kind: Schema.optionalKey(Schema.String),
   status: Schema.optionalKey(Schema.String),
-})
+}
+const ToolCallSchema = Schema.Struct({ sessionUpdate: Schema.Literal('tool_call'), ...toolCallFields })
+const ToolCallUpdateSchema = Schema.Struct({ sessionUpdate: Schema.Literal('tool_call_update'), ...toolCallFields })
 
-/** Catch-all keeps unknown variants (plan, keepalive, …) from failing decode. */
-const OtherUpdateSchema = Schema.Struct({
-  sessionUpdate: Schema.String,
-})
-
+/**
+ * Every known `session/update` variant as one discriminated union keyed on
+ * `sessionUpdate`. Unlike a plain `Schema.Union`, this excludes the raw
+ * envelope from the decoded type, so a `switch` on `sessionUpdate` narrows
+ * cleanly instead of keeping the wide "could still be anything" envelope
+ * member alive in every case.
+ */
 export const SessionUpdateSchema = Schema.Union([
-  MessageChunkUpdateSchema,
+  AgentMessageChunkSchema,
+  AgentThoughtChunkSchema,
+  UserMessageChunkSchema,
+  ToolCallSchema,
   ToolCallUpdateSchema,
-  OtherUpdateSchema,
-])
+]).pipe(Schema.toTaggedUnion('sessionUpdate'))
 export type SessionUpdate = typeof SessionUpdateSchema.Type
 
-export const SessionNotificationSchema = Schema.Struct({
-  sessionId: Schema.String,
-  update: SessionUpdateSchema,
+/** Catch-all envelope for update variants (plan, keepalive, …) we don't model yet. */
+export const SessionUpdateEnvelopeSchema = Schema.Struct({
+  sessionUpdate: Schema.String,
 })
-export type SessionNotification = typeof SessionNotificationSchema.Type
+export type SessionUpdateEnvelope = typeof SessionUpdateEnvelopeSchema.Type
+
+export type ParsedSessionUpdate =
+  | { kind: 'known', data: SessionUpdate }
+  | { kind: 'unknown', data: SessionUpdateEnvelope }
+
+export interface SessionNotification {
+  sessionId: string
+  update: ParsedSessionUpdate
+}
+
+const SessionNotificationEnvelopeSchema = Schema.Struct({
+  sessionId: Schema.String,
+  update: Schema.Unknown,
+})
 
 // -- session/request_permission (agent → client) -----------------------------
 
@@ -105,24 +135,39 @@ export type PermissionRequest = typeof PermissionRequestSchema.Type
 
 // -- Parse helpers ------------------------------------------------------------
 
-const decodeInbound = Schema.decodeUnknownResult(InboundMessageSchema, PRESERVE)
-const decodeNotification = Schema.decodeUnknownResult(SessionNotificationSchema, PRESERVE)
-const decodePermission = Schema.decodeUnknownResult(PermissionRequestSchema, PRESERVE)
-const decodeInitialize = Schema.decodeUnknownResult(InitializeResultSchema, PRESERVE)
-const decodeNewSession = Schema.decodeUnknownResult(NewSessionResultSchema, PRESERVE)
-const decodePrompt = Schema.decodeUnknownResult(PromptResultSchema, PRESERVE)
+export const parseInboundMessage = Schema.decodeUnknownResult(InboundMessageSchema, PRESERVE)
+export const parsePermissionRequest = Schema.decodeUnknownResult(PermissionRequestSchema, PRESERVE)
+export const parseInitializeResult = Schema.decodeUnknownResult(InitializeResultSchema, PRESERVE)
+export const parseNewSessionResult = Schema.decodeUnknownResult(NewSessionResultSchema, PRESERVE)
+export const parsePromptResult = Schema.decodeUnknownResult(PromptResultSchema, PRESERVE)
 
-type Parsed<T> = { success: true, value: T } | { success: false, error: Schema.SchemaError }
+const decodeNotificationEnvelope = Schema.decodeUnknownResult(SessionNotificationEnvelopeSchema, PRESERVE)
+const decodeUpdateEnvelope = Schema.decodeUnknownResult(SessionUpdateEnvelopeSchema, PRESERVE)
+const decodeKnownUpdate = Schema.decodeUnknownResult(SessionUpdateSchema, PRESERVE)
 
-function toParsed<T>(result: Result.Result<T, Schema.SchemaError>): Parsed<T> {
-  return Result.isSuccess(result)
-    ? { success: true, value: result.success }
-    : { success: false, error: result.failure }
+/**
+ * A `session/update` whose `sessionUpdate` tag we do not know yet is expected
+ * and degrades to `{ kind: 'unknown', ... }` rather than failing the
+ * notification outright — Claude/Codex/Copilot's ACP agents add variants
+ * (plan, keepalive, …) over time.
+ */
+export function parseSessionNotification(
+  value: unknown,
+): Result.Result<SessionNotification, Schema.SchemaError> {
+  const envelope = decodeNotificationEnvelope(value)
+  if (Result.isFailure(envelope)) return Result.fail(envelope.failure)
+  const updateEnvelope = decodeUpdateEnvelope(envelope.success.update)
+  if (Result.isFailure(updateEnvelope)) return Result.fail(updateEnvelope.failure)
+  if (!Object.hasOwn(SessionUpdateSchema.cases, updateEnvelope.success.sessionUpdate)) {
+    return Result.succeed({
+      sessionId: envelope.success.sessionId,
+      update: { kind: 'unknown', data: updateEnvelope.success },
+    })
+  }
+  const known = decodeKnownUpdate(envelope.success.update)
+  if (Result.isFailure(known)) return Result.fail(known.failure)
+  return Result.succeed({
+    sessionId: envelope.success.sessionId,
+    update: { kind: 'known', data: known.success },
+  })
 }
-
-export const parseInboundMessage = (value: unknown): Parsed<InboundMessage> => toParsed(decodeInbound(value))
-export const parseSessionNotification = (value: unknown): Parsed<SessionNotification> => toParsed(decodeNotification(value))
-export const parsePermissionRequest = (value: unknown): Parsed<PermissionRequest> => toParsed(decodePermission(value))
-export const parseInitializeResult = (value: unknown): Parsed<typeof InitializeResultSchema.Type> => toParsed(decodeInitialize(value))
-export const parseNewSessionResult = (value: unknown): Parsed<typeof NewSessionResultSchema.Type> => toParsed(decodeNewSession(value))
-export const parsePromptResult = (value: unknown): Parsed<typeof PromptResultSchema.Type> => toParsed(decodePrompt(value))

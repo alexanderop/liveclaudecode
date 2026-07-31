@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { $fetch, fetch, setup } from '@nuxt/test-utils/e2e'
-import type { EventsResponse, RunResponse, SessionEventsResponse, TreeResponse } from '#shared/types/run'
+import type { CostOverviewResponse, EventsResponse, RunResponse, SessionEventsResponse, TreeResponse } from '#shared/types/run'
 import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import * as fixture from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
@@ -178,6 +178,7 @@ describe('read-only API', async () => {
   it('prevents caching of every live read endpoint', async () => {
     const paths = [
       '/api/tree',
+      '/api/costs',
       `/api/run?key=${SESSION}`,
       `/api/events?key=${SESSION}&since=0`,
       `/api/session-events?key=${SESSION}`,
@@ -223,6 +224,28 @@ describe('read-only API', async () => {
       estimated: true,
     })
     expect(response.costs!.usd).toBe(0.0067998)
+  })
+
+  it('returns real cost and usage groups for each coding harness and model', async () => {
+    const response = await $fetch<CostOverviewResponse>('/api/costs')
+
+    expect(response).toMatchObject({
+      currency: 'USD',
+      estimated: true,
+      sessions: 3,
+      pricedRequests: 1,
+    })
+    expect(response.estimatedUsd).toBe(0.0067998)
+    expect(response.harnesses).toEqual([
+      expect.objectContaining({ source: 'claude', estimatedUsd: 0.0067998, sessions: 1 }),
+      expect.objectContaining({ source: 'codex', estimatedUsd: null, sessions: 1 }),
+      expect.objectContaining({ source: 'copilot', estimatedUsd: null, sessions: 1 }),
+    ])
+    expect(response.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'claude', label: 'claude-sonnet-5' }),
+      expect.objectContaining({ source: 'codex', label: 'gpt-5.6-test' }),
+    ]))
+    expect(response.usage.out).toBeGreaterThan(11)
   })
 
   it('merges root and subagent transcripts into one chronological activity stream', async () => {

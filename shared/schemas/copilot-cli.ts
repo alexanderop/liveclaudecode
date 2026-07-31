@@ -1,4 +1,5 @@
 import { Result, Schema } from 'effect'
+import { parseOrNull } from './parse'
 
 const PRESERVE = { onExcessProperty: 'preserve' } as const
 
@@ -131,113 +132,47 @@ export type CopilotCliParseResult =
   | { success: true, event: ParsedCopilotCliEvent }
   | { success: false, known: boolean }
 
-const decodeEnvelope = Schema.decodeUnknownResult(CopilotCliEventEnvelopeSchema, PRESERVE)
-const decodeSessionStart = Schema.decodeUnknownResult(CopilotCliSessionStartSchema, PRESERVE)
-const decodeUserMessage = Schema.decodeUnknownResult(CopilotCliUserMessageSchema, PRESERVE)
-const decodeAssistantMessage = Schema.decodeUnknownResult(CopilotCliAssistantMessageSchema, PRESERVE)
-const decodeModelChange = Schema.decodeUnknownResult(CopilotCliModelChangeSchema, PRESERVE)
-const decodeToolStart = Schema.decodeUnknownResult(CopilotCliToolExecutionStartSchema, PRESERVE)
-const decodeToolComplete = Schema.decodeUnknownResult(CopilotCliToolExecutionCompleteSchema, PRESERVE)
-const decodeTurnStart = Schema.decodeUnknownResult(CopilotCliTurnStartSchema, PRESERVE)
-const decodeTurnEnd = Schema.decodeUnknownResult(CopilotCliTurnEndSchema, PRESERVE)
-const decodeSessionShutdown = Schema.decodeUnknownResult(CopilotCliSessionShutdownSchema, PRESERVE)
-const decodeAbort = Schema.decodeUnknownResult(CopilotCliAbortSchema, PRESERVE)
-const decodeToolRequest = Schema.decodeUnknownResult(CopilotCliToolRequestSchema, PRESERVE)
-const decodeArguments = Schema.decodeUnknownResult(CopilotCliArgumentsSchema, PRESERVE)
-const decodeToolResult = Schema.decodeUnknownResult(CopilotCliToolResultSchema, PRESERVE)
+/**
+ * Envelope fields shared by every known event shape. Each per-type struct
+ * below decodes the *whole* wire message (not just `data`), so the tagged
+ * union can discriminate on `type` directly against the raw value.
+ */
+const eventEnvelopeFields = {
+  id: optionalString,
+  timestamp: Schema.String,
+  parentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+}
 
-const knownDecoders = {
-  'session.start': decodeSessionStart,
-  'user.message': decodeUserMessage,
-  'assistant.message': decodeAssistantMessage,
-  'session.model_change': decodeModelChange,
-  'tool.execution_start': decodeToolStart,
-  'tool.execution_complete': decodeToolComplete,
-  'assistant.turn_start': decodeTurnStart,
-  'assistant.turn_end': decodeTurnEnd,
-  'session.shutdown': decodeSessionShutdown,
-  abort: decodeAbort,
-} as const
+const CopilotCliEventSchema = Schema.Union([
+  Schema.Struct({ type: Schema.Literal('session.start'), ...eventEnvelopeFields, data: CopilotCliSessionStartSchema }),
+  Schema.Struct({ type: Schema.Literal('user.message'), ...eventEnvelopeFields, data: CopilotCliUserMessageSchema }),
+  Schema.Struct({ type: Schema.Literal('assistant.message'), ...eventEnvelopeFields, data: CopilotCliAssistantMessageSchema }),
+  Schema.Struct({ type: Schema.Literal('session.model_change'), ...eventEnvelopeFields, data: CopilotCliModelChangeSchema }),
+  Schema.Struct({ type: Schema.Literal('tool.execution_start'), ...eventEnvelopeFields, data: CopilotCliToolExecutionStartSchema }),
+  Schema.Struct({ type: Schema.Literal('tool.execution_complete'), ...eventEnvelopeFields, data: CopilotCliToolExecutionCompleteSchema }),
+  Schema.Struct({ type: Schema.Literal('assistant.turn_start'), ...eventEnvelopeFields, data: CopilotCliTurnStartSchema }),
+  Schema.Struct({ type: Schema.Literal('assistant.turn_end'), ...eventEnvelopeFields, data: CopilotCliTurnEndSchema }),
+  Schema.Struct({ type: Schema.Literal('session.shutdown'), ...eventEnvelopeFields, data: CopilotCliSessionShutdownSchema }),
+  Schema.Struct({ type: Schema.Literal('abort'), ...eventEnvelopeFields, data: CopilotCliAbortSchema }),
+]).pipe(Schema.toTaggedUnion('type'))
+
+const decodeEnvelope = Schema.decodeUnknownResult(CopilotCliEventEnvelopeSchema, PRESERVE)
+const decodeEvent = Schema.decodeUnknownResult(CopilotCliEventSchema, PRESERVE)
 
 export function parseCopilotCliEvent(value: unknown): CopilotCliParseResult {
   const envelope = decodeEnvelope(value)
   if (!Result.isSuccess(envelope)) return { success: false, known: false }
-  const { data, timestamp, type } = envelope.success
-  if (!Object.hasOwn(knownDecoders, type)) {
+  const { timestamp, type } = envelope.success
+  if (!Object.hasOwn(CopilotCliEventSchema.cases, type)) {
     return { success: true, event: { kind: 'unknown', timestamp, type } }
   }
 
-  if (type === 'session.start') {
-    const parsed = decodeSessionStart(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'user.message') {
-    const parsed = decodeUserMessage(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'assistant.message') {
-    const parsed = decodeAssistantMessage(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'session.model_change') {
-    const parsed = decodeModelChange(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'tool.execution_start') {
-    const parsed = decodeToolStart(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'tool.execution_complete') {
-    const parsed = decodeToolComplete(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'assistant.turn_start') {
-    const parsed = decodeTurnStart(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'assistant.turn_end') {
-    const parsed = decodeTurnEnd(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: 'assistant.turn_end', timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  if (type === 'session.shutdown') {
-    const parsed = decodeSessionShutdown(data)
-    return Result.isSuccess(parsed)
-      ? { success: true, event: { kind: type, timestamp, data: parsed.success } }
-      : { success: false, known: true }
-  }
-  const parsed = decodeAbort(data)
-  return Result.isSuccess(parsed)
-    ? { success: true, event: { kind: 'abort', timestamp, data: parsed.success } }
-    : { success: false, known: true }
+  const parsed = decodeEvent(value)
+  if (!Result.isSuccess(parsed)) return { success: false, known: true }
+  const { type: kind, data } = parsed.success
+  return { success: true, event: { kind, timestamp, data } as ParsedCopilotCliEvent }
 }
 
-export function parseCopilotCliToolRequest(value: unknown): CopilotCliToolRequest | null {
-  const result = decodeToolRequest(value)
-  return Result.isSuccess(result) ? result.success : null
-}
-
-export function parseCopilotCliArguments(value: unknown): Readonly<Record<string, unknown>> | null {
-  const result = decodeArguments(value)
-  return Result.isSuccess(result) ? result.success : null
-}
-
-export function parseCopilotCliToolResult(value: unknown): typeof CopilotCliToolResultSchema.Type | null {
-  const result = decodeToolResult(value)
-  return Result.isSuccess(result) ? result.success : null
-}
+export const parseCopilotCliToolRequest = parseOrNull(CopilotCliToolRequestSchema, PRESERVE)
+export const parseCopilotCliArguments = parseOrNull(CopilotCliArgumentsSchema, PRESERVE)
+export const parseCopilotCliToolResult = parseOrNull(CopilotCliToolResultSchema, PRESERVE)

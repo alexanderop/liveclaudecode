@@ -209,6 +209,15 @@ function organizeBy(value: 'project' | 'list'): void {
         <span>Needs attention</span>
         <span class="nav-count" :class="{ warning: attentionCount }">{{ attentionCount }}</span>
       </UButton>
+      <UButton
+        to="/costs"
+        class="primary-nav-item"
+        color="neutral"
+        variant="ghost"
+      >
+        <UIcon name="i-lucide-chart-no-axes-combined" />
+        <span>Costs</span>
+      </UButton>
     </nav>
 
     <section
@@ -233,6 +242,7 @@ function organizeBy(value: 'project' | 'list'): void {
       <p v-if="costs.last7DaysUsd === null">Choose a 7-day range to calculate the weekly total.</p>
       <p v-else-if="costs.unpricedRequests">{{ costs.unpricedRequests }} request{{ costs.unpricedRequests === 1 ? '' : 's' }} could not be priced.</p>
       <p>Transcript-only estimate; excludes hidden helper calls and plan billing.</p>
+      <NuxtLink to="/costs">Open cost overview <UIcon name="i-lucide-arrow-right" /></NuxtLink>
     </section>
 
     <section class="session-browser">

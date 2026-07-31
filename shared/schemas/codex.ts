@@ -1,9 +1,11 @@
 import { Result, Schema } from 'effect'
+import { NonNegativeInt, parseOrNull } from './parse'
 
 const PRESERVE = { onExcessProperty: 'preserve' } as const
 
 const optionalString = Schema.optionalKey(Schema.String)
 const optionalFinite = Schema.optionalKey(Schema.Finite)
+const optionalNonNegativeInt = Schema.optionalKey(NonNegativeInt)
 
 export const CodexRecordEnvelopeSchema = Schema.Struct({
   timestamp: Schema.optionalKey(Schema.String),
@@ -120,11 +122,11 @@ export const CodexResponseItemEnvelopeSchema = Schema.Struct({
 })
 
 export const CodexUsageSchema = Schema.Struct({
-  input_tokens: optionalFinite,
-  cached_input_tokens: optionalFinite,
-  output_tokens: optionalFinite,
-  reasoning_output_tokens: optionalFinite,
-  total_tokens: optionalFinite,
+  input_tokens: optionalNonNegativeInt,
+  cached_input_tokens: optionalNonNegativeInt,
+  output_tokens: optionalNonNegativeInt,
+  reasoning_output_tokens: optionalNonNegativeInt,
+  total_tokens: optionalNonNegativeInt,
 })
 
 export const CodexTokenCountPayloadSchema = Schema.Struct({
@@ -229,6 +231,16 @@ export const CodexPlanInputSchema = Schema.Struct({
   })),
 })
 
+/**
+ * Tool call `arguments`/`input` and `function_call_output`/`custom_tool_call_output`
+ * fields sometimes arrive as JSON-encoded strings rather than parsed values.
+ * These compose the existing structural schemas with `fromJsonString` so a
+ * malformed string surfaces as a normal decode failure instead of a raw
+ * `JSON.parse` throw the caller has to catch by hand.
+ */
+export const CodexToolArgumentsFromJsonSchema = Schema.fromJsonString(CodexToolArgumentsSchema)
+export const CodexToolOutputFromJsonSchema = Schema.fromJsonString(CodexToolOutputSchema)
+
 export type CodexSessionMetaPayload = typeof CodexSessionMetaPayloadSchema.Type
 export type CodexTurnContextPayload = typeof CodexTurnContextPayloadSchema.Type
 export type CodexResponseItem = typeof CodexResponseItemSchema.Type
@@ -309,27 +321,25 @@ export function parseCodexRecord(value: unknown): CodexParseResult {
   return { success: true, record: { kind: 'unknown', ...withTimestamp, type } }
 }
 
-export function parseCodexSessionSource(value: unknown): typeof CodexSessionSourceSchema.Type | null {
-  const result = Schema.decodeUnknownResult(CodexSessionSourceSchema, PRESERVE)(value)
-  return Result.isSuccess(result) ? result.success : null
+export const parseCodexSessionSource = parseOrNull(CodexSessionSourceSchema, PRESERVE)
+export const parseCodexTextContent = parseOrNull(CodexTextContentSchema, PRESERVE)
+export const parseCodexToolArguments = parseOrNull(CodexToolArgumentsSchema, PRESERVE)
+export const parseCodexToolOutput = parseOrNull(CodexToolOutputSchema, PRESERVE)
+export const parseCodexPlanInput = parseOrNull(CodexPlanInputSchema, PRESERVE)
+
+const decodeToolArgumentsFromJson = Schema.decodeUnknownResult(CodexToolArgumentsFromJsonSchema, PRESERVE)
+const decodeToolOutputFromJson = Schema.decodeUnknownResult(CodexToolOutputFromJsonSchema, PRESERVE)
+
+/** Decode a JSON-encoded tool-arguments string, reporting a parse failure as a `Result` failure. */
+export function parseCodexToolArgumentsJson(
+  value: string,
+): Result.Result<typeof CodexToolArgumentsSchema.Type, Schema.SchemaError> {
+  return decodeToolArgumentsFromJson(value)
 }
 
-export function parseCodexTextContent(value: unknown): typeof CodexTextContentSchema.Type | null {
-  const result = Schema.decodeUnknownResult(CodexTextContentSchema, PRESERVE)(value)
-  return Result.isSuccess(result) ? result.success : null
-}
-
-export function parseCodexToolArguments(value: unknown): typeof CodexToolArgumentsSchema.Type | null {
-  const result = Schema.decodeUnknownResult(CodexToolArgumentsSchema, PRESERVE)(value)
-  return Result.isSuccess(result) ? result.success : null
-}
-
-export function parseCodexToolOutput(value: unknown): typeof CodexToolOutputSchema.Type | null {
-  const result = Schema.decodeUnknownResult(CodexToolOutputSchema, PRESERVE)(value)
-  return Result.isSuccess(result) ? result.success : null
-}
-
-export function parseCodexPlanInput(value: unknown): typeof CodexPlanInputSchema.Type | null {
-  const result = Schema.decodeUnknownResult(CodexPlanInputSchema, PRESERVE)(value)
-  return Result.isSuccess(result) ? result.success : null
+/** Decode a JSON-encoded tool-output string, reporting a parse failure as a `Result` failure. */
+export function parseCodexToolOutputJson(
+  value: string,
+): Result.Result<typeof CodexToolOutputSchema.Type, Schema.SchemaError> {
+  return decodeToolOutputFromJson(value)
 }

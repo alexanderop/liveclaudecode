@@ -1,11 +1,8 @@
 import { join, resolve, sep } from 'node:path'
-import { Clock, Effect, Result } from 'effect'
+import { Clock, Effect, Option, Result } from 'effect'
+import * as Arr from 'effect/Array'
 import * as FileSystem from 'effect/FileSystem'
-import {
-  parseClaudeRecord,
-  parseClaudeSubagentMeta,
-  type ClaudeSubagentMeta,
-} from '#shared/schemas/claude'
+import { parseClaudeSubagentMetaJson, type ClaudeSubagentMeta } from '#shared/schemas/claude'
 import { InvalidRunKey, PromptCache, ScanCache } from './services'
 import type {
   AgentDiagnosticSummary,
@@ -18,21 +15,10 @@ import type {
   TimelineLane,
   Usage,
 } from '#shared/types/run'
-import { readHead } from './incremental-jsonl'
-import { plainText } from './transcript-content'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import {
-  FILE_CONCURRENCY,
-  makeFileDiscoveryLimiter,
-  type FileDiscoveryLimiter,
-} from './filesystem-concurrency'
+import { FILE_CONCURRENCY, FileDiscoveryLimiter, ignoreNotFound } from './filesystem-concurrency'
 import { claudeCostSample, estimateCosts, type ClaudeCostSample } from './cost'
-
-/**
- * The first prompt appears within the first records of a transcript, so only
- * this much of the file is read when labelling a session.
- */
-const FIRST_PROMPT_BYTES = 256 * 1_024
+import { addFields, byTimestamp, bySubLastDesc, freshnessCutoff, isFreshMtime, visitNodes } from './run-shared'
 
 interface CollectedItem {
   key: string
@@ -50,83 +36,51 @@ interface CollectedItems {
 
 /**
  * Subagent metadata is written separately from the transcript and may not exist
- * yet, so a missing file yields `null`. Other storage failures stay typed.
+ * yet, so a missing file yields `null`. Other storage failures stay typed. A
+ * malformed file also yields `null`, after logging why it was rejected.
  */
 const readSubagentMeta = Effect.fn('readSubagentMeta')(function*(path: string) {
   const fs = yield* FileSystem.FileSystem
   return yield* fs.readFileString(path).pipe(
-    Effect.map((raw): ClaudeSubagentMeta | null => {
-      try {
-        return parseClaudeSubagentMeta(JSON.parse(raw) as unknown)
-      } catch {
-        return null
-      }
-    }),
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.succeed(null),
-    ),
+    Effect.flatMap(raw => Result.match(parseClaudeSubagentMetaJson(raw), {
+      onSuccess: (meta): Effect.Effect<ClaudeSubagentMeta | null> => Effect.succeed(meta),
+      onFailure: error => Effect.logDebug('Failed to parse subagent meta', { path, error }).pipe(
+        Effect.as(null),
+      ),
+    })),
+    ignoreNotFound(() => Effect.succeed(null)),
   )
-})
-
-const readFirstPrompt = Effect.fn('readFirstPrompt')(function*(path: string) {
-  const raw = yield* readHead(path, FIRST_PROMPT_BYTES)
-
-  for (const line of raw.split('\n', 61)) {
-    let value: unknown
-    try {
-      value = JSON.parse(line)
-    } catch {
-      continue
-    }
-    const parsed = parseClaudeRecord(value)
-    if (!parsed.success || parsed.record.kind !== 'user') continue
-    const candidate = normalizeSessionLabel(plainText(parsed.record.data.message.content))
-    if (candidate) return candidate
-  }
-  return ''
 })
 
 export const firstPrompt = Effect.fn('firstPrompt')(function*(path: string) {
   const cache = yield* PromptCache
-  return yield* cache.get(path, readFirstPrompt(path)).pipe(
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.succeed(''),
-    ),
-  )
+  return yield* cache.get(path).pipe(ignoreNotFound(() => Effect.succeed('')))
 })
 
-const collectWithLimiter = Effect.fn('collectWithLimiter')(function*(
+export const collect = Effect.fn('collect')(function*(
   projectDirectory: string,
   maxAgeHours: number,
-  limiter: FileDiscoveryLimiter,
 ) {
   const fs = yield* FileSystem.FileSystem
+  const limiter = yield* FileDiscoveryLimiter
   const now = yield* Clock.currentTimeMillis
-  const cutoff = maxAgeHours <= 0
-    ? Number.NEGATIVE_INFINITY
-    : now - maxAgeHours * 3_600_000
+  const cutoff = freshnessCutoff(maxAgeHours, now)
   const names = (yield* limiter.withPermit(fs.readDirectory(projectDirectory)).pipe(
-    Effect.catchIf(
-      error => error.reason._tag === 'NotFound',
-      () => Effect.succeed([] as Array<string>),
-    ),
+    ignoreNotFound(() => Effect.succeed([] as Array<string>)),
   )).sort((a, b) => a.localeCompare(b))
 
   const freshFile = Effect.fn('freshFile')(function*(path: string) {
     const info = yield* limiter.withPermit(fs.stat(path))
-    if (info.type !== 'File') return false
-    return info.mtime._tag === 'Some' ? info.mtime.value.getTime() >= cutoff : true
+    return info.type === 'File' && isFreshMtime(info.mtime, cutoff)
   })
 
-  const sessions = yield* Effect.forEach(
+  const [sessionFailures, sessions] = yield* Effect.partition(
     names.filter(name => name.endsWith('.jsonl')),
-    name => Effect.result(Effect.gen(function*() {
+    name => Effect.gen(function*() {
       const path = join(projectDirectory, name)
-      if (!(yield* freshFile(path))) return null
+      if (!(yield* freshFile(path))) return Option.none<CollectedItem>()
       const sid = name.slice(0, -'.jsonl'.length)
-      return {
+      return Option.some({
         key: sid,
         path,
         kind: 'session',
@@ -136,14 +90,14 @@ const collectWithLimiter = Effect.fn('collectWithLimiter')(function*(
           yield* limiter.withPermit(firstPrompt(path)),
           sid.slice(0, 8),
         ),
-      } satisfies CollectedItem
-    })),
+      } satisfies CollectedItem)
+    }),
     { concurrency: FILE_CONCURRENCY },
   )
 
-  const subagents = yield* Effect.forEach(
+  const [subagentDirFailures, subagentDirs] = yield* Effect.partition(
     names.filter(name => !name.endsWith('.jsonl')),
-    sessionName => Effect.result(Effect.gen(function*() {
+    sessionName => Effect.gen(function*() {
       const sessionDirectory = join(projectDirectory, sessionName)
       const info = yield* limiter.withPermit(fs.stat(sessionDirectory))
       if (info.type !== 'Directory') {
@@ -151,78 +105,64 @@ const collectWithLimiter = Effect.fn('collectWithLimiter')(function*(
       }
       const subagentsDirectory = join(sessionDirectory, 'subagents')
       const subagentNames = yield* limiter.withPermit(fs.readDirectory(subagentsDirectory)).pipe(
-        Effect.catchIf(
-          error => error.reason._tag === 'NotFound',
-          () => Effect.succeed([] as Array<string>),
-        ),
+        ignoreNotFound(() => Effect.succeed([] as Array<string>)),
       )
-      const results = yield* Effect.forEach(
+      const [subagentFailures, subagents] = yield* Effect.partition(
         subagentNames.filter(name => name.endsWith('.jsonl')).sort((a, b) => a.localeCompare(b)),
-        name => Effect.result(Effect.gen(function*() {
+        name => Effect.gen(function*() {
           const path = join(subagentsDirectory, name)
-          if (!(yield* freshFile(path))) return null
+          if (!(yield* freshFile(path))) return Option.none<CollectedItem>()
           const agent = name.slice(0, -'.jsonl'.length)
           const meta = yield* limiter.withPermit(
             readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`)),
           )
-          return {
+          return Option.some({
             key: `${sessionName}/${agent}`,
             path,
             kind: 'subagent',
             sid: sessionName,
             meta,
             label: normalizeSessionLabel(meta?.description || '', agent),
-          } satisfies CollectedItem
-        })),
+          } satisfies CollectedItem)
+        }),
       )
       return {
-        items: results.flatMap(result => Result.isSuccess(result) && result.success ? [result.success] : []),
-        unreadable: results.filter(Result.isFailure).length,
+        items: Arr.getSomes(subagents),
+        unreadable: subagentFailures.length,
       } satisfies CollectedItems
-    })),
+    }),
     { concurrency: FILE_CONCURRENCY },
   )
 
   return {
     items: [
-      ...sessions.flatMap(result => Result.isSuccess(result) && result.success ? [result.success] : []),
-      ...subagents.flatMap(result => Result.isSuccess(result) ? result.success.items : []),
+      ...Arr.getSomes(sessions),
+      ...subagentDirs.flatMap(result => result.items),
     ],
-    unreadable: sessions.filter(Result.isFailure).length
-      + subagents.reduce(
-        (total, result) => total + (Result.isSuccess(result) ? result.success.unreadable : 1),
-        0,
-      ),
+    unreadable: sessionFailures.length
+      + subagentDirFailures.length
+      + subagentDirs.reduce((total, result) => total + result.unreadable, 0),
   } satisfies CollectedItems
 })
 
-export const collect = Effect.fn('collect')(function*(
-  projectDirectory: string,
-  maxAgeHours: number,
-) {
-  const limiter = yield* makeFileDiscoveryLimiter()
-  return yield* collectWithLimiter(projectDirectory, maxAgeHours, limiter)
-})
-
-const buildTreeWithLimiter = Effect.fn('buildTreeWithLimiter')(function*(
+export const buildTree = Effect.fn('buildTree')(function*(
   projectDirectory: string,
   hours: number,
-  limiter: FileDiscoveryLimiter,
 ) {
   const cache = yield* ScanCache
-  const discovery = yield* collectWithLimiter(projectDirectory, hours, limiter)
-  const scanResults = yield* Effect.forEach(
+  const limiter = yield* FileDiscoveryLimiter
+  const discovery = yield* collect(projectDirectory, hours)
+  const [unreadableScans, readable] = yield* Effect.partition(
     discovery.items,
-    item => Effect.result(limiter.withPermit(cache.get(item.path))),
+    item => Effect.map(limiter.withPermit(cache.get(item.path)), scan => ({ item, scan })),
     { concurrency: FILE_CONCURRENCY },
   )
-  const readable = scanResults.flatMap((result, index) => Result.isSuccess(result)
-    ? [{ item: discovery.items[index]!, scan: result.success }]
-    : [])
   const items = readable.map(entry => entry.item)
   const scans = readable.map(entry => entry.scan)
-  const stats = yield* Effect.forEach(scans, scan => scan.stats)
-  const costSamples = scans.flatMap(scan => scan.diagnostics().context.map(claudeCostSample))
+  const stats = yield* Effect.forEach(scans, scan => scan.stats, { concurrency: 'unbounded' })
+  const costSamples = scans.flatMap((scan, index) =>
+    scan.diagnostics().context.map(sample => claudeCostSample(sample, items[index]!.key)),
+  )
   const byKey = new Map<string, RunNode>()
 
   for (const [index, item] of items.entries()) {
@@ -279,33 +219,24 @@ const buildTreeWithLimiter = Effect.fn('buildTreeWithLimiter')(function*(
   }
 
   for (const root of roots) rollup(root)
-  roots.sort((a, b) => (b.subLast || '').localeCompare(a.subLast || ''))
+  roots.sort(bySubLastDesc)
   return {
     roots,
     byKey,
     cwd: scans.find(scan => scan.cwd)?.cwd || '',
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
-    unreadable: discovery.unreadable + scanResults.filter(Result.isFailure).length,
+    unreadable: discovery.unreadable + unreadableScans.length,
     costSamples,
   }
-})
-
-export const buildTree = Effect.fn('buildTree')(function*(
-  projectDirectory: string,
-  hours: number,
-) {
-  const limiter = yield* makeFileDiscoveryLimiter()
-  return yield* buildTreeWithLimiter(projectDirectory, hours, limiter)
 })
 
 export const buildTrees = Effect.fn('buildTrees')(function*(
   projectDirectories: ReadonlyArray<string>,
   hours: number,
 ) {
-  const limiter = yield* makeFileDiscoveryLimiter()
   return yield* Effect.forEach(
     projectDirectories,
-    directory => buildTreeWithLimiter(directory, hours, limiter),
+    directory => buildTree(directory, hours),
     { concurrency: FILE_CONCURRENCY },
   )
 })
@@ -383,17 +314,15 @@ export function rootOf(roots: RunNode[], key: string): RunNode | null {
 
 export function runPhases(root: RunNode, limit = 16): Milestone[] {
   const phases: Milestone[] = []
-  const gather = (node: RunNode): void => {
+  visitNodes(root, (node) => {
     const who = node.kind === 'subagent' ? node.label : 'main'
     phases.push(...node.milestones.map(milestone => ({ ...milestone, who })))
-    node.children.forEach(gather)
-  }
-  gather(root)
+  })
   const selected = phases.some(phase => phase.strong)
     ? phases.filter(phase => phase.strong)
     : phases
   return selected
-    .sort((a, b) => (a.ts || '').localeCompare(b.ts || ''))
+    .sort(byTimestamp)
     .slice(-limit)
 }
 
@@ -403,11 +332,7 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
 ) {
   const cache = yield* ScanCache
   const nodes: RunNode[] = []
-  const gather = (node: RunNode): void => {
-    nodes.push(node)
-    node.children.forEach(gather)
-  }
-  gather(root)
+  visitNodes(root, node => nodes.push(node))
 
   const scans = yield* Effect.forEach(
     nodes,
@@ -433,7 +358,7 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
 
   for (const [index, node] of nodes.entries()) {
     const diagnostic = scans[index]!.diagnostics()
-    costSamples.push(...diagnostic.context.map(claudeCostSample))
+    costSamples.push(...diagnostic.context.map(sample => claudeCostSample(sample)))
     const who = node.kind === 'session' ? 'Main session' : node.label
     if (node.kind === 'session') environment = diagnostic.environment
     else {
@@ -442,15 +367,8 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
       }
     }
 
-    for (const sample of diagnostic.context) {
-      usage.in += sample.usage.in
-      usage.out += sample.usage.out
-      usage.cr += sample.usage.cr
-      usage.cw += sample.usage.cw
-    }
-    for (const key of Object.keys(causal) as Array<keyof typeof causal>) {
-      causal[key] += diagnostic.causal[key]
-    }
+    for (const sample of diagnostic.context) addFields(usage, sample.usage)
+    addFields(causal, diagnostic.causal)
 
     incidents.push(...diagnostic.incidents.map(incident => ({ ...incident, who, key: node.key })))
     if (node.stoppedByUser) {
@@ -478,12 +396,8 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
       }
     }))
 
-    const agentUsage = diagnostic.context.reduce<Usage>((total, sample) => ({
-      in: total.in + sample.usage.in,
-      out: total.out + sample.usage.out,
-      cr: total.cr + sample.usage.cr,
-      cw: total.cw + sample.usage.cw,
-    }), { in: 0, out: 0, cr: 0, cw: 0 })
+    const agentUsage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
+    for (const sample of diagnostic.context) addFields(agentUsage, sample.usage)
     agents.push({
       key: node.key,
       label: who,
@@ -498,9 +412,6 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
       sidechainRecords: diagnostic.causal.sidechainRecords,
     })
   }
-
-  const byTimestamp = <T extends { ts: string | null }>(a: T, b: T): number =>
-    (a.ts || '').localeCompare(b.ts || '')
 
   return {
     incidents: incidents.sort(byTimestamp).slice(-200),

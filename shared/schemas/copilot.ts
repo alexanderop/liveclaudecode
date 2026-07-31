@@ -1,4 +1,5 @@
 import { Result, Schema } from 'effect'
+import { parseOrNull } from './parse'
 
 const PRESERVE = { onExcessProperty: 'preserve' } as const
 
@@ -59,7 +60,7 @@ const decodeLogRecord = Schema.decodeUnknownResult(CopilotLogRecordSchema, PRESE
 export function parseCopilotLogRecord(value: unknown): ParsedCopilotLogRecord {
   const envelope = decodeLogEnvelope(value)
   if (!Result.isSuccess(envelope)) return { success: false, known: false }
-  if (![0, 1, 2, 3].includes(envelope.success.kind)) {
+  if (!Object.hasOwn(CopilotLogRecordSchema.cases, String(envelope.success.kind))) {
     return { success: true, record: { kind: 'unknown', recordKind: envelope.success.kind } }
   }
   const record = decodeLogRecord(value)
@@ -232,23 +233,29 @@ export type CopilotThinkingPart = typeof CopilotThinkingPartSchema.Type
 export type CopilotToolPart = typeof CopilotToolPartSchema.Type
 export type CopilotTextEditPart = typeof CopilotTextEditPartSchema.Type
 
-const decodeSnapshot = Schema.decodeUnknownResult(CopilotSessionSnapshotSchema, PRESERVE)
-const decodeWorkspace = Schema.decodeUnknownResult(CopilotWorkspaceMetadataSchema, PRESERVE)
 const decodeResponseEnvelope = Schema.decodeUnknownResult(CopilotResponseEnvelopeSchema, PRESERVE)
 const decodeMarkdown = Schema.decodeUnknownResult(CopilotMarkdownSchema, PRESERVE)
 const decodeThinking = Schema.decodeUnknownResult(CopilotThinkingPartSchema, PRESERVE)
 const decodeTool = Schema.decodeUnknownResult(CopilotToolPartSchema, PRESERVE)
 const decodeTextEdit = Schema.decodeUnknownResult(CopilotTextEditPartSchema, PRESERVE)
-const decodeOutcome = Schema.decodeUnknownResult(CopilotToolOutcomeSchema, PRESERVE)
 
-export function parseCopilotSnapshot(value: unknown): CopilotSessionSnapshot | null {
-  const result = decodeSnapshot(value)
-  return Result.isSuccess(result) ? result.success : null
-}
+export const parseCopilotSnapshot = parseOrNull(CopilotSessionSnapshotSchema, PRESERVE)
+export const parseCopilotWorkspace = parseOrNull(CopilotWorkspaceMetadataSchema, PRESERVE)
 
-export function parseCopilotWorkspace(value: unknown): typeof CopilotWorkspaceMetadataSchema.Type | null {
-  const result = decodeWorkspace(value)
-  return Result.isSuccess(result) ? result.success : null
+/**
+ * `workspace.json` is a JSON file on disk. Composing with `fromJsonString`
+ * lets a malformed file surface as a normal decode failure instead of a raw
+ * `JSON.parse` throw the caller has to catch by hand.
+ */
+export const CopilotWorkspaceMetadataFromJsonSchema = Schema.fromJsonString(CopilotWorkspaceMetadataSchema)
+
+const decodeWorkspaceJson = Schema.decodeUnknownResult(CopilotWorkspaceMetadataFromJsonSchema, PRESERVE)
+
+/** Decode a JSON-encoded `workspace.json` string, reporting a parse failure as a `Result` failure. */
+export function parseCopilotWorkspaceJson(
+  value: string,
+): Result.Result<typeof CopilotWorkspaceMetadataSchema.Type, Schema.SchemaError> {
+  return decodeWorkspaceJson(value)
 }
 
 export type ParsedCopilotResponsePart =
@@ -290,7 +297,4 @@ export function parseCopilotResponsePart(value: unknown): ParsedCopilotResponseP
   return { kind: 'unknown', type }
 }
 
-export function parseCopilotToolOutcome(value: unknown): typeof CopilotToolOutcomeSchema.Type | null {
-  const result = decodeOutcome(value)
-  return Result.isSuccess(result) ? result.success : null
-}
+export const parseCopilotToolOutcome = parseOrNull(CopilotToolOutcomeSchema, PRESERVE)

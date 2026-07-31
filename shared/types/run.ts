@@ -43,6 +43,39 @@ export interface CostSummary extends CostEstimate {
   coverageHours: number
 }
 
+export interface CostOverviewDay {
+  date: string
+  estimatedUsd: number
+  usage: Usage
+}
+
+export interface CostOverviewGroup {
+  source: SessionSource
+  label: string
+  model: string | null
+  sessions: number
+  usage: Usage
+  estimatedUsd: number | null
+  pricedRequests: number
+  unpricedRequests: number
+  days: CostOverviewDay[]
+}
+
+export interface CostOverviewResponse {
+  now: number
+  hours: number
+  currency: 'USD'
+  estimated: true
+  estimatedUsd: number
+  pricedRequests: number
+  unpricedRequests: number
+  sessions: number
+  usage: Usage
+  harnesses: CostOverviewGroup[]
+  models: CostOverviewGroup[]
+  sources: SessionSourceStatus[]
+}
+
 export interface TranscriptEvent {
   role: 'assistant' | 'user' | 'tool' | 'system'
   kind: EventKind

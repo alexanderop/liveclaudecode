@@ -8,5 +8,5 @@ export default defineEventHandler(async (event): Promise<ChatActionResponse> => 
   const options = browserOptionsFor(event)
   const body: unknown = await readBody(event)
 
-  return runRequest(handleChatAction(options.project, options.hours, body))
+  return runRequest(event, handleChatAction(options.project, options.hours, body))
 })

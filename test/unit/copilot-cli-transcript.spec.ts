@@ -10,7 +10,7 @@ describe('Copilot CLI transcript scan', () => {
   it.effect('normalizes messages, reasoning, tools, errors, diagnostics, and session metadata', () => {
     const scan = new CopilotCliTranscriptScan(PATH, 'GitHub Copilot CLI')
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       const stats = scan.statsAt(20)
 
       assert.strictEqual(scan.supported, true)
@@ -62,7 +62,7 @@ describe('Copilot CLI transcript scan', () => {
   it.effect('defers partial trailing JSON, counts malformed records and parts, and tolerates unknown events', () => {
     const scan = new CopilotCliTranscriptScan(PATH)
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.supported, true)
       assert.strictEqual(scan.malformed, 1)
       assert.strictEqual(scan.malformedParts, 1)
@@ -82,9 +82,9 @@ describe('Copilot CLI transcript scan', () => {
     const failed = new CopilotCliTranscriptScan('/failed/events.jsonl')
     const aborted = new CopilotCliTranscriptScan('/aborted/events.jsonl')
     return Effect.gen(function*() {
-      yield* active.refresh
-      yield* failed.refresh
-      yield* aborted.refresh
+      yield* active.refresh()
+      yield* failed.refresh()
+      yield* aborted.refresh()
       assert.strictEqual(active.statsAt(20).live, true)
       assert.strictEqual(active.statsAt(20).current?.tool, 'bash')
       assert.strictEqual(failed.statsAt(20).live, false)
@@ -121,7 +121,7 @@ describe('Copilot CLI transcript scan', () => {
     ]))
     const scan = new CopilotCliTranscriptScan(PATH)
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.eventRevision, 0)
       assert.strictEqual(scan.events.length, 1)
 
@@ -130,7 +130,7 @@ describe('Copilot CLI transcript scan', () => {
         fixture.userMessage('First prompt'),
         fixture.assistantMessage({ content: 'First response' }),
       ]))
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.eventRevision, 0)
       assert.strictEqual(scan.events.length, 2)
 
@@ -138,7 +138,7 @@ describe('Copilot CLI transcript scan', () => {
         fixture.sessionStart(),
         fixture.userMessage('Replacement prompt'),
       ]))
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.eventRevision, 1)
       assert.strictEqual(scan.events[0]?.body, 'Replacement prompt')
     }).pipe(Effect.provide(file.layer))
@@ -147,7 +147,7 @@ describe('Copilot CLI transcript scan', () => {
   it.effect('rejects structurally incomplete logs without surfacing their events', () => {
     const scan = new CopilotCliTranscriptScan(PATH)
     return Effect.gen(function*() {
-      yield* scan.refresh
+      yield* scan.refresh()
       assert.strictEqual(scan.supported, false)
       assert.strictEqual(scan.structuralMalformed, 1)
       assert.deepStrictEqual(scan.events, [])
