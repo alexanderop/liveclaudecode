@@ -17,10 +17,10 @@ import { AcpAgentError, AcpConnector } from './acp-connection'
 import {
   ChatBusy,
   ChatCapacity,
-  ChatStore,
   InvalidChatAction,
   UnknownChatAgent,
 } from './chat'
+import { ChatStore } from './chat-store'
 
 /** Everything the server needs, backed by the real filesystem. */
 const ServerLayer = Layer.mergeAll(
