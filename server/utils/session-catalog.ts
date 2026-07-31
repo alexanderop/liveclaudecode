@@ -1,5 +1,5 @@
 import { basename } from 'node:path'
-import { Cache, Clock, Context, Effect, Layer, Result } from 'effect'
+import { Clock, Context, Deferred, Effect, Layer, Result } from 'effect'
 import {
   buildCodexTree,
   codexRunDiagnostics,
@@ -99,12 +99,7 @@ export type SessionEventLocation =
       copilotLocation: CopilotSessionLocation
     }
 
-interface CatalogKey {
-  readonly projectInput: string
-  readonly hours: number
-}
-
-const SESSION_CATALOG_CAPACITY = 8
+const SESSION_LOCATOR_CAPACITY = 8
 const UNASSIGNED_PROJECT = '__unassigned__'
 
 function locatorKey(project: string, key: string): string {
@@ -145,7 +140,7 @@ export class SessionLocatorCache extends Context.Service<SessionLocatorCache, {
             locatorKey(location.projectId, location.key),
             location,
           ])))
-          if (catalogs.size > SESSION_CATALOG_CAPACITY) {
+          if (catalogs.size > SESSION_LOCATOR_CAPACITY) {
             const oldest = catalogs.keys().next().value
             if (oldest !== undefined) catalogs.delete(oldest)
           }
@@ -391,33 +386,47 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
  * Deduplicates catalog builds without ever serving a stale one.
  *
  * The UI polls the tree, run, and event endpoints on overlapping timers, so
- * several requests routinely ask for the same catalog at once. A zero
- * time-to-live makes every completed build expire immediately while concurrent
- * callers still share the single in-flight build, so responses always reflect
- * the transcripts as they are on disk. Only in-flight builds ever occupy an
- * entry, so the capacity is a formality.
+ * several requests routinely ask for the same catalog at once. Entries are
+ * removed in the build finalizer, so only in-flight work is retained and every
+ * later request observes a fresh filesystem snapshot.
  */
 export class SessionCatalogCache extends Context.Service<SessionCatalogCache, {
   readonly get: (
     projectInput: string,
     hours: number,
   ) => ReturnType<typeof buildSessionCatalog>
+  /** Diagnostic ownership count; completed builds must leave this at zero. */
+  readonly size: Effect.Effect<number>
 }>()('lcc/SessionCatalogCache') {
   static readonly layer = Layer.effect(
     SessionCatalogCache,
-    Effect.gen(function*() {
-      const cache = yield* Cache.makeWith(
-        (key: CatalogKey) => buildSessionCatalog(key.projectInput, key.hours),
-        // `Cache.make` treats a literal 0 time-to-live as "not set" and would
-        // cache forever, so the duration is provided as a function instead.
-        {
-          capacity: SESSION_CATALOG_CAPACITY,
-          timeToLive: () => 0,
-          requireServicesAt: 'lookup',
-        },
-      )
+    Effect.sync(() => {
+      type BuildError = ReturnType<typeof buildSessionCatalog> extends
+        Effect.Effect<unknown, infer Error, unknown> ? Error : never
+      const inFlight = new Map<string, Deferred.Deferred<SessionCatalog, BuildError>>()
       return SessionCatalogCache.of({
-        get: (projectInput, hours) => Cache.get(cache, { projectInput, hours }),
+        get: (projectInput, hours) => Effect.uninterruptibleMask(restore =>
+          Effect.gen(function*() {
+            const key = catalogKey(projectInput, hours)
+            const candidate = yield* Deferred.make<SessionCatalog, BuildError>()
+            const selected = yield* Effect.sync(() => {
+              const existing = inFlight.get(key)
+              if (existing) return { deferred: existing, owner: false } as const
+              inFlight.set(key, candidate)
+              return { deferred: candidate, owner: true } as const
+            })
+            if (!selected.owner) return yield* restore(Deferred.await(selected.deferred))
+            return yield* restore(buildSessionCatalog(projectInput, hours)).pipe(
+              Effect.onExit(exit => Effect.gen(function*() {
+                yield* Deferred.done(candidate, exit)
+                yield* Effect.sync(() => {
+                  if (inFlight.get(key) === candidate) inFlight.delete(key)
+                })
+              })),
+            )
+          }),
+        ),
+        size: Effect.sync(() => inFlight.size),
       })
     }),
   )

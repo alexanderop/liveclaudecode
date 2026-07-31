@@ -1,5 +1,5 @@
 import { assert, describe, it } from '@effect/vitest'
-import { Effect, Layer } from 'effect'
+import { Deferred, Effect, Fiber, Layer } from 'effect'
 import { TestClock } from 'effect/testing'
 import {
   getSessionEvents,
@@ -60,6 +60,7 @@ function layer(
   tree: FakeTree,
   denied: ReadonlyArray<string> = [],
   copilotLocations?: CopilotSessionLocation[],
+  beforeRead?: (path: string) => Effect.Effect<void>,
 ) {
   return Layer.mergeAll(
     SessionCatalogCache.layer,
@@ -73,7 +74,7 @@ function layer(
     Layer.succeed(VsCodeUserDataDirectories)([VSCODE]),
     Layer.succeed(CopilotSessionStateDirectory)(COPILOT_CLI),
     Layer.succeed(WorkingDirectory)('/work'),
-    testFileSystem(tree, { denied }),
+    testFileSystem(tree, { denied, beforeRead }),
   )
 }
 
@@ -140,6 +141,91 @@ describe('unified session catalog', () => {
       const rebuilt = yield* loadSessionCatalog('', 999_999)
       assert.strictEqual(rebuilt.projects[0]?.roots[0]?.records, 2)
     }).pipe(Effect.provide(layer({ [`${CLAUDE}/repo/claude-1.jsonl`]: entry })))
+  })
+
+  it.effect('retains a catalog only while concurrent callers share its build', () => {
+    let buildStarted!: Deferred.Deferred<void>
+    let releaseBuild!: Deferred.Deferred<void>
+    const beforeRead = (path: string) => path.endsWith('/claude-1.jsonl')
+      ? Effect.gen(function*() {
+          yield* Deferred.succeed(buildStarted, undefined)
+          yield* Deferred.await(releaseBuild)
+        })
+      : Effect.void
+
+    return Effect.gen(function*() {
+      buildStarted = yield* Deferred.make<void>()
+      releaseBuild = yield* Deferred.make<void>()
+      const cache = yield* SessionCatalogCache
+      const first = yield* Effect.forkChild(loadSessionCatalog('', 999_999))
+      yield* Deferred.await(buildStarted)
+      const second = yield* Effect.forkChild(loadSessionCatalog('', 999_999))
+      yield* Effect.yieldNow
+      assert.strictEqual(yield* cache.size, 1)
+
+      yield* Deferred.succeed(releaseBuild, undefined)
+      const catalogs = yield* Effect.all([
+        Fiber.join(first),
+        Fiber.join(second),
+      ], { concurrency: 2 })
+      assert.strictEqual(catalogs[0], catalogs[1])
+      assert.strictEqual(yield* cache.size, 0)
+    }).pipe(Effect.provide(layer({
+      [`${CLAUDE}/repo/claude-1.jsonl`]: claude.transcript([
+        claude.userText('Claude session'),
+      ]),
+    }, [], undefined, beforeRead)))
+  })
+
+  it.effect('removes interrupted catalog ownership', () => {
+    let buildStarted!: Deferred.Deferred<void>
+    const beforeRead = (path: string) => path.endsWith('/claude-1.jsonl')
+      ? Effect.gen(function*() {
+          yield* Deferred.succeed(buildStarted, undefined)
+          return yield* Effect.never
+        })
+      : Effect.void
+
+    return Effect.gen(function*() {
+      buildStarted = yield* Deferred.make<void>()
+      const cache = yield* SessionCatalogCache
+      const building = yield* Effect.forkChild(loadSessionCatalog('', 999_999))
+      yield* Deferred.await(buildStarted)
+      assert.strictEqual(yield* cache.size, 1)
+
+      yield* Fiber.interrupt(building)
+      assert.strictEqual(yield* cache.size, 0)
+    }).pipe(Effect.provide(layer({
+      [`${CLAUDE}/repo/claude-1.jsonl`]: claude.transcript([
+        claude.userText('Claude session'),
+      ]),
+    }, [], undefined, beforeRead)))
+  })
+
+  it.effect('cannot orphan ownership during immediate owner interruption', () => {
+    let blockReads = true
+    const beforeRead = (path: string) => path.endsWith('/claude-1.jsonl') && blockReads
+      ? Effect.never
+      : Effect.void
+
+    return Effect.gen(function*() {
+      const cache = yield* SessionCatalogCache
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const building = yield* Effect.forkChild(loadSessionCatalog('', 999_999))
+        yield* Effect.yieldNow
+        yield* Fiber.interrupt(building)
+        assert.strictEqual(yield* cache.size, 0)
+      }
+
+      blockReads = false
+      const catalog = yield* loadSessionCatalog('', 999_999)
+      assert.strictEqual(catalog.projects[0]?.roots[0]?.key, 'claude-1')
+      assert.strictEqual(yield* cache.size, 0)
+    }).pipe(Effect.provide(layer({
+      [`${CLAUDE}/repo/claude-1.jsonl`]: claude.transcript([
+        claude.userText('Claude session'),
+      ]),
+    }, [], undefined, beforeRead)))
   })
 
   it.effect('keeps targeted event locators isolated by catalog range', () =>
