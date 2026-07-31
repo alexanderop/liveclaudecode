@@ -14,11 +14,14 @@ import { MiniMap } from '@vue-flow/minimap'
 import {
   computed,
   nextTick,
+  onActivated,
   onBeforeUnmount,
+  onDeactivated,
   onMounted,
   provide,
   ref,
   shallowRef,
+  useId,
   watch,
 } from 'vue'
 import type { DiagnosticIncident, RunNode, RunResponse } from '#shared/types/run'
@@ -57,6 +60,7 @@ const emit = defineEmits<{
 
 const canvasView = ref<HTMLElement | null>(null)
 const canvasStage = ref<HTMLElement | null>(null)
+const canvasId = `execution-canvas-${useId()}`
 const layoutDirection = ref<ExecutionDirection>('left-to-right')
 const displayMode = ref<ExecutionDetail>(DEFAULT_EXECUTION_DETAIL)
 const lens = ref<ExecutionLens>('all')
@@ -77,6 +81,7 @@ let fitWhenVisible = false
 let previousStates = new Map<string, ExecutionNodeData['state']>()
 let replayTimer: ReturnType<typeof setInterval> | undefined
 let minimapTimer: ReturnType<typeof setTimeout> | undefined
+let canvasActive = false
 
 const coordination = computed(() => analyzeCoordination(props.root || null, props.run))
 const graph = structuralComputed(
@@ -182,7 +187,8 @@ const {
   viewport,
   zoomIn,
   zoomOut,
-} = useVueFlow('execution-canvas')
+  id: flowStoreId,
+} = useVueFlow(canvasId)
 
 provide(ExecutionCanvasKey, {
   layoutDirection,
@@ -464,16 +470,37 @@ function handleVisibilityChange(): void {
   void refit()
 }
 
-onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
-onBeforeUnmount(() => {
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
+function activateCanvas(): void {
+  if (canvasActive) return
+  canvasActive = true
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  handleVisibilityChange()
+}
+
+function deactivateCanvas(): void {
+  if (canvasActive) {
+    canvasActive = false
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }
   stopPlayback()
   if (minimapTimer) clearTimeout(minimapTimer)
-})
+  minimapTimer = undefined
+  minimapVisible.value = false
+}
+
+onMounted(activateCanvas)
+onActivated(activateCanvas)
+onDeactivated(deactivateCanvas)
+onBeforeUnmount(deactivateCanvas)
 </script>
 
 <template>
-  <div ref="canvasView" class="canvas-view" @keydown.capture="handleCanvasKeydown">
+  <div
+    ref="canvasView"
+    class="canvas-view"
+    :data-flow-store-id="flowStoreId"
+    @keydown.capture="handleCanvasKeydown"
+  >
     <div v-if="!run" class="empty-state">
       <span class="empty-state-icon"><UIcon name="i-lucide-workflow" /></span>
       <h2>No session selected</h2>
@@ -581,7 +608,7 @@ onBeforeUnmount(() => {
       </div>
 
       <VueFlow
-        id="execution-canvas"
+        :id="canvasId"
         :nodes="nodes"
         :edges="edges"
         class="execution-canvas"
