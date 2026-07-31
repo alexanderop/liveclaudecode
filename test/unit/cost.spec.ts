@@ -2,7 +2,9 @@ import { DateTime } from 'effect'
 import { assert, describe, it } from '@effect/vitest'
 import {
   claudeCostSample,
+  dedupeCostSamples,
   estimateClaudeUsageCost,
+  estimateCosts,
   summarizeCosts,
 } from '../../server/utils/cost'
 
@@ -30,11 +32,91 @@ describe('Claude cost estimates', () => {
     )
   })
 
+  it('reconciles the recorded Sonnet 5 request using its one-hour cache write', () => {
+    const cost = estimateClaudeUsageCost(
+      'claude-sonnet-5',
+      { in: 2, out: 11, cr: 3_289, cw: 1_507 },
+      '2026-07-31T12:00:00.000Z',
+      {
+        cacheWrite5m: 0,
+        cacheWrite1h: 1_507,
+        serviceTier: 'standard',
+        inferenceGeo: 'not_available',
+        speed: 'standard',
+      },
+    )
+
+    assert.strictEqual(cost, 0.0067998)
+  })
+
+  it('prices five-minute and one-hour cache writes at their distinct multipliers', () => {
+    const cost = estimateClaudeUsageCost(
+      'claude-opus-5',
+      { in: 0, out: 0, cr: 0, cw: 2_000_000 },
+      '2026-07-31T12:00:00.000Z',
+      { cacheWrite5m: 1_000_000, cacheWrite1h: 1_000_000 },
+    )
+
+    assert.strictEqual(cost, 16.25)
+  })
+
+  it('normalizes invalid token counts and does not drop a valid cache breakdown', () => {
+    const cost = estimateClaudeUsageCost(
+      'claude-opus-5',
+      { in: -1, out: Number.NaN, cr: Number.POSITIVE_INFINITY, cw: 5 },
+      '2026-07-31T12:00:00.000Z',
+      { cacheWrite5m: 10, cacheWrite1h: 20 },
+    )
+
+    assert.strictEqual(cost, (10 * 6.25 + 20 * 10) / 1_000_000)
+  })
+
+  it('applies supported pricing modifiers and tool charges', () => {
+    assert.strictEqual(
+      estimateClaudeUsageCost(
+        'claude-opus-5',
+        { in: 1_000_000, out: 1_000_000, cr: 0, cw: 0 },
+        '2026-07-31T12:00:00.000Z',
+        { speed: 'fast', inferenceGeo: 'us', webSearchRequests: 2 },
+      ),
+      66.02,
+    )
+  })
+
+  it('leaves non-public service tiers and unknown modifiers unpriced', () => {
+    const usage = { in: 10, out: 5, cr: 0, cw: 0 }
+    assert.strictEqual(
+      estimateClaudeUsageCost('claude-opus-5', usage, null, { serviceTier: 'priority' }),
+      null,
+    )
+    assert.strictEqual(
+      estimateClaudeUsageCost('claude-opus-5', usage, null, { speed: 'turbo' }),
+      null,
+    )
+  })
+
   it('leaves unknown models unpriced instead of inventing a rate', () => {
     assert.strictEqual(
       estimateClaudeUsageCost('claude-future-unknown', { in: 10, out: 5, cr: 0, cw: 0 }, null),
       null,
     )
+  })
+
+  it('deduplicates repeated assistant message snapshots by their highest cost', () => {
+    const samples = [
+      { id: 'msg-1', ts: '2026-07-31T01:00:00.000Z', model: 'claude-opus-5', usd: 0.01 },
+      { id: 'msg-1', ts: '2026-07-31T01:00:01.000Z', model: 'claude-opus-5', usd: 0.03 },
+      { id: 'msg-2', ts: '2026-07-31T01:00:02.000Z', model: 'future', usd: null },
+      { ts: '2026-07-31T01:00:03.000Z', model: 'claude-opus-5', usd: 0.02 },
+    ]
+
+    assert.deepStrictEqual(dedupeCostSamples(samples), [samples[3], samples[1], samples[2]])
+    assert.deepStrictEqual(estimateCosts(samples), {
+      usd: 0.05,
+      pricedRequests: 2,
+      unpricedRequests: 1,
+      estimated: true,
+    })
   })
 
   it('summarizes UTC today and the last seven calendar days', () => {

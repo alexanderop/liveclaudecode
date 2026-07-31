@@ -290,11 +290,20 @@ describe('TranscriptScan', () => {
     Effect.gen(function*() {
       const result = yield* scanOf([
         fixture.assistant([fixture.text('retrying')], {
+          messageId: 'msg-1',
           usage: {
             input_tokens: 10,
             output_tokens: 5,
             cache_read_input_tokens: 100,
             cache_creation_input_tokens: 20,
+            cache_creation: {
+              ephemeral_5m_input_tokens: 7,
+              ephemeral_1h_input_tokens: 13,
+            },
+            server_tool_use: { web_search_requests: 2 },
+            service_tier: 'standard',
+            inference_geo: 'not_available',
+            speed: 'standard',
           },
           extra: { effort: 'high', requestId: 'req-1', isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429 },
         }),
@@ -324,6 +333,21 @@ describe('TranscriptScan', () => {
       assert.strictEqual(diagnostics.turns[0]?.durationMs, 12_000)
       assert.strictEqual(diagnostics.turns[0]?.pendingAgents, 1)
       assert.deepStrictEqual(diagnostics.context[0]?.usage, { in: 10, out: 5, cr: 100, cw: 20 })
+      assert.deepStrictEqual(diagnostics.context[0], {
+        ts: fixture.T0(),
+        model: 'claude-opus-5',
+        effort: 'high',
+        usage: { in: 10, out: 5, cr: 100, cw: 20 },
+        stopReason: null,
+        messageId: 'msg-1',
+        requestId: 'req-1',
+        cacheWrite5m: 7,
+        cacheWrite1h: 13,
+        webSearchRequests: 2,
+        serviceTier: 'standard',
+        inferenceGeo: 'not_available',
+        speed: 'standard',
+      })
       assert.strictEqual(diagnostics.compactions[0]?.trigger, 'manual')
       assert.deepStrictEqual(
         diagnostics.compactions.map(compaction => compaction.preservedMessages),

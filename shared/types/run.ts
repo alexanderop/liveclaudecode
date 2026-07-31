@@ -108,7 +108,14 @@ export interface ContextUsageSample {
   effort: string
   usage: Usage
   stopReason: string | null
+  messageId?: string
   requestId?: string
+  cacheWrite5m?: number
+  cacheWrite1h?: number
+  webSearchRequests?: number
+  serviceTier?: string
+  inferenceGeo?: string
+  speed?: string
 }
 
 export interface CompactionEvent {

@@ -32,11 +32,25 @@ const baseFields = {
 
 // -- Content blocks ---------------------------------------------------------
 
+export const ClaudeCacheCreationSchema = Schema.Struct({
+  ephemeral_5m_input_tokens: Schema.optionalKey(Schema.Finite),
+  ephemeral_1h_input_tokens: Schema.optionalKey(Schema.Finite),
+})
+
+export const ClaudeServerToolUseSchema = Schema.Struct({
+  web_search_requests: Schema.optionalKey(Schema.Finite),
+})
+
 export const ClaudeUsageSchema = Schema.Struct({
   input_tokens: Schema.optionalKey(Schema.Finite),
   output_tokens: Schema.optionalKey(Schema.Finite),
   cache_read_input_tokens: Schema.optionalKey(Schema.Finite),
   cache_creation_input_tokens: Schema.optionalKey(Schema.Finite),
+  cache_creation: Schema.optionalKey(ClaudeCacheCreationSchema),
+  server_tool_use: Schema.optionalKey(ClaudeServerToolUseSchema),
+  service_tier: Schema.optionalKey(Schema.String),
+  inference_geo: Schema.optionalKey(Schema.String),
+  speed: Schema.optionalKey(Schema.String),
 })
 
 export const ClaudeTextBlockSchema = Schema.Struct({

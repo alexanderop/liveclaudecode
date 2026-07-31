@@ -33,7 +33,23 @@ fixture.writeTranscript(join(directory, `${SESSION}.jsonl`), [
   fixture.assistant([
     fixture.text('**Wave 1**'),
     fixture.tool('Agent', 'spawn-a', { description: 'slice A' }),
-  ], { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 20 } }),
+  ], {
+    model: 'claude-sonnet-5',
+    messageId: 'msg-cost-e2e',
+    usage: {
+      input_tokens: 2,
+      output_tokens: 11,
+      cache_read_input_tokens: 3_289,
+      cache_creation_input_tokens: 1_507,
+      cache_creation: {
+        ephemeral_5m_input_tokens: 0,
+        ephemeral_1h_input_tokens: 1_507,
+      },
+      service_tier: 'standard',
+      inference_geo: 'not_available',
+      speed: 'standard',
+    },
+  }),
   fixture.system('turn_duration', { durationMs: 4_000, messageCount: 2 }),
 ])
 fixture.writeSubagent(join(directory, SESSION), 'agent-a', [
@@ -206,7 +222,7 @@ describe('read-only API', async () => {
       unpricedRequests: 0,
       estimated: true,
     })
-    expect(response.costs!.usd).toBeGreaterThan(0)
+    expect(response.costs!.usd).toBe(0.0067998)
   })
 
   it('merges root and subagent transcripts into one chronological activity stream', async () => {
@@ -238,7 +254,8 @@ describe('read-only API', async () => {
     expect(response.diagnostics.cost).toMatchObject({ pricedRequests: 1, estimated: true })
     expect(response.phases.map(phase => phase.title)).toEqual(['Wave 1'])
     expect(response.diagnostics.turns[0]?.durationMs).toBe(4_000)
-    expect(response.diagnostics.usage).toMatchObject({ in: 10, out: 5, cr: 20 })
+    expect(response.diagnostics.usage).toMatchObject({ in: 2, out: 11, cr: 3_289, cw: 1_507 })
+    expect(response.diagnostics.cost?.usd).toBe(0.0067998)
     expect(response.diagnostics.agents).toHaveLength(2)
   })
 

@@ -15,6 +15,7 @@ export function assistant(
     ts?: string
     usage?: RecordValue
     model?: string
+    messageId?: string
     stopReason?: string | null
     extra?: RecordValue
   } = {},
@@ -24,6 +25,7 @@ export function assistant(
     model: options.model || 'claude-opus-5',
   }
   if (options.usage) message.usage = options.usage
+  if (options.messageId) message.id = options.messageId
   if (options.stopReason !== undefined) message.stop_reason = options.stopReason
   return record({ type: 'assistant', timestamp: options.ts || T0(), message, ...options.extra })
 }

@@ -11,6 +11,34 @@ const hydrationPatterns = [
   'Hydration style mismatch',
 ]
 
+test('shows the today-versus-week cost estimate and its billing limits', async ({ page }) => {
+  await page.route('**/api/tree**', async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    body.costs = {
+      currency: 'USD',
+      usd: 4.7,
+      todayUsd: 1.23,
+      last7DaysUsd: 4.7,
+      coverageHours: 168,
+      pricedRequests: 12,
+      unpricedRequests: 0,
+      estimated: true,
+    }
+    await route.fulfill({ response, json: body })
+  })
+
+  await page.goto('/', { waitUntil: 'networkidle' })
+
+  const costs = page.getByRole('region', { name: 'Estimated Claude API cost' })
+  await expect(costs).toBeVisible()
+  await expect(costs).toContainText('Today$1.23')
+  await expect(costs).toContainText('Last 7 days$4.70')
+  await expect(costs).toContainText(
+    'Transcript-only estimate; excludes hidden helper calls and plan billing.',
+  )
+})
+
 test('hydrates the synthetic dashboard and supports its primary keyboard workflow', async ({
   page,
   baseURL,

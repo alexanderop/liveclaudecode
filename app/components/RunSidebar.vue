@@ -231,7 +231,8 @@ function organizeBy(value: 'project' | 'list'): void {
         </div>
       </dl>
       <p v-if="costs.last7DaysUsd === null">Choose a 7-day range to calculate the weekly total.</p>
-      <p v-else-if="costs.unpricedRequests">{{ costs.unpricedRequests }} request{{ costs.unpricedRequests === 1 ? '' : 's' }} had an unknown model price.</p>
+      <p v-else-if="costs.unpricedRequests">{{ costs.unpricedRequests }} request{{ costs.unpricedRequests === 1 ? '' : 's' }} could not be priced.</p>
+      <p>Transcript-only estimate; excludes hidden helper calls and plan billing.</p>
     </section>
 
     <section class="session-browser">

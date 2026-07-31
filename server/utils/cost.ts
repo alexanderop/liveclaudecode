@@ -10,13 +10,24 @@ interface CostRates {
   input: number
   output: number
   cacheRead: number
-  cacheWrite: number
+  cacheWrite5m: number
+  cacheWrite1h: number
+}
+
+export interface ClaudePricingContext {
+  cacheWrite5m?: number
+  cacheWrite1h?: number
+  webSearchRequests?: number
+  serviceTier?: string
+  inferenceGeo?: string
+  speed?: string
 }
 
 export interface ClaudeCostSample {
   ts: string | null
   model: string
   usd: number | null
+  id?: string
 }
 
 const MTOK = 1_000_000
@@ -26,9 +37,9 @@ function rates(
   input: number,
   output: number,
   cacheRead = input * 0.1,
-  cacheWrite = input * 1.25,
+  cacheWrite5m = input * 1.25,
 ): CostRates {
-  return { input, output, cacheRead, cacheWrite }
+  return { input, output, cacheRead, cacheWrite5m, cacheWrite1h: input * 2 }
 }
 
 function isAtOrAfter(timestamp: string | null, boundary: DateTime.Utc): boolean {
@@ -43,8 +54,18 @@ function isAtOrAfter(timestamp: string | null, boundary: DateTime.Utc): boolean 
  * Claude transcript model ids use both `claude-opus-4-5` and legacy
  * `claude-3-5-sonnet` ordering, so the matcher intentionally handles both.
  */
-export function claudeCostRates(model: string, timestamp: string | null): CostRates | null {
+export function claudeCostRates(
+  model: string,
+  timestamp: string | null,
+  speed = 'standard',
+): CostRates | null {
   const id = model.toLowerCase()
+
+  if (speed === 'fast') {
+    if (id.includes('opus-5') || /opus-4-8(?:-|$)/.test(id)) return rates(10, 50)
+    return null
+  }
+  if (speed && speed !== 'standard') return null
 
   if (id.includes('fable-5') || id.includes('mythos-5')) return rates(10, 50)
 
@@ -79,27 +100,77 @@ export function estimateClaudeUsageCost(
   model: string,
   usage: Usage,
   timestamp: string | null,
+  context: ClaudePricingContext = {},
 ): number | null {
-  const price = claudeCostRates(model, timestamp)
+  if (context.serviceTier
+    && !['standard', 'auto', 'standard_only'].includes(context.serviceTier)) return null
+  if (context.inferenceGeo
+    && !['global', 'not_available', 'us'].includes(context.inferenceGeo)) return null
+
+  const price = claudeCostRates(model, timestamp, context.speed)
   if (!price) return null
-  return (
-    usage.in * price.input
-    + usage.out * price.output
-    + usage.cr * price.cacheRead
-    + usage.cw * price.cacheWrite
+
+  const tokens = (value: number | undefined): number =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+  const cacheWrite1h = tokens(context.cacheWrite1h)
+  const reportedCacheWrite5m = tokens(context.cacheWrite5m)
+  const totalCacheWrite = Math.max(
+    tokens(usage.cw),
+    cacheWrite1h + reportedCacheWrite5m,
+  )
+  // Older transcripts only contain the aggregate. Treat the unexplained
+  // remainder as a five-minute write, the least surprising legacy behavior.
+  const cacheWrite5m = Math.max(0, totalCacheWrite - cacheWrite1h)
+  const tokenCost = (
+    tokens(usage.in) * price.input
+    + tokens(usage.out) * price.output
+    + tokens(usage.cr) * price.cacheRead
+    + cacheWrite5m * price.cacheWrite5m
+    + cacheWrite1h * price.cacheWrite1h
   ) / MTOK
+  const geoMultiplier = context.inferenceGeo === 'us' ? 1.1 : 1
+  const webSearchCost = tokens(context.webSearchRequests) * 0.01
+  return tokenCost * geoMultiplier + webSearchCost
 }
 
 export function claudeCostSample(sample: ContextUsageSample): ClaudeCostSample {
   return {
     ts: sample.ts,
     model: sample.model,
-    usd: estimateClaudeUsageCost(sample.model, sample.usage, sample.ts),
+    usd: estimateClaudeUsageCost(sample.model, sample.usage, sample.ts, sample),
+    ...(sample.messageId || sample.requestId
+      ? { id: sample.messageId || sample.requestId }
+      : {}),
   }
 }
 
+/**
+ * Claude Code can persist multiple snapshots of one assistant message. Its SDK
+ * cost guidance says to count a message id once and keep the final/highest
+ * usage snapshot.
+ */
+export function dedupeCostSamples(
+  samples: ReadonlyArray<ClaudeCostSample>,
+): ClaudeCostSample[] {
+  const unkeyed: ClaudeCostSample[] = []
+  const keyed = new Map<string, ClaudeCostSample>()
+  for (const sample of samples) {
+    if (!sample.id) {
+      unkeyed.push(sample)
+      continue
+    }
+    const previous = keyed.get(sample.id)
+    if (!previous
+      || (sample.usd ?? -1) > (previous.usd ?? -1)
+      || (sample.usd === previous.usd && (sample.ts || '') > (previous.ts || ''))) {
+      keyed.set(sample.id, sample)
+    }
+  }
+  return [...unkeyed, ...keyed.values()]
+}
+
 export function estimateCosts(samples: ReadonlyArray<ClaudeCostSample>): CostEstimate {
-  return samples.reduce<CostEstimate>((total, sample) => {
+  return dedupeCostSamples(samples).reduce<CostEstimate>((total, sample) => {
     if (sample.usd === null) total.unpricedRequests += 1
     else {
       total.usd += sample.usd
@@ -124,7 +195,7 @@ export function summarizeCosts(
   const coverageStart = coverageHours <= 0
     ? Number.NEGATIVE_INFINITY
     : nowMillis - coverageHours * 3_600_000
-  const coveredSamples = samples.filter((sample) => {
+  const coveredSamples = dedupeCostSamples(samples).filter((sample) => {
     const timestamp = sampleMillis(sample)
     return timestamp !== null && timestamp >= coverageStart && timestamp <= nowMillis
   })

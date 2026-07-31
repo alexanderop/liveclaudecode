@@ -92,6 +92,9 @@ describe('RunSidebar', () => {
     expect(component.text()).toContain('Test server for bugs')
     expect(component.get('.sidebar-cost-summary').text()).toContain('Today$1.23')
     expect(component.get('.sidebar-cost-summary').text()).toContain('Last 7 days$4.70')
+    expect(component.get('.sidebar-cost-summary').text()).toContain(
+      'Transcript-only estimate; excludes hidden helper calls and plan billing.',
+    )
     expect(component.findAll('.primary-nav-item').map(item => item.attributes('aria-pressed'))).toEqual([
       'true',
       'false',

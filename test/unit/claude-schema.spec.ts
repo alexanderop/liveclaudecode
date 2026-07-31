@@ -23,7 +23,18 @@ describe('Claude on-disk schemas', () => {
           name: 'FutureTool',
           input: { value: 1 },
         }],
-        usage: { output_tokens: 12, futureUsageField: 3 },
+        usage: {
+          output_tokens: 12,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 4,
+            ephemeral_1h_input_tokens: 8,
+          },
+          server_tool_use: { web_search_requests: 2 },
+          service_tier: 'standard',
+          inference_geo: 'not_available',
+          speed: 'standard',
+          futureUsageField: 3,
+        },
       },
     })
 
@@ -32,6 +43,11 @@ describe('Claude on-disk schemas', () => {
     expect(parsed.record.data.attributionSkill).toBe('frontend-design')
     expect(parsed.record.data.futureTopLevelField).toEqual({ enabled: true })
     expect(parsed.record.data.message.usage?.futureUsageField).toBe(3)
+    expect(parsed.record.data.message.usage?.cache_creation).toEqual({
+      ephemeral_5m_input_tokens: 4,
+      ephemeral_1h_input_tokens: 8,
+    })
+    expect(parsed.record.data.message.usage?.server_tool_use?.web_search_requests).toBe(2)
   })
 
   it('rejects a malformed record of a known type', () => {

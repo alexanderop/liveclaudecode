@@ -298,6 +298,8 @@ export class TranscriptScan {
         ? [{ type: 'text', text: rawContent }]
         : []
     const usageRecord = message.usage || {}
+    const cacheCreation = usageRecord.cache_creation
+    const serverToolUse = usageRecord.server_tool_use
     this.tokensOut += asNumber(usageRecord.output_tokens)
     const usage = {
       in: asNumber(usageRecord.input_tokens),
@@ -312,7 +314,20 @@ export class TranscriptScan {
         effort: record.effort || '',
         usage,
         stopReason: message.stop_reason ?? null,
+        ...(message.id ? { messageId: message.id } : {}),
         ...(record.requestId ? { requestId: record.requestId } : {}),
+        ...(cacheCreation?.ephemeral_5m_input_tokens !== undefined
+          ? { cacheWrite5m: asNumber(cacheCreation.ephemeral_5m_input_tokens) }
+          : {}),
+        ...(cacheCreation?.ephemeral_1h_input_tokens !== undefined
+          ? { cacheWrite1h: asNumber(cacheCreation.ephemeral_1h_input_tokens) }
+          : {}),
+        ...(serverToolUse?.web_search_requests !== undefined
+          ? { webSearchRequests: asNumber(serverToolUse.web_search_requests) }
+          : {}),
+        ...(usageRecord.service_tier ? { serviceTier: usageRecord.service_tier } : {}),
+        ...(usageRecord.inference_geo ? { inferenceGeo: usageRecord.inference_geo } : {}),
+        ...(usageRecord.speed ? { speed: usageRecord.speed } : {}),
       })
     }
     if (record.isApiErrorMessage || record.error) {
