@@ -1,11 +1,13 @@
 import { assert, describe, it } from '@effect/vitest'
-import { Effect, Layer, Result } from 'effect'
+import { Deferred, Effect, Fiber, Layer, Result } from 'effect'
 import { AcpConnector, type AcpConnectionOptions } from '#server/utils/acp-connection'
 import {
   ChatAgentCommands,
   ChatStore,
+  cancelChat,
   chatAgentCommandsFromEnv,
   pollChatEvents,
+  resetChat,
   sendChatMessage,
 } from '#server/utils/chat'
 import { parseChatAction } from '#shared/schemas/chat'
@@ -26,8 +28,12 @@ import { testFileSystem } from '../fixtures/filesystem'
 const CODEX = '/codex/sessions'
 const TRANSCRIPT = `${CODEX}/2026/07/28/rollout-chat-run.jsonl`
 
-function chatLayer(prompts: unknown[], connections: AcpConnectionOptions[] = []) {
-  const connector = AcpConnector.of({
+function chatLayer(
+  prompts: unknown[],
+  connections: AcpConnectionOptions[] = [],
+  connectorOverride?: AcpConnector['Service'],
+) {
+  const connector = connectorOverride ?? AcpConnector.of({
     connect: (options: AcpConnectionOptions) => Effect.sync(() => {
       connections.push(options)
       return {
@@ -194,5 +200,285 @@ describe('session chat', () => {
         ],
       }), 'allow')
     }).pipe(Effect.provide(chatLayer(prompts, connections)))
+  })
+
+  it.effect('atomically rejects one of two concurrent sends', () => {
+    const prompts: unknown[] = []
+    let promptStarted!: Deferred.Deferred<void>
+    let releasePrompt!: Deferred.Deferred<void>
+    const connector = AcpConnector.of({
+      connect: () => Effect.succeed({
+        request: (method, params) => Effect.gen(function*() {
+          if (method === 'initialize') return { protocolVersion: 1 }
+          if (method === 'session/new') return { sessionId: 'concurrent-session' }
+          if (method === 'session/prompt') {
+            prompts.push(params)
+            yield* Deferred.succeed(promptStarted, undefined)
+            yield* Deferred.await(releasePrompt)
+            return { stopReason: 'end_turn' }
+          }
+          return {}
+        }),
+        notify: () => Effect.void,
+      }),
+    })
+    return Effect.gen(function*() {
+      promptStarted = yield* Deferred.make<void>()
+      releasePrompt = yield* Deferred.make<void>()
+
+      const sends = yield* Effect.all([
+        Effect.result(sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'First')),
+        Effect.result(sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Second')),
+      ], { concurrency: 2 })
+      yield* Deferred.await(promptStarted)
+
+      assert.strictEqual(sends.filter(Result.isSuccess).length, 1)
+      const rejected = sends.find(Result.isFailure)
+      assert.isTrue(Result.isFailure(rejected!))
+      if (Result.isFailure(rejected!)) assert.strictEqual(rejected.failure._tag, 'ChatBusy')
+
+      yield* Deferred.succeed(releasePrompt, undefined)
+      const response = yield* waitForIdle('/repo', 'codex:chat-run')
+      assert.strictEqual(response.events.filter(event => event.kind === 'user').length, 1)
+      assert.strictEqual(prompts.length, 1)
+    }).pipe(Effect.provide(chatLayer(prompts, [], connector)))
+  })
+
+  it.effect('interrupts a starting turn before resetting its chat', () => {
+    let interrupted = false
+    let connectStarted!: Deferred.Deferred<void>
+    const connector = AcpConnector.of({
+      connect: () => Effect.gen(function*() {
+        yield* Deferred.succeed(connectStarted, undefined)
+        return yield* Effect.never
+      }).pipe(Effect.onInterrupt(() => Effect.sync(() => { interrupted = true }))),
+    })
+    return Effect.gen(function*() {
+      connectStarted = yield* Deferred.make<void>()
+
+      const accepted = yield* sendChatMessage(
+        '',
+        999_999,
+        '/repo',
+        'codex:chat-run',
+        'codex',
+        'Start slowly',
+      )
+      assert.strictEqual(accepted.status, 'starting')
+      yield* Deferred.await(connectStarted)
+
+      const reset = yield* resetChat('/repo', 'codex:chat-run')
+      assert.strictEqual(reset.status, 'idle')
+      assert.isTrue(interrupted)
+
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 1, 1)
+      assert.strictEqual(response.status, 'idle')
+      assert.deepStrictEqual(response.events, [])
+      assert.isTrue(response.reset)
+    }).pipe(Effect.provide(chatLayer([], [], connector)))
+  })
+
+  it.effect('cancels and cleans up an agent that is still starting', () => {
+    let interrupted = false
+    let connectStarted!: Deferred.Deferred<void>
+    const connector = AcpConnector.of({
+      connect: () => Effect.gen(function*() {
+        yield* Deferred.succeed(connectStarted, undefined)
+        return yield* Effect.never
+      }).pipe(Effect.onInterrupt(() => Effect.sync(() => { interrupted = true }))),
+    })
+    return Effect.gen(function*() {
+      connectStarted = yield* Deferred.make<void>()
+
+      yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Start slowly')
+      yield* Deferred.await(connectStarted)
+      const cancelled = yield* cancelChat('/repo', 'codex:chat-run')
+
+      assert.strictEqual(cancelled.status, 'idle')
+      assert.isTrue(interrupted)
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
+      assert.deepStrictEqual(response.events.map(event => event.kind), ['user', 'turn-end'])
+      assert.strictEqual(
+        response.events.find(event => event.kind === 'turn-end')?.stopReason,
+        'cancelled',
+      )
+    }).pipe(Effect.provide(chatLayer([], [], connector)))
+  })
+
+  it.effect('claims concurrent cancellations only once', () => {
+    let promptStarted!: Deferred.Deferred<void>
+    let releasePrompt!: Deferred.Deferred<void>
+    const connector = AcpConnector.of({
+      connect: () => Effect.succeed({
+        request: (method) => Effect.gen(function*() {
+          if (method === 'initialize') return { protocolVersion: 1 }
+          if (method === 'session/new') return { sessionId: 'cancel-session' }
+          if (method === 'session/prompt') {
+            yield* Deferred.succeed(promptStarted, undefined)
+            yield* Deferred.await(releasePrompt)
+            return { stopReason: 'end_turn' }
+          }
+          return {}
+        }),
+        notify: () => Effect.void,
+      }),
+    })
+    return Effect.gen(function*() {
+      promptStarted = yield* Deferred.make<void>()
+      releasePrompt = yield* Deferred.make<void>()
+      yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Keep working')
+      yield* Deferred.await(promptStarted)
+
+      yield* Effect.all([
+        cancelChat('/repo', 'codex:chat-run'),
+        cancelChat('/repo', 'codex:chat-run'),
+      ], { concurrency: 2 })
+
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
+      const terminalEvents = response.events.filter(event => event.kind === 'turn-end')
+      assert.strictEqual(terminalEvents.length, 1)
+      assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
+    }).pipe(Effect.provide(chatLayer([], [], connector)))
+  })
+
+  it.effect('suppresses prompt completion after cancellation is claimed', () => {
+    let promptStarted!: Deferred.Deferred<void>
+    let releasePrompt!: Deferred.Deferred<void>
+    let cancelNotified!: Deferred.Deferred<void>
+    let releaseCancel!: Deferred.Deferred<void>
+    const connector = AcpConnector.of({
+      connect: () => Effect.succeed({
+        request: (method) => Effect.gen(function*() {
+          if (method === 'initialize') return { protocolVersion: 1 }
+          if (method === 'session/new') return { sessionId: 'cancel-race-session' }
+          if (method === 'session/prompt') {
+            yield* Deferred.succeed(promptStarted, undefined)
+            yield* Deferred.await(releasePrompt)
+            return { stopReason: 'end_turn' }
+          }
+          return {}
+        }),
+        notify: method => method === 'session/cancel'
+          ? Effect.gen(function*() {
+              yield* Deferred.succeed(cancelNotified, undefined)
+              yield* Deferred.await(releaseCancel)
+            })
+          : Effect.void,
+      }),
+    })
+    return Effect.gen(function*() {
+      promptStarted = yield* Deferred.make<void>()
+      releasePrompt = yield* Deferred.make<void>()
+      cancelNotified = yield* Deferred.make<void>()
+      releaseCancel = yield* Deferred.make<void>()
+      yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Keep working')
+      yield* Deferred.await(promptStarted)
+
+      const cancelling = yield* Effect.forkChild(cancelChat('/repo', 'codex:chat-run'))
+      yield* Deferred.await(cancelNotified)
+      yield* Deferred.succeed(releasePrompt, undefined)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(releaseCancel, undefined)
+      yield* Fiber.join(cancelling)
+
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
+      const terminalEvents = response.events.filter(event => event.kind === 'turn-end')
+      assert.strictEqual(response.status, 'idle')
+      assert.strictEqual(terminalEvents.length, 1)
+      assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
+    }).pipe(Effect.provide(chatLayer([], [], connector)))
+  })
+
+  it.effect('finishes cancellation cleanup when the cancel action is interrupted', () => {
+    let promptStarted!: Deferred.Deferred<void>
+    let cancelNotified!: Deferred.Deferred<void>
+    let turnInterrupted = false
+    const connector = AcpConnector.of({
+      connect: () => Effect.succeed({
+        request: method => {
+          if (method === 'initialize') return Effect.succeed({ protocolVersion: 1 })
+          if (method === 'session/new') return Effect.succeed({ sessionId: 'interrupt-cancel' })
+          if (method === 'session/prompt') {
+            return Effect.gen(function*() {
+              yield* Deferred.succeed(promptStarted, undefined)
+              return yield* Effect.never
+            }).pipe(Effect.onInterrupt(() => Effect.sync(() => { turnInterrupted = true })))
+          }
+          return Effect.succeed({})
+        },
+        notify: method => method === 'session/cancel'
+          ? Effect.gen(function*() {
+              yield* Deferred.succeed(cancelNotified, undefined)
+              return yield* Effect.never
+            })
+          : Effect.void,
+      }),
+    })
+    return Effect.gen(function*() {
+      promptStarted = yield* Deferred.make<void>()
+      cancelNotified = yield* Deferred.make<void>()
+      yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Keep working')
+      yield* Deferred.await(promptStarted)
+
+      const cancelling = yield* Effect.forkChild(cancelChat('/repo', 'codex:chat-run'))
+      yield* Deferred.await(cancelNotified)
+      yield* Fiber.interrupt(cancelling)
+
+      assert.isTrue(turnInterrupted)
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
+      const terminalEvents = response.events.filter(event => event.kind === 'turn-end')
+      assert.strictEqual(response.status, 'idle')
+      assert.strictEqual(terminalEvents.length, 1)
+      assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
+    }).pipe(Effect.provide(chatLayer([], [], connector)))
+  })
+
+  it.effect('finishes reset cleanup when the reset action is interrupted', () => {
+    let promptStarted!: Deferred.Deferred<void>
+    let turnCleanupStarted!: Deferred.Deferred<void>
+    let releaseTurnCleanup!: Deferred.Deferred<void>
+    let connectionClosed = false
+    const connector = AcpConnector.of({
+      connect: () => Effect.gen(function*() {
+        yield* Effect.addFinalizer(() => Effect.sync(() => { connectionClosed = true }))
+        return {
+          request: (method: string) => {
+            if (method === 'initialize') return Effect.succeed({ protocolVersion: 1 })
+            if (method === 'session/new') return Effect.succeed({ sessionId: 'interrupt-reset' })
+            if (method === 'session/prompt') {
+              return Effect.gen(function*() {
+                yield* Deferred.succeed(promptStarted, undefined)
+                return yield* Effect.never
+              }).pipe(Effect.onInterrupt(() => Effect.gen(function*() {
+                yield* Deferred.succeed(turnCleanupStarted, undefined)
+                yield* Deferred.await(releaseTurnCleanup)
+              })))
+            }
+            return Effect.succeed({})
+          },
+          notify: () => Effect.void,
+        }
+      }),
+    })
+    return Effect.gen(function*() {
+      promptStarted = yield* Deferred.make<void>()
+      turnCleanupStarted = yield* Deferred.make<void>()
+      releaseTurnCleanup = yield* Deferred.make<void>()
+      yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Keep working')
+      yield* Deferred.await(promptStarted)
+
+      const resetting = yield* Effect.forkChild(resetChat('/repo', 'codex:chat-run'))
+      yield* Deferred.await(turnCleanupStarted)
+      const interrupting = yield* Effect.forkChild(Fiber.interrupt(resetting))
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(releaseTurnCleanup, undefined)
+      yield* Fiber.join(interrupting)
+
+      assert.isTrue(connectionClosed)
+      const response = yield* pollChatEvents('/repo', 'codex:chat-run', 1, 1)
+      assert.strictEqual(response.status, 'idle')
+      assert.deepStrictEqual(response.events, [])
+      assert.isTrue(response.reset)
+    }).pipe(Effect.provide(chatLayer([], [], connector)))
   })
 })

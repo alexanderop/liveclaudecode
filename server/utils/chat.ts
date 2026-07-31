@@ -1,5 +1,5 @@
 import { dirname } from 'node:path'
-import { Context, Effect, Exit, Layer, Result, Schema, Scope } from 'effect'
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Scope } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import { AcpAgentError, AcpConnector, type AcpConnection } from './acp-connection'
 import { pathFor } from './runs'
@@ -110,6 +110,7 @@ export interface ChatRecord {
   agent: ChatAgentId
   status: ChatStatus
   revision: number
+  generation: number
   /** Index of `events[0]` in the chat's full history; grows when trimmed. */
   base: number
   events: ChatEvent[]
@@ -118,12 +119,42 @@ export interface ChatRecord {
   sessionId: string | null
   /** Whether the transcript preamble has been sent on this ACP session. */
   primed: boolean
+  /** The currently starting or prompting turn, owned by this record. */
+  turn: Fiber.Fiber<void, never> | null
 }
+
+type ChatReservation =
+  | { readonly _tag: 'Busy' }
+  | {
+      readonly _tag: 'Reserved'
+      readonly record: ChatRecord
+      readonly generation: number
+    }
+
+type ChatCancellation =
+  | { readonly _tag: 'Inactive', readonly status: ChatStatus }
+  | {
+      readonly _tag: 'Claimed'
+      readonly record: ChatRecord
+      readonly generation: number
+      readonly turn: Fiber.Fiber<void, never>
+    }
 
 /** Live chats keyed by `${project}\0${key}`, scoped to the provided Layer. */
 export class ChatStore extends Context.Service<ChatStore, {
   readonly get: (chatKey: string) => Effect.Effect<ChatRecord | undefined>
-  readonly set: (chatKey: string, record: ChatRecord) => Effect.Effect<void>
+  readonly reserve: (
+    chatKey: string,
+    agent: ChatAgentId,
+    text: string,
+  ) => Effect.Effect<ChatReservation>
+  readonly attach: (
+    chatKey: string,
+    record: ChatRecord,
+    generation: number,
+    turn: Fiber.Fiber<void, never>,
+  ) => Effect.Effect<boolean>
+  readonly claimCancellation: (chatKey: string) => Effect.Effect<ChatCancellation>
   readonly remove: (chatKey: string) => Effect.Effect<ChatRecord | undefined>
 }>()('lcc/ChatStore') {
   static readonly layer = Layer.effect(
@@ -132,17 +163,80 @@ export class ChatStore extends Context.Service<ChatStore, {
       const records = new Map<string, ChatRecord>()
       yield* Effect.addFinalizer(() => Effect.forEach(
         records.values(),
-        record => record.scope ? Scope.close(record.scope, Exit.void) : Effect.void,
+        record => Effect.gen(function*() {
+          if (record.turn) yield* Fiber.interrupt(record.turn)
+          if (record.scope) yield* Scope.close(record.scope, Exit.void)
+        }),
         { discard: true },
       ))
       return ChatStore.of({
         get: chatKey => Effect.sync(() => records.get(chatKey)),
-        set: (chatKey, record) => Effect.sync(() => {
-          records.set(chatKey, record)
+        reserve: (chatKey, agent, text) => Effect.sync(() => {
+          let record = records.get(chatKey)
+          if (record && (record.status === 'busy' || record.status === 'starting')) {
+            return { _tag: 'Busy' } as const
+          }
+          if (!record) {
+            record = {
+              agent,
+              status: 'idle',
+              revision: 1,
+              generation: 0,
+              base: 0,
+              events: [],
+              scope: null,
+              connection: null,
+              sessionId: null,
+              primed: false,
+              turn: null,
+            }
+            records.set(chatKey, record)
+          } else if (record.agent !== agent) {
+            record.agent = agent
+            record.connection = null
+            record.sessionId = null
+            record.primed = false
+          }
+          record.generation += 1
+          appendEvent(record, { kind: 'user', text })
+          record.status = record.connection ? 'busy' : 'starting'
+          return {
+            _tag: 'Reserved',
+            record,
+            generation: record.generation,
+          } as const
+        }),
+        attach: (chatKey, record, generation, turn) => Effect.sync(() => {
+          if (records.get(chatKey) !== record || record.generation !== generation) return false
+          record.turn = turn
+          return true
+        }),
+        claimCancellation: chatKey => Effect.sync(() => {
+          const record = records.get(chatKey)
+          if (
+            !record
+            || (record.status !== 'busy' && record.status !== 'starting')
+            || !record.turn
+          ) {
+            return {
+              _tag: 'Inactive',
+              status: record?.status ?? 'idle',
+            } as const
+          }
+          const turn = record.turn
+          record.turn = null
+          record.generation += 1
+          return {
+            _tag: 'Claimed',
+            record,
+            generation: record.generation,
+            turn,
+          } as const
         }),
         remove: chatKey => Effect.sync(() => {
           const record = records.get(chatKey)
           records.delete(chatKey)
+          if (record) record.generation += 1
           return record
         }),
       })
@@ -177,8 +271,9 @@ function isAgentLaunchNotice(agent: ChatAgentId, text: string): boolean {
   return agent === 'copilot' && text.startsWith('Info: Disabled tools: ')
 }
 
-function chatUpdateHandler(record: ChatRecord) {
+function chatUpdateHandler(record: ChatRecord, generation: number) {
   return (notification: SessionNotification): Effect.Effect<void> => Effect.sync(() => {
+    if (record.generation !== generation) return
     if (record.sessionId !== notification.sessionId) return
     const update = notification.update
     switch (update.sessionUpdate) {
@@ -275,7 +370,12 @@ const closeChatConnection = Effect.fn('closeChatConnection')(function*(record: C
   if (scope) yield* Scope.close(scope, Exit.void)
 })
 
-const failChatTurn = Effect.fn('failChatTurn')(function*(record: ChatRecord, error: AcpAgentError) {
+const failChatTurn = Effect.fn('failChatTurn')(function*(
+  record: ChatRecord,
+  generation: number,
+  error: AcpAgentError,
+) {
+  if (record.generation !== generation) return
   appendEvent(record, { kind: 'error', message: error.message })
   record.status = 'error'
   yield* closeChatConnection(record)
@@ -301,6 +401,7 @@ const requestWithTimeout = Effect.fn('requestWithTimeout')(
 /** One prompt turn, run on a detached fiber so the HTTP request returns early. */
 const runChatTurn = Effect.fn('runChatTurn')(function*(
   record: ChatRecord,
+  generation: number,
   connector: AcpConnector['Service'],
   command: ChatAgentCommand,
   location: SessionEventLocation,
@@ -308,6 +409,8 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
   cwd: string,
   text: string,
 ) {
+  if (record.generation !== generation) return
+  if (record.scope && !record.connection) yield* closeChatConnection(record)
   let connection = record.connection
   if (!connection) {
     const scope = yield* Scope.make()
@@ -317,7 +420,7 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
       args: command.args,
       env: command.env,
       cwd,
-      onUpdate: chatUpdateHandler(record),
+      onUpdate: chatUpdateHandler(record, generation),
       permission: chatPermissionPolicy,
     }))
     record.connection = connection
@@ -359,6 +462,7 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
   }, '10 minutes')
 
   const stop = parsePromptResult(result)
+  if (record.generation !== generation) return
   appendEvent(record, { kind: 'turn-end', stopReason: stop.success ? stop.value.stopReason : 'unknown' })
   record.status = 'idle'
 })
@@ -366,6 +470,7 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
 const runChatTurnSafely = Effect.fn('runChatTurnSafely')(
   function*(
     record: ChatRecord,
+    generation: number,
     connector: AcpConnector['Service'],
     command: ChatAgentCommand,
     location: SessionEventLocation,
@@ -373,9 +478,14 @@ const runChatTurnSafely = Effect.fn('runChatTurnSafely')(
     cwd: string,
     text: string,
   ) {
-    yield* runChatTurn(record, connector, command, location, transcriptPath, cwd, text)
+    yield* runChatTurn(record, generation, connector, command, location, transcriptPath, cwd, text)
   },
-  (effect, record) => effect.pipe(Effect.catch(error => failChatTurn(record, error))),
+  (effect, record, generation) => effect.pipe(
+    Effect.catch(error => failChatTurn(record, generation, error)),
+    Effect.ensuring(Effect.sync(() => {
+      if (record.generation === generation) record.turn = null
+    })),
+  ),
 )
 
 export const sendChatMessage = Effect.fn('sendChatMessage')(function*(
@@ -393,11 +503,6 @@ export const sendChatMessage = Effect.fn('sendChatMessage')(function*(
   if (!command) return yield* new UnknownChatAgent({ agent })
 
   const id = chatKey(project, key)
-  let record = yield* store.get(id)
-  if (record && (record.status === 'busy' || record.status === 'starting')) {
-    return yield* new ChatBusy({ key })
-  }
-
   const location = yield* locateChatSession(projectInput, hours, project, key)
   const transcriptPath = location.source === 'claude'
     ? yield* pathFor(location.projectDirectory, key)
@@ -406,32 +511,30 @@ export const sendChatMessage = Effect.fn('sendChatMessage')(function*(
       : location.copilotLocation.path
   const cwd = yield* resolveChatCwd(location, transcriptPath)
 
-  if (record && record.agent !== agent) {
-    yield* closeChatConnection(record)
-    record.agent = agent as ChatAgentId
-  }
-  if (!record) {
-    record = {
-      agent: agent as ChatAgentId,
-      status: 'idle',
-      revision: 1,
-      base: 0,
-      events: [],
-      scope: null,
-      connection: null,
-      sessionId: null,
-      primed: false,
-    }
-    yield* store.set(id, record)
-  }
-
-  appendEvent(record, { kind: 'user', text })
-  record.status = record.connection ? 'busy' : 'starting'
-
-  yield* Effect.forkDetach(
-    runChatTurnSafely(record, connector, command, location, transcriptPath, cwd, text),
-  )
-  return { status: record.status } satisfies ChatActionResponse
+  return yield* Effect.uninterruptible(Effect.gen(function*() {
+    const reservation = yield* store.reserve(id, agent as ChatAgentId, text)
+    if (reservation._tag === 'Busy') return yield* new ChatBusy({ key })
+    const { record, generation } = reservation
+    const start = yield* Deferred.make<void>()
+    const turn = yield* Effect.forkDetach(
+      Deferred.await(start).pipe(
+        Effect.andThen(runChatTurnSafely(
+          record,
+          generation,
+          connector,
+          command,
+          location,
+          transcriptPath,
+          cwd,
+          text,
+        )),
+      ),
+    )
+    const attached = yield* store.attach(id, record, generation, turn)
+    if (attached) yield* Deferred.succeed(start, undefined)
+    else yield* Fiber.interrupt(turn)
+    return { status: attached ? record.status : 'idle' } satisfies ChatActionResponse
+  }))
 })
 
 export const pollChatEvents = Effect.fn('pollChatEvents')(function*(
@@ -466,19 +569,39 @@ export const pollChatEvents = Effect.fn('pollChatEvents')(function*(
 })
 
 export const cancelChat = Effect.fn('cancelChat')(function*(project: string, key: string) {
-  const store = yield* ChatStore
-  const record = yield* store.get(chatKey(project, key))
-  if (record?.status === 'busy' && record.connection && record.sessionId) {
-    yield* record.connection.notify('session/cancel', { sessionId: record.sessionId }).pipe(Effect.ignore)
-  }
-  return { status: record?.status ?? 'idle' } satisfies ChatActionResponse
+  return yield* Effect.uninterruptibleMask(restore => Effect.gen(function*() {
+    const store = yield* ChatStore
+    const cancellation = yield* store.claimCancellation(chatKey(project, key))
+    if (cancellation._tag === 'Inactive') {
+      return { status: cancellation.status } satisfies ChatActionResponse
+    }
+    const { generation, record, turn } = cancellation
+    const cleanup = Effect.gen(function*() {
+      yield* Fiber.interrupt(turn)
+      if (record.generation === generation) {
+        yield* closeChatConnection(record)
+        appendEvent(record, { kind: 'turn-end', stopReason: 'cancelled' })
+        record.status = 'idle'
+      }
+    })
+    const notify = record.connection && record.sessionId
+      ? record.connection.notify('session/cancel', { sessionId: record.sessionId }).pipe(Effect.ignore)
+      : Effect.void
+    yield* restore(notify).pipe(Effect.ensuring(cleanup))
+    return { status: record.status } satisfies ChatActionResponse
+  }))
 })
 
 export const resetChat = Effect.fn('resetChat')(function*(project: string, key: string) {
-  const store = yield* ChatStore
-  const record = yield* store.remove(chatKey(project, key))
-  if (record) yield* closeChatConnection(record)
-  return { status: 'idle' } satisfies ChatActionResponse
+  return yield* Effect.uninterruptible(Effect.gen(function*() {
+    const store = yield* ChatStore
+    const record = yield* store.remove(chatKey(project, key))
+    if (record) {
+      if (record.turn) yield* Fiber.interrupt(record.turn)
+      yield* closeChatConnection(record)
+    }
+    return { status: 'idle' } satisfies ChatActionResponse
+  }))
 })
 
 export const handleChatAction = Effect.fn('handleChatAction')(function*(
