@@ -184,6 +184,102 @@ describe('useLiveRuns', () => {
     component.unmount()
   })
 
+  it('applies the same cursor and revision reset rules to inspected events', async () => {
+    vi.useFakeTimers()
+    const child = node({ key: 'review', label: 'Review agent', kind: 'subagent' })
+    const root = node({ children: [child], subAgents: 1 })
+    let inspectedPoll = 0
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree') return tree(root)
+      if (url.startsWith('/api/run')) return runResponse({ root, node: root })
+      if (url.startsWith('/api/session-events')) {
+        return { key: root.key, events: [], total: 0, truncated: false }
+      }
+      if (url.includes('key=review')) {
+        inspectedPoll += 1
+        return inspectedPoll === 1
+          ? events(child.key, 'Initial inspection', { next: 1, revision: 1 })
+          : events(child.key, 'Rebuilt inspection', { next: 1, revision: 2, reset: true })
+      }
+      if (url.startsWith('/api/events')) return events(root.key, '')
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    await component.vm.live.inspect(child.key)
+    expect(component.attributes('data-inspected')).toBe('Initial inspection')
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+
+    expect(component.attributes('data-inspected')).toBe('Rebuilt inspection')
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/events?project=%2Frepo&key=review&since=1&revision=1&hours=168',
+    )
+
+    component.unmount()
+  })
+
+  it('rejects an old inspected response after an A-B-A selection cycle', async () => {
+    const first = node({ key: 'agent-a', label: 'Agent A', kind: 'subagent' })
+    const second = node({ key: 'agent-b', label: 'Agent B', kind: 'subagent' })
+    const root = node({ children: [first, second], subAgents: 2 })
+    let agentAPoll = 0
+    let resolveStaleA!: (value: EventsResponse) => void
+    let resolveFreshA!: (value: EventsResponse) => void
+    const staleA = new Promise<EventsResponse>((resolve) => {
+      resolveStaleA = resolve
+    })
+    const freshA = new Promise<EventsResponse>((resolve) => {
+      resolveFreshA = resolve
+    })
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/tree') return tree(root)
+      if (url.startsWith('/api/run')) return runResponse({ root, node: root })
+      if (url.startsWith('/api/session-events')) {
+        return { key: root.key, events: [], total: 0, truncated: false }
+      }
+      if (url.includes('key=agent-a')) {
+        agentAPoll += 1
+        return agentAPoll === 1 ? staleA : freshA
+      }
+      if (url.includes('key=agent-b')) return events(second.key, 'Agent B event')
+      if (url.startsWith('/api/events')) return events(root.key, '')
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    const firstInspection = component.vm.live.inspect(first.key)
+    await flushPromises()
+    await component.vm.live.inspect(second.key)
+    const freshInspection = component.vm.live.inspect(first.key)
+    await flushPromises()
+
+    resolveStaleA(events(first.key, 'Stale Agent A event'))
+    await firstInspection
+    await flushPromises()
+
+    expect(component.attributes()).toMatchObject({
+      'data-inspected': '',
+      'data-inspected-loading': 'true',
+    })
+
+    resolveFreshA(events(first.key, 'Fresh Agent A event'))
+    await freshInspection
+    await flushPromises()
+
+    expect(component.attributes()).toMatchObject({
+      'data-inspected': 'Fresh Agent A event',
+      'data-inspected-loading': 'false',
+    })
+
+    component.unmount()
+  })
+
   it('keeps a newer selection when an older run response finishes late', async () => {
     const first = node({ key: 'first', label: 'First' })
     const second = node({ key: 'second', label: 'Second' })

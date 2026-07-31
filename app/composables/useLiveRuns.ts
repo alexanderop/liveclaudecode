@@ -1,3 +1,4 @@
+import type { Ref } from 'vue'
 import type {
   EventsResponse,
   ProjectRuns,
@@ -12,6 +13,71 @@ import type { SessionSort } from '~/utils/session-filter'
 
 export type FeedDensity = 'compact' | 'normal' | 'raw'
 export type SessionRangeHours = number
+
+interface EventCursor {
+  readonly since: Ref<number>
+  readonly revision: Ref<number>
+  readonly events: Ref<TranscriptEvent[]>
+}
+
+interface EventPollerOptions {
+  readonly currentKey: () => string | null
+  readonly currentProject: () => string | null
+  readonly currentHours: () => SessionRangeHours
+  readonly cursor: EventCursor
+  readonly request: (url: string) => Promise<EventsResponse | null>
+  readonly settled?: (requestedKey: string) => void
+}
+
+interface EventPoller {
+  readonly poll: () => Promise<void>
+  readonly reset: () => void
+}
+
+function createEventPoller(options: EventPollerOptions): EventPoller {
+  let generation = 0
+  let pending: { readonly key: string, readonly generation: number } | null = null
+
+  async function poll(): Promise<void> {
+    const key = options.currentKey()
+    const project = options.currentProject()
+    if (!key || !project) return
+    const hours = options.currentHours()
+    const requestKey = `${project}\0${key}\0${hours}`
+    const requestGeneration = generation
+    if (pending?.key === requestKey && pending.generation === requestGeneration) return
+    const request = { key: requestKey, generation: requestGeneration }
+    pending = request
+    try {
+      const response = await options.request(
+        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${options.cursor.since.value}&revision=${options.cursor.revision.value}&hours=${hours}`,
+      )
+      if (
+        !response
+        || generation !== requestGeneration
+        || options.currentKey() !== key
+        || options.currentProject() !== project
+        || options.currentHours() !== hours
+      ) return
+      options.cursor.since.value = response.next
+      options.cursor.revision.value = response.revision
+      if (response.reset) options.cursor.events.value = [...response.events]
+      else options.cursor.events.value.push(...response.events)
+    } finally {
+      if (pending === request) pending = null
+      if (generation === requestGeneration) options.settled?.(key)
+    }
+  }
+
+  function reset(): void {
+    generation += 1
+    options.cursor.since.value = 0
+    options.cursor.revision.value = 0
+    options.cursor.events.value = []
+  }
+
+  return { poll, reset }
+}
 
 function descendants(node: RunNode, output: RunNode[] = []): RunNode[] {
   output.push(node)
@@ -62,8 +128,6 @@ export function useLiveRuns() {
   let treePending = false
   let treeReloadQueued = false
   let rangeInitialized = false
-  let eventPendingKey: string | null = null
-  let inspectedEventPendingKey: string | null = null
   let runPendingKey: string | null = null
   let sessionEventPendingKey: string | null = null
 
@@ -185,27 +249,13 @@ export function useLiveRuns() {
     }
   }
 
-  async function pollEvents(): Promise<void> {
-    const key = selectedKey.value
-    const project = selectedProject.value
-    if (!key || !project) return
-    const requestedHours = hours.value
-    const requestKey = `${project}\0${key}\0${requestedHours}`
-    if (eventPendingKey === requestKey) return
-    eventPendingKey = requestKey
-    try {
-      const response = await request<EventsResponse>(
-        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${eventRevision.value}&hours=${requestedHours}`,
-      )
-      if (!response || selectedKey.value !== key || selectedProject.value !== project || hours.value !== requestedHours) return
-      since.value = response.next
-      eventRevision.value = response.revision
-      if (response.reset) events.value = [...response.events]
-      else events.value.push(...response.events)
-    } finally {
-      if (eventPendingKey === requestKey) eventPendingKey = null
-    }
-  }
+  const selectedEventPoller = createEventPoller({
+    currentKey: () => selectedKey.value,
+    currentProject: () => selectedProject.value,
+    currentHours: () => hours.value,
+    cursor: { since, revision: eventRevision, events },
+    request,
+  })
 
   async function pollSessionEvents(): Promise<void> {
     const key = selectedRoot.value?.key || selectedKey.value
@@ -227,47 +277,35 @@ export function useLiveRuns() {
     }
   }
 
-  async function pollInspectedEvents(): Promise<void> {
-    const key = inspectedKey.value
-    const project = selectedProject.value
-    if (!key || !project) return
-    const requestedHours = hours.value
-    const requestKey = `${project}\0${key}\0${requestedHours}`
-    if (inspectedEventPendingKey === requestKey) return
-    inspectedEventPendingKey = requestKey
-    try {
-      const response = await request<EventsResponse>(
-        `/api/events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${inspectedSince.value}&revision=${inspectedEventRevision.value}&hours=${requestedHours}`,
-      )
-      if (!response || inspectedKey.value !== key || selectedProject.value !== project || hours.value !== requestedHours) return
-      inspectedSince.value = response.next
-      inspectedEventRevision.value = response.revision
-      if (response.reset) inspectedEvents.value = [...response.events]
-      else inspectedEvents.value.push(...response.events)
-    } finally {
-      if (inspectedEventPendingKey === requestKey) inspectedEventPendingKey = null
+  const inspectedEventPoller = createEventPoller({
+    currentKey: () => inspectedKey.value,
+    currentProject: () => selectedProject.value,
+    currentHours: () => hours.value,
+    cursor: {
+      since: inspectedSince,
+      revision: inspectedEventRevision,
+      events: inspectedEvents,
+    },
+    request,
+    settled: (key) => {
       if (inspectedKey.value === key) inspectedEventsLoading.value = false
-      else if (inspectedKey.value) void pollInspectedEvents()
-    }
-  }
+      else if (inspectedKey.value) void inspectedEventPoller.poll()
+    },
+  })
 
   async function inspect(key: string): Promise<void> {
     if (!selectedProject.value) return
     if (inspectedKey.value !== key) {
       inspectedKey.value = key
-      inspectedSince.value = 0
-      inspectedEventRevision.value = 0
-      inspectedEvents.value = []
+      inspectedEventPoller.reset()
       inspectedEventsLoading.value = true
     }
-    await pollInspectedEvents()
+    await inspectedEventPoller.poll()
   }
 
   function clearInspection(): void {
     inspectedKey.value = null
-    inspectedSince.value = 0
-    inspectedEventRevision.value = 0
-    inspectedEvents.value = []
+    inspectedEventPoller.reset()
     inspectedEventsLoading.value = false
   }
 
@@ -277,13 +315,11 @@ export function useLiveRuns() {
     clearInspection()
     selectedProject.value = project
     selectedKey.value = key
-    since.value = 0
-    eventRevision.value = 0
-    events.value = []
+    selectedEventPoller.reset()
     sessionEvents.value = []
     sessionEventsTruncated.value = false
     run.value = null
-    await Promise.all([pollEvents(), loadRun(), pollSessionEvents()])
+    await Promise.all([selectedEventPoller.poll(), loadRun(), pollSessionEvents()])
   }
 
   watch(hours, () => {
@@ -293,7 +329,7 @@ export function useLiveRuns() {
     selectedProject.value = null
     selectedKey.value = null
     run.value = null
-    events.value = []
+    selectedEventPoller.reset()
     sessionEvents.value = []
     sessionEventsTruncated.value = false
     clearInspection()
@@ -304,8 +340,8 @@ export function useLiveRuns() {
     void loadTree()
     treeTimer = setInterval(loadTree, 4_000)
     eventTimer = setInterval(() => {
-      void pollEvents()
-      void pollInspectedEvents()
+      void selectedEventPoller.poll()
+      void inspectedEventPoller.poll()
     }, 2_000)
     runTimer = setInterval(loadRun, 6_000)
     sessionEventTimer = setInterval(pollSessionEvents, 4_000)
