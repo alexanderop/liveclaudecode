@@ -9,11 +9,10 @@ import {
   type NoTranscriptsFound,
   PromptCache,
   ScanCache,
-  SessionLocatorCache,
   type UnknownProject,
   type UnknownRun,
 } from './services'
-import { SessionCatalogCache } from './session-browser'
+import { SessionCatalogCache, SessionLocatorCache } from './session-catalog'
 import { AcpAgentError, AcpConnector } from './acp-connection'
 import {
   ChatBusy,

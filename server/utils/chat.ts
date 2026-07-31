@@ -3,8 +3,12 @@ import { Context, Effect, Exit, Layer, Result, Schema, Scope } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import { AcpAgentError, AcpConnector, type AcpConnection } from './acp-connection'
 import { pathFor } from './runs'
-import { ScanCache, SessionLocatorCache, UnknownRun, type SessionEventLocation } from './services'
-import { loadSessionCatalog } from './session-browser'
+import { ScanCache, UnknownRun } from './services'
+import {
+  loadSessionCatalog,
+  SessionLocatorCache,
+  type SessionEventLocation,
+} from './session-catalog'
 import {
   parseInitializeResult,
   parseNewSessionResult,
@@ -223,10 +227,10 @@ const locateChatSession = Effect.fn('locateChatSession')(function*(
   key: string,
 ) {
   const locatorCache = yield* SessionLocatorCache
-  let location = yield* locatorCache.get(project, key)
+  let location = yield* locatorCache.get(projectInput, hours, project, key)
   if (!location) {
     yield* loadSessionCatalog(projectInput, hours)
-    location = yield* locatorCache.get(project, key)
+    location = yield* locatorCache.get(projectInput, hours, project, key)
   }
   if (!location) return yield* new UnknownRun({ key })
   return location

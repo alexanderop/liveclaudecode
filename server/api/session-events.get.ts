@@ -2,7 +2,7 @@ import { defineEventHandler, getQuery, setHeader } from 'h3'
 import type { SessionEventsResponse } from '#shared/types/run'
 import { parseActivityQuery } from '#shared/schemas/request'
 import { browserOptionsFor } from '../utils/request-context'
-import { getSessionActivity } from '../utils/session-browser'
+import { getSessionActivity } from '../utils/session-catalog'
 
 export default defineEventHandler(async (event): Promise<SessionEventsResponse> => {
   setHeader(event, 'Cache-Control', 'no-store')

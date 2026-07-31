@@ -27,18 +27,13 @@ import {
   CopilotScanCache,
   type CopilotSessionLocation,
   ScanCache,
-  SessionLocatorCache,
-  type SessionEventLocation,
   UnknownRun,
 } from './services'
 import type {
-  EventsResponse,
   ProjectRuns,
   RunNode,
-  RunResponse,
   SessionEventsResponse,
   SessionSourceStatus,
-  TreeResponse,
 } from '#shared/types/run'
 
 interface ClaudeTree {
@@ -49,7 +44,7 @@ interface ClaudeTree {
   unreadable: number
 }
 
-type SessionLocator =
+export type SessionLocator =
   | {
       source: 'claude'
       projectId: string
@@ -71,7 +66,7 @@ type SessionLocator =
       location: CopilotSessionLocation
     }
 
-interface SessionCatalog {
+export interface SessionCatalog {
   projects: ProjectRuns[]
   sources: SessionSourceStatus[]
   locators: Map<string, SessionLocator>
@@ -84,10 +79,90 @@ interface MutableProject {
   roots: RunNode[]
 }
 
+interface SessionEventLocationBase {
+  projectId: string
+  key: string
+  node: RunNode
+}
+
+export type SessionEventLocation =
+  | SessionEventLocationBase & {
+      source: 'claude'
+      projectDirectory: string
+    }
+  | SessionEventLocationBase & {
+      source: 'codex'
+      transcriptPath: string
+    }
+  | SessionEventLocationBase & {
+      source: 'copilot'
+      copilotLocation: CopilotSessionLocation
+    }
+
+interface CatalogKey {
+  readonly projectInput: string
+  readonly hours: number
+}
+
+const SESSION_CATALOG_CAPACITY = 8
 const UNASSIGNED_PROJECT = '__unassigned__'
 
 function locatorKey(project: string, key: string): string {
   return `${project}\0${key}`
+}
+
+function catalogKey(projectInput: string, hours: number): string {
+  return `${projectInput}\0${hours}`
+}
+
+/**
+ * Targeted event locators, partitioned by the same project/range key as the
+ * catalog build that published them. One viewer can therefore refresh its
+ * catalog without invalidating another viewer's event polling state.
+ */
+export class SessionLocatorCache extends Context.Service<SessionLocatorCache, {
+  readonly replace: (
+    projectInput: string,
+    hours: number,
+    locations: ReadonlyArray<SessionEventLocation>,
+  ) => Effect.Effect<void>
+  readonly get: (
+    projectInput: string,
+    hours: number,
+    project: string,
+    key: string,
+  ) => Effect.Effect<SessionEventLocation | undefined>
+}>()('lcc/SessionLocatorCache') {
+  static readonly layer = Layer.effect(
+    SessionLocatorCache,
+    Effect.sync(() => {
+      const catalogs = new Map<string, Map<string, SessionEventLocation>>()
+      return SessionLocatorCache.of({
+        replace: (projectInput, hours, next) => Effect.sync(() => {
+          const key = catalogKey(projectInput, hours)
+          catalogs.delete(key)
+          catalogs.set(key, new Map(next.map(location => [
+            locatorKey(location.projectId, location.key),
+            location,
+          ])))
+          if (catalogs.size > SESSION_CATALOG_CAPACITY) {
+            const oldest = catalogs.keys().next().value
+            if (oldest !== undefined) catalogs.delete(oldest)
+          }
+        }),
+        get: (projectInput, hours, project, key) => Effect.sync(() => {
+          const keyForCatalog = catalogKey(projectInput, hours)
+          const locations = catalogs.get(keyForCatalog)
+          if (!locations) return undefined
+          catalogs.delete(keyForCatalog)
+          catalogs.set(keyForCatalog, locations)
+          if (project) return locations.get(locatorKey(project, key))
+          const matches = [...locations.values()].filter(location => location.key === key)
+          return matches.length === 1 ? matches[0] : undefined
+        }),
+      })
+    }),
+  )
 }
 
 function projectIdentity(path: string): { id: string, name: string, path: string } {
@@ -289,7 +364,7 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     return bLast.localeCompare(aLast) || a.name.localeCompare(b.name)
   })
 
-  yield* locatorCache.replace([...locators.values()].flatMap((locator): SessionEventLocation[] => {
+  yield* locatorCache.replace(projectInput, hours, [...locators.values()].flatMap((locator): SessionEventLocation[] => {
     const base = {
       projectId: locator.projectId,
       key: locator.node.key,
@@ -311,11 +386,6 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     locators,
   } satisfies SessionCatalog
 })
-
-interface CatalogKey {
-  readonly projectInput: string
-  readonly hours: number
-}
 
 /**
  * Deduplicates catalog builds without ever serving a stale one.
@@ -340,7 +410,11 @@ export class SessionCatalogCache extends Context.Service<SessionCatalogCache, {
         (key: CatalogKey) => buildSessionCatalog(key.projectInput, key.hours),
         // `Cache.make` treats a literal 0 time-to-live as "not set" and would
         // cache forever, so the duration is provided as a function instead.
-        { capacity: 8, timeToLive: () => 0, requireServicesAt: 'lookup' },
+        {
+          capacity: SESSION_CATALOG_CAPACITY,
+          timeToLive: () => 0,
+          requireServicesAt: 'lookup',
+        },
       )
       return SessionCatalogCache.of({
         get: (projectInput, hours) => Cache.get(cache, { projectInput, hours }),
@@ -357,7 +431,11 @@ export const loadSessionCatalog = Effect.fn('loadSessionCatalog')(function*(
   return yield* cache.get(projectInput, hours)
 })
 
-function findLocator(catalog: SessionCatalog, project: string, key: string): SessionLocator | null {
+export function findSessionLocator(
+  catalog: SessionCatalog,
+  project: string,
+  key: string,
+): SessionLocator | null {
   if (project) return catalog.locators.get(locatorKey(project, key)) || null
   const matches = [...catalog.locators.values()].filter(locator => locator.node.key === key)
   return matches.length === 1 ? matches[0]! : null
@@ -383,7 +461,7 @@ export const getSessionRun = Effect.fn('getSessionRun')(function*(
   key: string,
 ) {
   const catalog = yield* loadSessionCatalog(projectInput, hours)
-  const locator = findLocator(catalog, project, key)
+  const locator = findSessionLocator(catalog, project, key)
   if (!locator) return yield* new UnknownRun({ key })
   const root = rootOf(locator.tree.roots, key)
   if (!root) return yield* new UnknownRun({ key })
@@ -418,10 +496,10 @@ export const getSessionEvents = Effect.fn('getSessionEvents')(function*(
   revision: number,
 ) {
   const locatorCache = yield* SessionLocatorCache
-  let location = yield* locatorCache.get(project, key)
+  let location = yield* locatorCache.get(projectInput, hours, project, key)
   if (!location) {
     yield* loadSessionCatalog(projectInput, hours)
-    location = yield* locatorCache.get(project, key)
+    location = yield* locatorCache.get(projectInput, hours, project, key)
   }
   if (!location) return yield* new UnknownRun({ key })
 
@@ -484,7 +562,7 @@ export const getSessionActivity = Effect.fn('getSessionActivity')(function*(
   limit: number,
 ) {
   const catalog = yield* loadSessionCatalog(projectInput, hours)
-  const locator = findLocator(catalog, project, key)
+  const locator = findSessionLocator(catalog, project, key)
   if (!locator) return yield* new UnknownRun({ key })
   const root = rootOf(locator.tree.roots, key)
   if (!root) return yield* new UnknownRun({ key })

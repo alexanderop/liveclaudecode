@@ -7,7 +7,6 @@ import { TranscriptScan } from './transcript'
 import { CodexTranscriptScan } from './codex-transcript'
 import { CopilotCliTranscriptScan } from './copilot-cli-transcript'
 import { CopilotTranscriptScan } from './copilot-transcript'
-import type { RunNode } from '#shared/types/run'
 
 /**
  * Root of Claude Code's transcript store.
@@ -193,58 +192,6 @@ export class CopilotScanCache extends Context.Service<CopilotScanCache, {
   )
 }
 
-interface SessionEventLocationBase {
-  projectId: string
-  key: string
-  node: RunNode
-}
-
-export type SessionEventLocation =
-  | SessionEventLocationBase & {
-      source: 'claude'
-      projectDirectory: string
-    }
-  | SessionEventLocationBase & {
-      source: 'codex'
-      transcriptPath: string
-    }
-  | SessionEventLocationBase & {
-      source: 'copilot'
-      copilotLocation: CopilotSessionLocation
-    }
-
-/**
- * Lightweight locators published by the latest tree scan.
- *
- * Event polling uses this index to refresh only the selected transcript rather
- * than rediscovering and rebuilding every session on each two-second poll.
- */
-export class SessionLocatorCache extends Context.Service<SessionLocatorCache, {
-  readonly replace: (locations: ReadonlyArray<SessionEventLocation>) => Effect.Effect<void>
-  readonly get: (project: string, key: string) => Effect.Effect<SessionEventLocation | undefined>
-}>()('lcc/SessionLocatorCache') {
-  static readonly layer = Layer.effect(
-    SessionLocatorCache,
-    Effect.sync(() => {
-      let locations = new Map<string, SessionEventLocation>()
-      const indexKey = (project: string, key: string): string => `${project}\0${key}`
-      return SessionLocatorCache.of({
-        replace: next => Effect.sync(() => {
-          locations = new Map(next.map(location => [
-            indexKey(location.projectId, location.key),
-            location,
-          ]))
-        }),
-        get: (project, key) => Effect.sync(() => {
-          if (project) return locations.get(indexKey(project, key))
-          const matches = [...locations.values()].filter(location => location.key === key)
-          return matches.length === 1 ? matches[0] : undefined
-        }),
-      })
-    }),
-  )
-}
-
 /**
  * First user prompt per transcript. Immutable once read, so it is cached for
  * the lifetime of the layer.
@@ -272,6 +219,5 @@ export class PromptCache extends Context.Service<PromptCache, {
   )
 }
 
-// The full server layer is composed once in ./runtime, which is also where
-// the SessionCatalogCache defined in ./session-browser joins these services
-// (importing it here would create a services ↔ session-browser cycle).
+// The full server layer is composed once in ./runtime, where catalog and chat
+// services join these provider/storage services.

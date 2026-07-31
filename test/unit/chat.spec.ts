@@ -9,7 +9,7 @@ import {
   sendChatMessage,
 } from '#server/utils/chat'
 import { parseChatAction } from '#shared/schemas/chat'
-import { SessionCatalogCache } from '#server/utils/session-browser'
+import { SessionCatalogCache, SessionLocatorCache } from '#server/utils/session-catalog'
 import {
   CodexScanCache,
   CodexSessionsDirectory,
@@ -17,7 +17,6 @@ import {
   ProjectsDirectory,
   PromptCache,
   ScanCache,
-  SessionLocatorCache,
   WorkingDirectory,
   VsCodeUserDataDirectories,
 } from '#server/utils/services'

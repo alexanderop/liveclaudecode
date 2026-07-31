@@ -1,6 +1,12 @@
 import { assert, describe, it } from '@effect/vitest'
 import { Effect, Layer } from 'effect'
-import { getSessionEvents, loadSessionCatalog, SessionCatalogCache } from '#server/utils/session-browser'
+import { TestClock } from 'effect/testing'
+import {
+  getSessionEvents,
+  loadSessionCatalog,
+  SessionCatalogCache,
+  SessionLocatorCache,
+} from '#server/utils/session-catalog'
 import { CopilotCliTranscriptScan } from '#server/utils/copilot-cli-transcript'
 import { CopilotTranscriptScan } from '#server/utils/copilot-transcript'
 import {
@@ -11,7 +17,6 @@ import {
   ProjectsDirectory,
   PromptCache,
   ScanCache,
-  SessionLocatorCache,
   WorkingDirectory,
   VsCodeUserDataDirectories,
   type CopilotSessionLocation,
@@ -136,6 +141,57 @@ describe('unified session catalog', () => {
       assert.strictEqual(rebuilt.projects[0]?.roots[0]?.records, 2)
     }).pipe(Effect.provide(layer({ [`${CLAUDE}/repo/claude-1.jsonl`]: entry })))
   })
+
+  it.effect('keeps targeted event locators isolated by catalog range', () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime(Date.parse('2026-07-28T08:00:00.000Z'))
+      const visible = yield* loadSessionCatalog('', 999_999)
+      assert.strictEqual(visible.projects[0]?.id, '/repo')
+
+      const hidden = yield* loadSessionCatalog('', 24)
+      assert.strictEqual(hidden.projects.length, 0)
+
+      const locators = yield* SessionLocatorCache
+      const original = yield* locators.get('', 999_999, '/repo', 'codex:codex-1')
+      const other = yield* locators.get('', 24, '/repo', 'codex:codex-1')
+      assert.strictEqual(original?.source, 'codex')
+      assert.strictEqual(other, undefined)
+    }).pipe(Effect.provide(layer({
+      [`${CODEX}/2026/07/26/rollout-codex-1.jsonl`]: {
+        content: codex.rollout([
+          codex.sessionMeta('codex-1', { cwd: '/repo' }),
+          codex.message('user', 'Visible in the unfiltered catalog'),
+        ]),
+        mtime: Date.parse('2026-07-26T08:00:00.000Z') / 1_000,
+      },
+    }))))
+
+  it.effect('bounds locator snapshots and promotes recently read catalogs', () =>
+    Effect.gen(function*() {
+      const catalog = yield* loadSessionCatalog('', 999_999)
+      assert.strictEqual(catalog.projects[0]?.id, '/repo')
+
+      const locators = yield* SessionLocatorCache
+      const location = yield* locators.get('', 999_999, '/repo', 'codex:codex-1')
+      assert.isDefined(location)
+
+      for (let index = 0; index < 7; index += 1) {
+        yield* locators.replace(`project-${index}`, index, [location!])
+      }
+      assert.isDefined(yield* locators.get('', 999_999, '/repo', 'codex:codex-1'))
+
+      yield* locators.replace('project-7', 7, [location!])
+      assert.strictEqual(
+        yield* locators.get('project-0', 0, '/repo', 'codex:codex-1'),
+        undefined,
+      )
+      assert.isDefined(yield* locators.get('', 999_999, '/repo', 'codex:codex-1'))
+    }).pipe(Effect.provide(layer({
+      [`${CODEX}/2026/07/26/rollout-codex-1.jsonl`]: codex.rollout([
+        codex.sessionMeta('codex-1', { cwd: '/repo' }),
+        codex.message('user', 'Retained locator'),
+      ]),
+    }))))
 
   it.effect('returns source availability as data when one storage root is missing', () =>
     Effect.gen(function*() {
