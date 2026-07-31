@@ -149,9 +149,11 @@ describe('useLiveRuns', () => {
     })
     expect(fetch).toHaveBeenCalledWith(
       '/api/events?project=%2Frepo&key=session%2Fworker&since=0&revision=0&hours=168',
+      { signal: expect.any(AbortSignal) },
     )
     expect(fetch).toHaveBeenCalledWith(
       '/api/run?project=%2Frepo&key=session%2Fworker&hours=168',
+      { signal: expect.any(AbortSignal) },
     )
 
     component.unmount()
@@ -185,6 +187,7 @@ describe('useLiveRuns', () => {
     expect(component.attributes('data-events')).toBe('Rebuilt event')
     expect(fetch).toHaveBeenCalledWith(
       '/api/events?project=%2Frepo&key=session&since=1&revision=1&hours=168',
+      { signal: expect.any(AbortSignal) },
     )
 
     component.unmount()
@@ -223,6 +226,7 @@ describe('useLiveRuns', () => {
     expect(component.attributes('data-inspected')).toBe('Rebuilt inspection')
     expect(fetch).toHaveBeenCalledWith(
       '/api/events?project=%2Frepo&key=review&since=1&revision=1&hours=168',
+      { signal: expect.any(AbortSignal) },
     )
 
     component.unmount()
@@ -481,8 +485,14 @@ describe('useLiveRuns', () => {
     })))
     await flushPromises()
 
-    expect(fetch).not.toHaveBeenCalledWith('/api/tree?hours=24')
-    expect(fetch).not.toHaveBeenCalledWith('/api/run?project=%2Frepo&key=session&hours=24')
+    expect(fetch).not.toHaveBeenCalledWith(
+      '/api/tree?hours=24',
+      { signal: expect.any(AbortSignal) },
+    )
+    expect(fetch).not.toHaveBeenCalledWith(
+      '/api/run?project=%2Frepo&key=session&hours=24',
+      { signal: expect.any(AbortSignal) },
+    )
     expect(fetch.mock.calls.some(([url]) => String(url).includes('key=stale-session'))).toBe(false)
     expect(treeRangeRequest).toBe(2)
     expect(runRequest).toBe(3)
@@ -552,7 +562,10 @@ describe('useLiveRuns', () => {
     live.hours.value = 24
     await flushPromises()
 
-    expect(fetch).toHaveBeenCalledWith('/api/tree?hours=24')
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/tree?hours=24',
+      { signal: expect.any(AbortSignal) },
+    )
     expect(runRequest).toBe(2)
     expect(sessionRequest).toBe(2)
     expect(live.run.value?.transcriptPath).toBe('/range-24')
@@ -701,9 +714,45 @@ describe('useLiveRuns', () => {
     await flushPromises()
 
     expect(component.attributes('data-hours')).toBe('3')
-    expect(fetch).toHaveBeenCalledWith('/api/run?project=%2Frepo&key=session&hours=3')
-    expect(fetch).not.toHaveBeenCalledWith('/api/tree?hours=168')
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/run?project=%2Frepo&key=session&hours=3',
+      { signal: expect.any(AbortSignal) },
+    )
+    expect(fetch).not.toHaveBeenCalledWith(
+      '/api/tree?hours=168',
+      { signal: expect.any(AbortSignal) },
+    )
 
     component.unmount()
+  })
+
+  it('aborts pending requests and drops queued tree work on unmount', async () => {
+    vi.useFakeTimers()
+    let resolveTree!: (value: TreeResponse) => void
+    let treeSignal!: AbortSignal
+    const pendingTree = new Promise<TreeResponse>((resolve) => {
+      resolveTree = resolve
+    })
+    const fetch = vi.fn((url: string, options?: { signal?: AbortSignal }) => {
+      if (url === '/api/tree') {
+        treeSignal = options!.signal!
+        return pendingTree
+      }
+      throw new Error(`Unexpected post-unmount request: ${url}`)
+    })
+    vi.stubGlobal('$fetch', fetch)
+
+    const component = await mountSuspended(Harness)
+    await flushPromises()
+    const live = component.vm.live
+    await vi.advanceTimersByTimeAsync(4_000)
+    component.unmount()
+
+    expect(treeSignal.aborted).toBe(true)
+    resolveTree(tree(node({ key: 'must-not-load' })))
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(live.projects.value).toEqual([])
   })
 })

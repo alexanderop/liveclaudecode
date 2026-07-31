@@ -234,7 +234,10 @@ describe('persistent session canvas', () => {
     expect(component.get('.inspector-stub').text()).toContain('Review agent')
     expect(component.get('.inspector-stub').attributes('data-event-count')).toBe('1')
     expect(component.get('.inspector-stub').attributes('data-events-loading')).toBe('false')
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('key=review'))
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('key=review'),
+      { signal: expect.any(AbortSignal) },
+    )
     expect(component.get('.canvas-stub').element).toBe(originalCanvas)
 
     await component.get('.canvas-empty').trigger('click')

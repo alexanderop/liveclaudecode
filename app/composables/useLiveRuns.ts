@@ -165,6 +165,8 @@ export function useLiveRuns() {
   let treeReloadQueued = false
   let treeGeneration = 0
   let rangeInitialized = false
+  let disposed = false
+  const requestControllers = new Set<AbortController>()
   const runRequests = createLatestRequestGate()
   const sessionEventRequests = createLatestRequestGate()
 
@@ -218,17 +220,24 @@ export function useLiveRuns() {
     url: string,
     isCurrent: () => boolean = () => true,
   ): Promise<T | null> {
+    if (disposed) return null
+    const controller = new AbortController()
+    requestControllers.add(controller)
     try {
-      const result = await $fetch(url)
+      const result = await $fetch(url, { signal: controller.signal })
+      if (disposed) return null
       if (isCurrent()) offline.value = false
       return result as T
     } catch {
-      if (isCurrent()) offline.value = true
+      if (!disposed && !controller.signal.aborted && isCurrent()) offline.value = true
       return null
+    } finally {
+      requestControllers.delete(controller)
     }
   }
 
   async function loadTree(): Promise<void> {
+    if (disposed) return
     if (treePending) {
       treeReloadQueued = true
       return
@@ -250,6 +259,7 @@ export function useLiveRuns() {
       if (!rangeInitialized) {
         hours.value = response.hours
         await nextTick()
+        if (!isCurrent()) return
         rangeInitialized = true
       }
       projects.value = response.projects
@@ -410,6 +420,15 @@ export function useLiveRuns() {
   })
 
   onUnmounted(() => {
+    disposed = true
+    treeGeneration += 1
+    treeReloadQueued = false
+    runRequests.invalidate()
+    sessionEventRequests.invalidate()
+    selectedEventPoller.reset()
+    inspectedEventPoller.reset()
+    requestControllers.forEach(controller => controller.abort())
+    requestControllers.clear()
     if (treeTimer) clearInterval(treeTimer)
     if (eventTimer) clearInterval(eventTimer)
     if (runTimer) clearInterval(runTimer)
