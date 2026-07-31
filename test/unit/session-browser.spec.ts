@@ -10,6 +10,7 @@ import {
 } from '#server/utils/session-catalog'
 import { CopilotCliTranscriptScan } from '#server/utils/copilot-cli-transcript'
 import { CopilotTranscriptScan } from '#server/utils/copilot-transcript'
+import { FILE_CONCURRENCY } from '#server/utils/filesystem-concurrency'
 import {
   CodexScanCache,
   CodexSessionsDirectory,
@@ -27,12 +28,17 @@ import * as claude from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
 import * as copilot from '../fixtures/copilot'
 import * as copilotCli from '../fixtures/copilot-cli'
-import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
+import {
+  operationConcurrencyProbe,
+  testFileSystem,
+  type FakeTree,
+} from '../fixtures/filesystem'
 
 const CLAUDE = '/claude/projects'
 const CODEX = '/codex/sessions'
 const VSCODE = '/Library/Application Support/Code/User'
 const COPILOT_CLI = '/copilot/session-state'
+type FileSystemOptions = NonNullable<Parameters<typeof testFileSystem>[1]>
 
 function recordingCopilotCache(locations: CopilotSessionLocation[]) {
   return Layer.effect(
@@ -62,6 +68,7 @@ function layer(
   denied: ReadonlyArray<string> = [],
   copilotLocations?: CopilotSessionLocation[],
   beforeRead?: (path: string) => Effect.Effect<void>,
+  fileSystemOptions: FileSystemOptions = {},
 ) {
   return Layer.mergeAll(
     SessionCatalogCache.layer,
@@ -75,7 +82,7 @@ function layer(
     Layer.succeed(VsCodeUserDataDirectories)([VSCODE]),
     Layer.succeed(CopilotSessionStateDirectory)(COPILOT_CLI),
     Layer.succeed(WorkingDirectory)('/work'),
-    testFileSystem(tree, { denied, beforeRead }),
+    testFileSystem(tree, { ...fileSystemOptions, denied, beforeRead }),
   )
 }
 
@@ -122,6 +129,46 @@ describe('unified session catalog', () => {
         })),
       ]),
     }))))
+
+  it.effect('shares one Claude discovery budget across every catalog project', () => {
+    const probe = operationConcurrencyProbe()
+    const history = Object.fromEntries(
+      Array.from({ length: 16 }, (_, project) =>
+        Array.from({ length: 16 }, (_, session) => [
+          `${CLAUDE}/project-${project}/session-${session}.jsonl`,
+          claude.transcript([
+            claude.userText(`Project ${project} session ${session}`),
+          ]),
+        ]),
+      ).flat(),
+    )
+    const scopedProbe: FileSystemOptions = {
+      beforeOperation: (_method, path) => path.startsWith(CLAUDE)
+        ? probe.beforeOperation()
+        : Effect.void,
+      afterOperation: (_method, path) => path.startsWith(CLAUDE)
+        ? probe.afterOperation()
+        : Effect.void,
+    }
+    return Effect.gen(function*() {
+      const catalog = yield* loadSessionCatalog('', 999_999)
+      assert.strictEqual(
+        catalog.projects.reduce(
+          (total, project) => total + project.roots.length,
+          0,
+        ),
+        256,
+      )
+      assert.isAtMost(probe.maximum(), FILE_CONCURRENCY)
+      assert.isAbove(probe.maximum(), 1)
+    }).pipe(Effect.provide(layer(
+      history,
+      [],
+      undefined,
+      undefined,
+      scopedProbe,
+    )))
+  })
 
   it.effect('never serves a stale catalog to a later load', () => {
     const entry = {

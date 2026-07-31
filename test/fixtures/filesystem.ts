@@ -129,10 +129,17 @@ export function testFileSystem(tree: FakeTree, options: {
       const end = streamOptions?.bytesToRead === undefined
         ? bytes.length
         : Math.min(bytes.length, offset + Number(streamOptions.bytesToRead))
-      return Stream.unwrap(beforeRead(path).pipe(
+      const contents = Stream.fromEffect(beforeRead(path).pipe(
         Effect.tap(() => Effect.sync(() => onRead(path))),
-        Effect.as(Stream.make(bytes.subarray(offset, end))),
-      ))
+      )).pipe(
+        Stream.flatMap(() => Stream.make(bytes.subarray(offset, end))),
+      )
+      return Stream.scoped(
+        Stream.fromEffect(Effect.acquireRelease(
+          beforeOperation('stream', path),
+          () => afterOperation('stream', path),
+        )).pipe(Stream.flatMap(() => contents)),
+      )
     },
 
     readDirectory: (path: string) => {

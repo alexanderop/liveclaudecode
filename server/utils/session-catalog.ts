@@ -11,7 +11,7 @@ import {
   type CopilotTree,
 } from './copilot-runs'
 import {
-  buildTree,
+  buildTrees,
   flatten,
   pathFor,
   rootOf,
@@ -266,10 +266,14 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   const [claudeResult, codexResult, copilotResult] = yield* Effect.all([
     Effect.result(Effect.gen(function*() {
       const directories = yield* resolveProjectDirectories(projectInput)
-      return yield* Effect.forEach(directories, directory => Effect.gen(function*() {
-        const tree = yield* buildTree(directory.directory, hours)
-        return { directory: directory.directory, tree }
-      }), { concurrency: FILE_CONCURRENCY })
+      const trees = yield* buildTrees(
+        directories.map(directory => directory.directory),
+        hours,
+      )
+      return trees.map((tree, index) => ({
+        directory: directories[index]!.directory,
+        tree,
+      }))
     })),
     Effect.result(buildCodexTree(hours)),
     Effect.result(buildCopilotTree(hours)),

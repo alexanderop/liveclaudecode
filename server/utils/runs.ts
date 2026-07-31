@@ -21,7 +21,11 @@ import type {
 import { readHead } from './incremental-jsonl'
 import { plainText } from './transcript-content'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { FILE_CONCURRENCY } from './filesystem-concurrency'
+import {
+  FILE_CONCURRENCY,
+  makeFileDiscoveryLimiter,
+  type FileDiscoveryLimiter,
+} from './filesystem-concurrency'
 
 /**
  * The first prompt appears within the first records of a transcript, so only
@@ -92,16 +96,17 @@ export const firstPrompt = Effect.fn('firstPrompt')(function*(path: string) {
   )
 })
 
-export const collect = Effect.fn('collect')(function*(
+const collectWithLimiter = Effect.fn('collectWithLimiter')(function*(
   projectDirectory: string,
   maxAgeHours: number,
+  limiter: FileDiscoveryLimiter,
 ) {
   const fs = yield* FileSystem.FileSystem
   const now = yield* Clock.currentTimeMillis
   const cutoff = maxAgeHours <= 0
     ? Number.NEGATIVE_INFINITY
     : now - maxAgeHours * 3_600_000
-  const names = (yield* fs.readDirectory(projectDirectory).pipe(
+  const names = (yield* limiter.withPermit(fs.readDirectory(projectDirectory)).pipe(
     Effect.catchIf(
       error => error.reason._tag === 'NotFound',
       () => Effect.succeed([] as Array<string>),
@@ -109,7 +114,7 @@ export const collect = Effect.fn('collect')(function*(
   )).sort((a, b) => a.localeCompare(b))
 
   const freshFile = Effect.fn('freshFile')(function*(path: string) {
-    const info = yield* fs.stat(path)
+    const info = yield* limiter.withPermit(fs.stat(path))
     if (info.type !== 'File') return false
     return info.mtime._tag === 'Some' ? info.mtime.value.getTime() >= cutoff : true
   })
@@ -126,7 +131,10 @@ export const collect = Effect.fn('collect')(function*(
         kind: 'session',
         sid,
         meta: null,
-        label: normalizeSessionLabel(yield* firstPrompt(path), sid.slice(0, 8)),
+        label: normalizeSessionLabel(
+          yield* limiter.withPermit(firstPrompt(path)),
+          sid.slice(0, 8),
+        ),
       } satisfies CollectedItem
     })),
     { concurrency: FILE_CONCURRENCY },
@@ -136,7 +144,7 @@ export const collect = Effect.fn('collect')(function*(
     names.filter(name => !name.endsWith('.jsonl')),
     sessionName => Effect.result(Effect.gen(function*() {
       const subagentsDirectory = join(projectDirectory, sessionName, 'subagents')
-      const subagentNames = yield* fs.readDirectory(subagentsDirectory).pipe(
+      const subagentNames = yield* limiter.withPermit(fs.readDirectory(subagentsDirectory)).pipe(
         Effect.catchIf(
           error => error.reason._tag === 'NotFound',
           () => Effect.succeed([] as Array<string>),
@@ -148,7 +156,9 @@ export const collect = Effect.fn('collect')(function*(
           const path = join(subagentsDirectory, name)
           if (!(yield* freshFile(path))) return null
           const agent = name.slice(0, -'.jsonl'.length)
-          const meta = yield* readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`))
+          const meta = yield* limiter.withPermit(
+            readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`)),
+          )
           return {
             key: `${sessionName}/${agent}`,
             path,
@@ -180,15 +190,24 @@ export const collect = Effect.fn('collect')(function*(
   } satisfies CollectedItems
 })
 
-export const buildTree = Effect.fn('buildTree')(function*(
+export const collect = Effect.fn('collect')(function*(
+  projectDirectory: string,
+  maxAgeHours: number,
+) {
+  const limiter = yield* makeFileDiscoveryLimiter()
+  return yield* collectWithLimiter(projectDirectory, maxAgeHours, limiter)
+})
+
+const buildTreeWithLimiter = Effect.fn('buildTreeWithLimiter')(function*(
   projectDirectory: string,
   hours: number,
+  limiter: FileDiscoveryLimiter,
 ) {
   const cache = yield* ScanCache
-  const discovery = yield* collect(projectDirectory, hours)
+  const discovery = yield* collectWithLimiter(projectDirectory, hours, limiter)
   const scanResults = yield* Effect.forEach(
     discovery.items,
-    item => Effect.result(cache.get(item.path)),
+    item => Effect.result(limiter.withPermit(cache.get(item.path))),
     { concurrency: FILE_CONCURRENCY },
   )
   const readable = scanResults.flatMap((result, index) => Result.isSuccess(result)
@@ -261,6 +280,26 @@ export const buildTree = Effect.fn('buildTree')(function*(
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
     unreadable: discovery.unreadable + scanResults.filter(Result.isFailure).length,
   }
+})
+
+export const buildTree = Effect.fn('buildTree')(function*(
+  projectDirectory: string,
+  hours: number,
+) {
+  const limiter = yield* makeFileDiscoveryLimiter()
+  return yield* buildTreeWithLimiter(projectDirectory, hours, limiter)
+})
+
+export const buildTrees = Effect.fn('buildTrees')(function*(
+  projectDirectories: ReadonlyArray<string>,
+  hours: number,
+) {
+  const limiter = yield* makeFileDiscoveryLimiter()
+  return yield* Effect.forEach(
+    projectDirectories,
+    directory => buildTreeWithLimiter(directory, hours, limiter),
+    { concurrency: FILE_CONCURRENCY },
+  )
 })
 
 /**
