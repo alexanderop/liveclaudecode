@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type {
+  CostSummary,
   EventsResponse,
   ProjectRuns,
   RunNode,
@@ -129,6 +130,7 @@ function deepestLive(node: RunNode): RunNode {
 export function useLiveRuns() {
   const projects = ref<ProjectRuns[]>([])
   const sources = ref<SessionSourceStatus[]>([])
+  const costs = ref<CostSummary | null>(null)
   const loading = ref(true)
   const selectedProject = ref<string | null>(null)
   const selectedKey = ref<string | null>(null)
@@ -264,6 +266,7 @@ export function useLiveRuns() {
       }
       projects.value = response.projects
       sources.value = response.sources
+      costs.value = response.costs || null
       loading.value = false
 
       if (!selectedKey.value) {
@@ -438,6 +441,7 @@ export function useLiveRuns() {
   return {
     projects,
     sources,
+    costs,
     loading,
     visibleProjects,
     projectOptions,

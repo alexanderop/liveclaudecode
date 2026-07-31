@@ -26,6 +26,7 @@ import {
   makeFileDiscoveryLimiter,
   type FileDiscoveryLimiter,
 } from './filesystem-concurrency'
+import { claudeCostSample, estimateCosts, type ClaudeCostSample } from './cost'
 
 /**
  * The first prompt appears within the first records of a transcript, so only
@@ -221,6 +222,7 @@ const buildTreeWithLimiter = Effect.fn('buildTreeWithLimiter')(function*(
   const items = readable.map(entry => entry.item)
   const scans = readable.map(entry => entry.scan)
   const stats = yield* Effect.forEach(scans, scan => scan.stats)
+  const costSamples = scans.flatMap(scan => scan.diagnostics().context.map(claudeCostSample))
   const byKey = new Map<string, RunNode>()
 
   for (const [index, item] of items.entries()) {
@@ -284,6 +286,7 @@ const buildTreeWithLimiter = Effect.fn('buildTreeWithLimiter')(function*(
     cwd: scans.find(scan => scan.cwd)?.cwd || '',
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
     unreadable: discovery.unreadable + scanResults.filter(Result.isFailure).length,
+    costSamples,
   }
 })
 
@@ -424,11 +427,13 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
   const git: RunDiagnostics['git'] = []
   const agents: AgentDiagnosticSummary[] = []
   const usage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
+  const costSamples: ClaudeCostSample[] = []
   const causal = { records: 0, recordsWithUuid: 0, branchPoints: 0, sidechainRecords: 0, interruptions: 0 }
   let environment: SessionEnvironment = { cwd: '', gitBranch: '', version: '', entrypoint: '', permissionMode: '' }
 
   for (const [index, node] of nodes.entries()) {
     const diagnostic = scans[index]!.diagnostics()
+    costSamples.push(...diagnostic.context.map(claudeCostSample))
     const who = node.kind === 'session' ? 'Main session' : node.label
     if (node.kind === 'session') environment = diagnostic.environment
     else {
@@ -508,6 +513,7 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
     environment,
     causal,
     usage,
+    cost: estimateCosts(costSamples),
   } satisfies RunDiagnostics
 })
 

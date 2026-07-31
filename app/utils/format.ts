@@ -33,6 +33,12 @@ export function formatCount(value: number): string | number {
   return value
 }
 
+export function formatUsd(value: number): string {
+  if (!value) return '$0.00'
+  if (value < 0.01) return `$${value.toFixed(3)}`
+  return `$${value.toFixed(2)}`
+}
+
 export function secondsBetween(start: Timestamp, end: Timestamp): number {
   if (!start || !end) return 0
   return (new Date(end).getTime() - new Date(start).getTime()) / 1_000

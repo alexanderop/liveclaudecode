@@ -200,6 +200,13 @@ describe('read-only API', async () => {
       expect.objectContaining({ source: 'codex', state: 'degraded', sessions: 1, malformed: 1 }),
       expect.objectContaining({ source: 'copilot', state: 'ready', sessions: 1 }),
     ])
+    expect(response.costs).toMatchObject({
+      currency: 'USD',
+      pricedRequests: 1,
+      unpricedRequests: 0,
+      estimated: true,
+    })
+    expect(response.costs!.usd).toBeGreaterThan(0)
   })
 
   it('merges root and subagent transcripts into one chronological activity stream', async () => {
@@ -228,6 +235,7 @@ describe('read-only API', async () => {
     expect(response.node.label).toBe('slice A')
     expect(response.lanes).toHaveLength(2)
     expect(response.files).toEqual([['src/a.ts', 1]])
+    expect(response.diagnostics.cost).toMatchObject({ pricedRequests: 1, estimated: true })
     expect(response.phases.map(phase => phase.title)).toEqual(['Wave 1'])
     expect(response.diagnostics.turns[0]?.durationMs).toBe(4_000)
     expect(response.diagnostics.usage).toMatchObject({ in: 10, out: 5, cr: 20 })

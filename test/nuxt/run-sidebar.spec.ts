@@ -60,6 +60,16 @@ describe('RunSidebar', () => {
           { source: 'claude', state: 'ready', sessions: 1, malformed: 0, message: '' },
           { source: 'codex', state: 'ready', sessions: 0, malformed: 0, message: '' },
         ],
+        costs: {
+          currency: 'USD',
+          usd: 4.7,
+          todayUsd: 1.23,
+          last7DaysUsd: 4.7,
+          coverageHours: 168,
+          pricedRequests: 12,
+          unpricedRequests: 0,
+          estimated: true,
+        },
         projectOptions: [{ id: 'workout', name: 'workoutTracker' }],
         loading: false,
         selectedProject: null,
@@ -80,6 +90,8 @@ describe('RunSidebar', () => {
     expect(project.text()).toContain('workoutTracker')
     expect(project.attributes('aria-expanded')).toBe('true')
     expect(component.text()).toContain('Test server for bugs')
+    expect(component.get('.sidebar-cost-summary').text()).toContain('Today$1.23')
+    expect(component.get('.sidebar-cost-summary').text()).toContain('Last 7 days$4.70')
     expect(component.findAll('.primary-nav-item').map(item => item.attributes('aria-pressed'))).toEqual([
       'true',
       'false',

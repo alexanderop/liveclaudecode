@@ -3,10 +3,17 @@ import {
   formatCount,
   formatDuration,
   formatMilliseconds,
+  formatUsd,
   secondsBetween,
 } from '~/utils/format'
 
 describe('display formatting', () => {
+  it('formats estimated USD costs without hiding sub-cent usage', () => {
+    expect(formatUsd(0)).toBe('$0.00')
+    expect(formatUsd(0.0042)).toBe('$0.004')
+    expect(formatUsd(1.236)).toBe('$1.24')
+  })
+
   it.each([
     [0, 0],
     [999, 999],

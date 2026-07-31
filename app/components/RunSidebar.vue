@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { ProjectRuns, SessionSourceStatus } from '#shared/types/run'
+import type { CostSummary, ProjectRuns, SessionSourceStatus } from '#shared/types/run'
 import type { SessionSort } from '~/utils/session-filter'
 
 const props = defineProps<{
   projects: ProjectRuns[]
   allProjects: ProjectRuns[]
   sources: SessionSourceStatus[]
+  costs?: CostSummary | null
   projectOptions: Array<{ id: string, name: string }>
   loading: boolean
   selectedProject: string | null
@@ -209,6 +210,29 @@ function organizeBy(value: 'project' | 'list'): void {
         <span class="nav-count" :class="{ warning: attentionCount }">{{ attentionCount }}</span>
       </UButton>
     </nav>
+
+    <section
+      v-if="costs && (costs.pricedRequests || costs.unpricedRequests)"
+      class="sidebar-cost-summary"
+      aria-label="Estimated Claude API cost"
+    >
+      <header>
+        <span><UIcon name="i-lucide-circle-dollar-sign" />Estimated cost</span>
+        <small>Claude API rates</small>
+      </header>
+      <dl>
+        <div>
+          <dt>Today</dt>
+          <dd>{{ formatUsd(costs.todayUsd) }}</dd>
+        </div>
+        <div>
+          <dt>Last 7 days</dt>
+          <dd>{{ costs.last7DaysUsd === null ? '—' : formatUsd(costs.last7DaysUsd) }}</dd>
+        </div>
+      </dl>
+      <p v-if="costs.last7DaysUsd === null">Choose a 7-day range to calculate the weekly total.</p>
+      <p v-else-if="costs.unpricedRequests">{{ costs.unpricedRequests }} request{{ costs.unpricedRequests === 1 ? '' : 's' }} had an unknown model price.</p>
+    </section>
 
     <section class="session-browser">
       <div class="sidebar-section-title">

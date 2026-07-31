@@ -440,6 +440,7 @@ onUnmounted(() => {
         :projects="live.visibleProjects.value"
         :all-projects="live.projects.value"
         :sources="live.sources.value"
+        :costs="live.costs.value"
         :project-options="live.projectOptions.value"
         :loading="live.loading.value"
         :selected-project="live.selectedProject.value"

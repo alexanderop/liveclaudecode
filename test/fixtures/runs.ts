@@ -115,6 +115,7 @@ function diagnostics(): RunDiagnostics {
       interruptions: 0,
     },
     usage: { in: 300, out: 120, cr: 50, cw: 0 },
+    cost: { usd: 0.014, pricedRequests: 2, unpricedRequests: 0, estimated: true },
   }
 }
 

@@ -37,6 +37,7 @@ import type {
   SessionSourceStatus,
   TranscriptEvent,
 } from '#shared/types/run'
+import { summarizeCosts, type ClaudeCostSample } from './cost'
 
 interface ClaudeTree {
   roots: RunNode[]
@@ -44,6 +45,7 @@ interface ClaudeTree {
   cwd: string
   malformed: number
   unreadable: number
+  costSamples: ClaudeCostSample[]
 }
 
 export type SessionLocator =
@@ -72,6 +74,7 @@ export interface SessionCatalog {
   projects: ProjectRuns[]
   sources: SessionSourceStatus[]
   locators: Map<string, SessionLocator>
+  costSamples: ClaudeCostSample[]
 }
 
 interface MutableProject {
@@ -261,6 +264,7 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
   const projects = new Map<string, MutableProject>()
   const locators = new Map<string, SessionLocator>()
   const statuses: SessionSourceStatus[] = []
+  const costSamples: ClaudeCostSample[] = []
 
   // The three sources read disjoint storage roots, so their scans overlap.
   const [claudeResult, codexResult, copilotResult] = yield* Effect.all([
@@ -283,6 +287,7 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     let malformed = 0
     let sessions = 0
     for (const item of claudeResult.success) {
+      costSamples.push(...item.tree.costSamples)
       malformed += item.tree.malformed
       sessions += item.tree.roots.length
       if (!item.tree.roots.length) continue
@@ -385,6 +390,7 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     projects: visible.map(({ id, name, roots }) => ({ id, name, roots })),
     sources: statuses,
     locators,
+    costSamples,
   } satisfies SessionCatalog
 })
 
@@ -461,11 +467,13 @@ export const listSessions = Effect.fn('listSessions')(function*(
   hours: number,
 ) {
   const catalog = yield* loadSessionCatalog(projectInput, hours)
+  const nowMillis = yield* Clock.currentTimeMillis
   return {
     projects: catalog.projects,
     sources: catalog.sources,
-    now: (yield* Clock.currentTimeMillis) / 1_000,
+    now: nowMillis / 1_000,
     hours,
+    costs: summarizeCosts(catalog.costSamples, nowMillis, hours),
   }
 })
 

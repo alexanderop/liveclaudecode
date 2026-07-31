@@ -107,6 +107,14 @@ const metrics = computed<Array<{ label: string, value: string | number, icon: st
     { label: 'Tool calls', value: root.subTools, icon: 'i-lucide-wrench', destination: 'activity' },
     { label: props.run?.files.length === 1 ? 'File changed' : 'Files changed', value: props.run?.files.length || 0, icon: 'i-lucide-files', destination: 'changes' },
     { label: 'Elapsed', value: formatDuration(root.firstTs, root.subLast), icon: 'i-lucide-timer', destination: 'activity' },
+    {
+      label: 'Estimated cost',
+      value: props.run?.diagnostics.cost?.pricedRequests
+        ? formatUsd(props.run.diagnostics.cost.usd)
+        : '—',
+      icon: 'i-lucide-circle-dollar-sign',
+      destination: 'diagnostics',
+    },
   ]
 })
 
@@ -260,6 +268,7 @@ async function copyTranscriptPath(): Promise<void> {
               <div><dt>Model</dt><dd>{{ overviewRoot.model || 'Not recorded' }}</dd></div>
               <div><dt>Output tokens</dt><dd>{{ formatCount(run?.diagnostics.usage.out || overviewRoot.tokensOut) }}</dd></div>
               <div><dt>Cache read</dt><dd>{{ formatCount(run?.diagnostics.usage.cr || 0) }}</dd></div>
+              <div><dt>Estimated API cost</dt><dd>{{ run?.diagnostics.cost?.pricedRequests ? formatUsd(run.diagnostics.cost.usd) : 'Not available' }}</dd></div>
               <div><dt>First event</dt><dd>{{ formatTime(overviewRoot.firstTs) }}</dd></div>
               <div><dt>Last event</dt><dd>{{ formatTime(overviewRoot.subLast) }}</dd></div>
             </dl>

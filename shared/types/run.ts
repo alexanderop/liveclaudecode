@@ -28,6 +28,21 @@ export interface Usage {
   cw: number
 }
 
+export interface CostEstimate {
+  usd: number
+  pricedRequests: number
+  unpricedRequests: number
+  estimated: true
+}
+
+export interface CostSummary extends CostEstimate {
+  currency: 'USD'
+  todayUsd: number
+  /** Null when the selected transcript range does not cover seven days. */
+  last7DaysUsd: number | null
+  coverageHours: number
+}
+
 export interface TranscriptEvent {
   role: 'assistant' | 'user' | 'tool' | 'system'
   kind: EventKind
@@ -207,6 +222,7 @@ export interface RunDiagnostics {
   environment: SessionEnvironment
   causal: CausalSummary
   usage: Usage
+  cost?: CostEstimate
 }
 
 export interface CurrentActivity {
@@ -315,6 +331,7 @@ export interface TreeResponse {
   sources: SessionSourceStatus[]
   now: number
   hours: number
+  costs?: CostSummary
 }
 
 export interface ProjectRuns {
