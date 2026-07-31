@@ -2,6 +2,7 @@ import { Clock, DateTime, Effect, Option, Predicate } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import {
+  COPILOT_SPAWN_TOOLS,
   parseCopilotLogRecord,
   parseCopilotResponsePart,
   parseCopilotSnapshot,
@@ -41,6 +42,7 @@ interface DerivedCopilotState {
   title: string
   model: string
   mode: string
+  subAgents: number
 }
 
 const EMPTY_ENVIRONMENT: SessionEnvironment = {
@@ -330,6 +332,7 @@ export class CopilotTranscriptScan {
     const incidents: DiagnosticIncident[] = []
     const changes: ChangeDetail[] = []
     const turns: RunDiagnostics['turns'] = []
+    const spawnToolCallIds = new Set<string>()
     let tools = 0
     let reads = 0
     let errors = 0
@@ -412,6 +415,8 @@ export class CopilotTranscriptScan {
         if (part.kind === 'tool') {
           const tool = part.data
           const name = tool.toolId
+          const spawn = COPILOT_SPAWN_TOOLS.has(name)
+          if (spawn) spawnToolCallIds.add(tool.toolCallId)
           const commandLine = commandLineText(tool)
           const summary = compact(
             commandLine
@@ -425,7 +430,7 @@ export class CopilotTranscriptScan {
           if (/read|find|search|list/i.test(name)) reads += 1
           nextEvents.push({
             role: 'assistant', kind: 'tool_use', ts, line, tool: name, id: tool.toolCallId,
-            summary, model: model || undefined,
+            summary, spawn, model: model || undefined,
           })
           if (!tool.isComplete) current = { tool: name, summary, ts }
           if (tool.isComplete) {
@@ -552,6 +557,7 @@ export class CopilotTranscriptScan {
       title,
       model,
       mode: sourceDetail,
+      subAgents: spawnToolCallIds.size,
       diagnostics: {
         ...base,
         incidents,
@@ -597,6 +603,10 @@ export class CopilotTranscriptScan {
 
   get sourceDetail(): string {
     return this.derived?.mode || this.application
+  }
+
+  get subAgents(): number {
+    return this.derived?.subAgents || 0
   }
 
   diagnostics(): RunDiagnostics {

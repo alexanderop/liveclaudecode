@@ -11,6 +11,7 @@ import {
 } from '#server/utils/services'
 import { FILE_CONCURRENCY } from '#server/utils/filesystem-concurrency'
 import * as fixture from '../fixtures/copilot'
+import * as cliFixture from '../fixtures/copilot-cli'
 import {
   operationConcurrencyProbe,
   testFileSystem,
@@ -78,6 +79,66 @@ describe('VS Code Copilot discovery', () => {
         }),
         '',
       ].join('\n'),
+    }))))
+
+  it.effect('counts deduplicated VS Code subagent tool calls without synthetic children', () =>
+    Effect.gen(function*() {
+      const built = yield* buildCopilotTree(0)
+      const root = built.byKey.get('copilot:vscode-subagents')
+      assert.strictEqual(root?.subAgents, 2)
+      assert.deepStrictEqual(root?.children, [])
+    }).pipe(Effect.provide(layer({
+      [session(STABLE, 'workspace', 'vscode-subagents')]: fixture.log([
+        fixture.initial(fixture.snapshot({
+          id: 'vscode-subagents',
+          requests: [fixture.request('request-1', 'Delegate the investigation', {
+            response: [
+              fixture.tool('execution_subagent', 'agent-1', { complete: false }),
+              fixture.tool('execution_subagent', 'agent-1'),
+              fixture.tool('search_subagent', 'search-1'),
+              fixture.tool('read_agent', 'read-1'),
+              fixture.tool('task_complete', 'complete-1'),
+            ],
+          })],
+        })),
+      ]),
+    }))))
+
+  it.effect('counts deduplicated Copilot CLI task and runSubagent calls', () =>
+    Effect.gen(function*() {
+      const built = yield* buildCopilotTree(0)
+      const root = built.byKey.get('copilot:cli-subagents')
+      assert.strictEqual(root?.subAgents, 3)
+      assert.deepStrictEqual(root?.children, [])
+    }).pipe(Effect.provide(layer({
+      [`${CLI}/cli-subagents/events.jsonl`]: cliFixture.jsonl([
+        cliFixture.sessionStart('cli-subagents'),
+        cliFixture.assistantMessage({
+          toolRequests: [
+            cliFixture.toolRequest('task', 'task-1', {
+              agent_type: 'explore',
+              name: 'First task',
+              description: 'Inspect the parser',
+              mode: 'background',
+            }),
+          ],
+        }),
+        cliFixture.toolStart('task', 'task-1', { description: 'Inspect the parser' }),
+        cliFixture.toolStart('task', 'task-2', { description: 'Inspect the tests' }, 6),
+        cliFixture.toolStart('runSubagent', 'agent-3', { description: 'Check the UI' }, 7),
+      ]),
+    }))))
+
+  it.effect('does not count non-spawning Copilot tools as subagents', () =>
+    Effect.gen(function*() {
+      const built = yield* buildCopilotTree(0)
+      assert.strictEqual(built.byKey.get('copilot:cli-non-spawns')?.subAgents, 0)
+    }).pipe(Effect.provide(layer({
+      [`${CLI}/cli-non-spawns/events.jsonl`]: cliFixture.jsonl([
+        cliFixture.sessionStart('cli-non-spawns'),
+        cliFixture.toolStart('read_agent', 'read-1', { agent_id: 'agent-1' }),
+        cliFixture.toolStart('task_complete', 'complete-1', {}),
+      ]),
     }))))
 
   it.effect('uses zero hours to include all history', () =>

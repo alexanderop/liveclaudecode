@@ -8,6 +8,7 @@ import {
   parseCopilotCliToolResult,
   type ParsedCopilotCliEvent,
 } from '#shared/schemas/copilot-cli'
+import { COPILOT_SPAWN_TOOLS } from '#shared/schemas/copilot'
 import type {
   ChangeDetail,
   CommandRun,
@@ -49,6 +50,7 @@ interface DerivedState {
   model: string
   workingDirectory: string
   sourceDetail: string
+  subAgents: number
 }
 
 const READ_TOOLS = new Set(['view', 'glob', 'rg', 'web_fetch', 'read_bash', 'read_agent'])
@@ -226,6 +228,7 @@ export class CopilotCliTranscriptScan {
     const incidents: DiagnosticIncident[] = []
     const activeTurns = new Map<string, { ts: Timestamp, millis: number | null }>()
     const turns: RunDiagnostics['turns'] = []
+    const spawnToolCallIds = new Set<string>()
     let firstTs: Timestamp = null
     let lastTs: Timestamp = null
     let firstPrompt = ''
@@ -252,6 +255,8 @@ export class CopilotCliTranscriptScan {
       const tool = { name, summary, input, ts, line }
       toolUses.set(id, tool)
       openTools.set(id, tool)
+      const spawn = COPILOT_SPAWN_TOOLS.has(name)
+      if (spawn) spawnToolCallIds.add(id)
       counts[name] = (counts[name] || 0) + 1
       nextEvents.push({
         role: 'assistant',
@@ -262,7 +267,7 @@ export class CopilotCliTranscriptScan {
         id,
         summary,
         input: encoded(input),
-        spawn: name === 'task',
+        spawn,
         write: ['apply_patch', 'create', 'edit'].includes(name),
         model: model || undefined,
       })
@@ -456,6 +461,7 @@ export class CopilotCliTranscriptScan {
       model,
       workingDirectory: workspace,
       sourceDetail,
+      subAgents: spawnToolCallIds.size,
       diagnostics: {
         incidents,
         turns,
@@ -515,6 +521,10 @@ export class CopilotCliTranscriptScan {
 
   get sourceDetail(): string {
     return this.derived?.sourceDetail || this.application
+  }
+
+  get subAgents(): number {
+    return this.derived?.subAgents || 0
   }
 
   diagnostics(): RunDiagnostics {

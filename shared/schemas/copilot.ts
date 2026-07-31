@@ -2,6 +2,13 @@ import { Result, Schema } from 'effect'
 
 const PRESERVE = { onExcessProperty: 'preserve' } as const
 
+export const COPILOT_SPAWN_TOOLS: ReadonlySet<string> = new Set([
+  'execution_subagent',
+  'search_subagent',
+  'task',
+  'runSubagent',
+])
+
 const ArrayIndexSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const PathSegmentSchema = Schema.Union([Schema.String, ArrayIndexSchema])
 

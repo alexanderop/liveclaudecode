@@ -348,7 +348,7 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
       stoppedByUser: false,
       spawnState: '',
       children: [],
-      subAgents: 0,
+      subAgents: item.scan.subAgents,
       subRunning: 0,
       subErrors: item.stats.errors,
       subTools: item.stats.tools,
