@@ -36,14 +36,17 @@ export type InboundMessage = typeof InboundMessageSchema.Type
 export const InitializeResultSchema = Schema.Struct({
   protocolVersion: Schema.Finite,
 })
+export type InitializeResult = typeof InitializeResultSchema.Type
 
 export const NewSessionResultSchema = Schema.Struct({
   sessionId: Schema.String,
 })
+export type NewSessionResult = typeof NewSessionResultSchema.Type
 
 export const PromptResultSchema = Schema.Struct({
   stopReason: Schema.String,
 })
+export type PromptResult = typeof PromptResultSchema.Type
 
 // -- session/update notification --------------------------------------------
 

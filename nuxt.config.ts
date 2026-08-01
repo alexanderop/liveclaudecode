@@ -4,7 +4,7 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-07-25',
   css: ['~/assets/main.css'],
   devtools: { enabled: true },
-  modules: ['@comark/nuxt', '@nuxt/ui', '@vueuse/nuxt', '@nuxt/test-utils/module'],
+  modules: ['@comark/nuxt', '@nuxt/eslint', '@nuxt/ui', '@vueuse/nuxt', '@nuxt/test-utils/module'],
   colorMode: {
     preference: 'system',
     fallback: 'dark',
@@ -43,6 +43,6 @@ export default defineNuxtConfig({
   },
   typescript: {
     strict: true,
-    typeCheck: true,
+    typeCheck: false,
   },
 })

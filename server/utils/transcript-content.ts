@@ -29,6 +29,22 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+/**
+ * `JSON.stringify` for display purposes. Transcript payloads occasionally
+ * contain values `JSON.stringify` throws on — a circular structure
+ * (`TypeError`), a `BigInt` (`TypeError`), or a throwing `toJSON` — and a
+ * preview string is never worth failing a scan over, so those degrade to
+ * `fallback`. Every serialization try/catch in the scanners routes through
+ * here.
+ */
+export function safeStringify(value: unknown, fallback = '', space?: string | number): string {
+  try {
+    return JSON.stringify(value, null, space) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
 export function plainText(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -52,11 +68,7 @@ export function toolSummary(input: unknown): string {
     }
   }
 
-  try {
-    return JSON.stringify(input).slice(0, 200)
-  } catch {
-    return ''
-  }
+  return safeStringify(input).slice(0, 200)
 }
 
 export function resultText(result: unknown): string {
@@ -73,11 +85,7 @@ export function resultText(result: unknown): string {
       .join('\n')
   }
   if (Predicate.isObject(result)) {
-    try {
-      return JSON.stringify(result, null, 2)
-    } catch {
-      return String(result)
-    }
+    return safeStringify(result, String(result), 2)
   }
   return ''
 }

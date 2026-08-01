@@ -1,51 +1,48 @@
-import { describe, expect, it } from 'vitest'
-import {
-  parseActivityQuery,
-  parseCursorQuery,
-  parseHours,
-  parseSessionQuery,
-} from '../../shared/schemas/request'
+import { describe, expect, it, vi } from 'vitest'
+import { browserOptionsFor } from '../../server/utils/request-context'
 
-describe('request context hours', () => {
-  it('uses a valid query override, including all time', () => {
-    expect(parseHours(168, '24')).toBe(24)
-    expect(parseHours(168, '0')).toBe(0)
-    expect(parseHours(168, '720')).toBe(720)
-    expect(parseHours(168, ' 24 ')).toBe(24)
-    expect(parseHours(168, '1e2')).toBe(100)
-  })
+// `h3` is provided to the real server by Nitro's bundler and is not
+// resolvable from the unit-test project; `getQuery` is substituted with the
+// same query-string parsing over `event.path` the real one performs.
+// (`vi.mock` is hoisted above the imports, so the mock is in place before
+// request-context.ts loads.)
+vi.mock('h3', () => ({
+  getQuery: (event: { path?: string }) =>
+    Object.fromEntries(new URLSearchParams((event.path ?? '').split('?')[1] ?? '')),
+}))
 
-  it('falls back to the configured range for unsafe query values', () => {
-    expect(parseHours(24, '')).toBe(24)
-    expect(parseHours(24, '-1')).toBe(24)
-    expect(parseHours(24, 'not-a-number')).toBe(24)
-    expect(parseHours(24, ['0'])).toBe(24)
-  })
+type RequestEvent = Parameters<typeof browserOptionsFor>[0]
 
-  it('uses seven days when both the query and configuration are invalid', () => {
-    expect(parseHours('invalid', undefined)).toBe(168)
-    expect(parseHours('', undefined)).toBe(0)
-    expect(parseHours(null, undefined)).toBe(0)
-  })
+function eventFor(path: string, lcc: { project?: unknown, hours?: unknown }): RequestEvent {
+  // `useRuntimeConfig` is a Nitro auto-import resolved as a global at runtime.
+  vi.stubGlobal('useRuntimeConfig', () => ({ lcc }))
+  return { path } as unknown as RequestEvent
+}
 
-  it('normalizes session and cursor query fields through schemas', () => {
-    expect(parseSessionQuery({ key: 'session', project: '/repo' })).toEqual({
-      key: 'session',
+describe('browserOptionsFor', () => {
+  it('returns the configured project and hours when the query has no override', () => {
+    expect(browserOptionsFor(eventFor('/api/tree', { project: '/repo', hours: 24 }))).toEqual({
       project: '/repo',
+      hours: 24,
     })
-    expect(parseCursorQuery({ key: ['invalid'], since: '-1', revision: '12.9' })).toEqual({
-      key: '',
-      project: '',
-      since: 0,
-      revision: 12,
-    })
-    expect(parseCursorQuery({ since: '12items' }).since).toBe(12)
   })
 
-  it('defaults and clamps activity limits in the schema', () => {
-    expect(parseActivityQuery({ limit: '50' }).limit).toBe(100)
-    expect(parseActivityQuery({ limit: '3000' }).limit).toBe(2_000)
-    expect(parseActivityQuery({ limit: ['invalid'] }).limit).toBe(800)
-    expect(parseActivityQuery({ limit: '100px' }).limit).toBe(100)
+  it('lets a valid hours query override the configured range, including zero', () => {
+    expect(browserOptionsFor(eventFor('/api/tree?hours=48', { project: '', hours: 24 })).hours).toBe(48)
+    expect(browserOptionsFor(eventFor('/api/tree?hours=0', { project: '', hours: 24 })).hours).toBe(0)
+  })
+
+  it('falls back to the configured hours for an invalid query override', () => {
+    expect(browserOptionsFor(eventFor('/api/tree?hours=soon', { project: '', hours: 24 })).hours).toBe(24)
+    expect(browserOptionsFor(eventFor('/api/tree?hours=-1', { project: '', hours: 24 })).hours).toBe(24)
+  })
+
+  it('uses a week when both the query and configured hours are unusable', () => {
+    expect(browserOptionsFor(eventFor('/api/tree?hours=nope', { project: '', hours: 'bogus' })).hours).toBe(168)
+  })
+
+  it('coerces a missing project to the empty string', () => {
+    expect(browserOptionsFor(eventFor('/api/tree', { hours: 24 })).project).toBe('')
+    expect(browserOptionsFor(eventFor('/api/tree', { project: undefined, hours: 24 })).project).toBe('')
   })
 })

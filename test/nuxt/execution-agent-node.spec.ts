@@ -1,52 +1,25 @@
 import { mount } from '@vue/test-utils'
+import type { VueWrapper } from '@vue/test-utils'
 import { ref } from 'vue'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import ExecutionAgentNode from '~/components/ExecutionAgentNode.vue'
 import { ExecutionCanvasKey } from '~/composables/useExecutionCanvas'
-import type { ExecutionNodeData } from '~/utils/execution-graph'
+import { executionNodeData } from '../fixtures/execution'
 
-const data: ExecutionNodeData = {
-  label: 'Explore agent',
-  agentType: 'Explore',
-  tools: 3,
-  files: 1,
-  tokens: 1200,
-  firstTs: null,
-  lastTs: null,
-  depth: 1,
-  root: false,
-  state: 'active',
-  displayState: 'running',
-  overview: false,
-  agents: 1,
-  errors: 0,
-  incidents: 0,
-  issues: 0,
-  changes: 1,
-  workstream: 1,
-  memberKeys: ['explore'],
-  summary: 'Running the focused test suite',
-  currentTool: 'Bash',
-  idleMs: 0,
-  pendingChildren: 0,
-  childCount: 0,
-  collapsed: false,
-  collapsible: false,
-  muted: false,
-  onPath: true,
-  collision: false,
-  critical: true,
-  bottleneck: false,
-  focusedFile: false,
-}
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+})
 
 describe('execution agent node', () => {
   it('renders accessible selection state and delegates keyboard selection', async () => {
     const selectNode = vi.fn()
-    const component = mount(ExecutionAgentNode, {
+    const wrapper = component = mount(ExecutionAgentNode, {
       props: {
         id: 'explore',
-        data,
+        data: executionNodeData(),
         selected: true,
       },
       global: {
@@ -63,7 +36,7 @@ describe('execution agent node', () => {
       },
     })
 
-    const node = component.get('.sketch-node')
+    const node = wrapper.get('.sketch-node')
     expect(node.classes()).toContain('active')
     expect(node.attributes('aria-current')).toBe('true')
     expect(node.attributes('aria-label')).toContain('Explore agent, Running')
@@ -74,10 +47,10 @@ describe('execution agent node', () => {
 
   it('shows a parent agent child count and exposes branch collapsing', async () => {
     const toggleNode = vi.fn()
-    const component = mount(ExecutionAgentNode, {
+    const wrapper = component = mount(ExecutionAgentNode, {
       props: {
         id: 'explore',
-        data: { ...data, childCount: 3, collapsible: true },
+        data: executionNodeData({ childCount: 3, collapsible: true }),
         selected: false,
       },
       global: {
@@ -95,8 +68,8 @@ describe('execution agent node', () => {
       },
     })
 
-    expect(component.get('.sketch-child-count').text()).toContain('3 children')
-    await component.get('.sketch-collapse').trigger('click')
+    expect(wrapper.get('.sketch-child-count').text()).toContain('3 children')
+    await wrapper.get('.sketch-collapse').trigger('click')
     expect(toggleNode).toHaveBeenCalledWith('explore')
   })
 })

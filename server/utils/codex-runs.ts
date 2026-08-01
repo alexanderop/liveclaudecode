@@ -1,37 +1,25 @@
 import { basename, join } from 'node:path'
-import { Clock, Effect, Option } from 'effect'
-import * as Arr from 'effect/Array'
+import { Clock, Effect } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type { CodexTranscriptScan } from './codex-transcript'
 import { CodexScanCache, CodexSessionsDirectory } from './services'
 import { rollup } from './runs'
-import { FILE_CONCURRENCY, FileDiscoveryLimiter } from './filesystem-concurrency'
+import { FILE_CONCURRENCY, FileDiscoveryLimiter, freshFilesIn } from './filesystem-concurrency'
 import type {
-  AgentDiagnosticSummary,
-  DiagnosticIncident,
   RunDiagnostics,
   RunNode,
-  SessionEnvironment,
-  TranscriptStats,
-  Usage,
 } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import {
-  addFields,
-  byTimestamp,
   bySubLastDesc,
+  countUnreadable,
+  emptyRunDiagnostics,
+  finishRunDiagnostics,
   freshnessCutoff,
-  isFreshMtime,
+  mergeScanDiagnostics,
   selectLatestById,
   visitNodes,
 } from './run-shared'
-
-interface CodexCollectedItem {
-  id: string
-  path: string
-  scan: CodexTranscriptScan
-  stats: TranscriptStats
-}
 
 export interface CodexTree {
   roots: RunNode[]
@@ -68,9 +56,7 @@ const childDirectories = Effect.fn('childDirectories')(function*(directory: stri
 })
 
 export const collectCodexRollouts = Effect.fn('collectCodexRollouts')(function*(maxAgeHours: number) {
-  const fs = yield* FileSystem.FileSystem
   const root = yield* CodexSessionsDirectory
-  const limiter = yield* FileDiscoveryLimiter
   const now = yield* Clock.currentTimeMillis
   const cutoff = freshnessCutoff(maxAgeHours, now)
 
@@ -85,19 +71,11 @@ export const collectCodexRollouts = Effect.fn('collectCodexRollouts')(function*(
     directory => childDirectories(directory),
     { concurrency: FILE_CONCURRENCY },
   )).flat()
-  const discovered = yield* Effect.forEach(days, day => Effect.gen(function*() {
-    const names = yield* limiter.withPermit(fs.readDirectory(day))
-    const candidates = names.filter(name => name.endsWith('.jsonl'))
-    const [failures, fresh] = yield* Effect.partition(candidates, name => Effect.gen(function*() {
-      const path = join(day, name)
-      const info = yield* limiter.withPermit(fs.stat(path))
-      return info.type === 'File' && isFreshMtime(info.mtime, cutoff) ? Option.some(path) : Option.none<string>()
-    }), { concurrency: FILE_CONCURRENCY })
-    return {
-      paths: Arr.getSomes(fresh),
-      unreadable: failures.length,
-    }
-  }), { concurrency: FILE_CONCURRENCY })
+  const discovered = yield* Effect.forEach(
+    days,
+    day => freshFilesIn(day, name => name.endsWith('.jsonl'), cutoff),
+    { concurrency: FILE_CONCURRENCY },
+  )
 
   return {
     paths: discovered.flatMap(result => result.paths).sort((a, b) => a.localeCompare(b)),
@@ -181,7 +159,8 @@ export const buildCodexTree = Effect.fn('buildCodexTree')(function*(hours: numbe
     scanByKey,
     cwdByKey,
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
-    unreadable: discovery.unreadable + unreadableScans.length,
+    unreadable: discovery.unreadable
+      + (yield* countUnreadable('buildCodexTree scans', unreadableScans)),
     duplicates,
   }
 })
@@ -190,26 +169,15 @@ export function codexRunDiagnostics(root: RunNode, scanByKey: Map<string, CodexT
   const nodes: RunNode[] = []
   visitNodes(root, node => nodes.push(node))
 
-  const incidents: DiagnosticIncident[] = []
-  const compactions: RunDiagnostics['compactions'] = []
-  const changes: RunDiagnostics['changes'] = []
-  const agents: AgentDiagnosticSummary[] = []
-  const usage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
-  const causal = { records: 0, recordsWithUuid: 0, branchPoints: 0, sidechainRecords: 0, interruptions: 0 }
-  let environment: SessionEnvironment = { cwd: '', gitBranch: '', version: '', entrypoint: '', permissionMode: '' }
-
+  const aggregate = emptyRunDiagnostics()
   for (const node of nodes) {
     const scan = scanByKey.get(node.key)
     if (!scan) continue
     const diagnostic = scan.diagnostics()
     const who = node.kind === 'session' ? 'Main session' : node.label
-    if (node === root) environment = diagnostic.environment
-    for (const sample of diagnostic.context) addFields(usage, sample.usage)
-    addFields(causal, diagnostic.causal)
-    incidents.push(...diagnostic.incidents.map(incident => ({ ...incident, who, key: node.key })))
-    compactions.push(...diagnostic.compactions.map(compaction => ({ ...compaction, who, key: node.key })))
-    changes.push(...diagnostic.changes.map(change => ({ ...change, who, key: node.key })))
-    agents.push({
+    if (node === root) aggregate.environment = diagnostic.environment
+    mergeScanDiagnostics(aggregate, diagnostic, who, node.key)
+    aggregate.agents.push({
       key: node.key,
       label: who,
       agentType: node.agentType || 'Main session',
@@ -224,16 +192,5 @@ export function codexRunDiagnostics(root: RunNode, scanByKey: Map<string, CodexT
     })
   }
 
-  return {
-    incidents: incidents.sort(byTimestamp).slice(-200),
-    turns: [],
-    compactions: compactions.sort(byTimestamp).slice(-100),
-    outcomes: [],
-    changes: changes.sort(byTimestamp).slice(-300),
-    git: [],
-    agents,
-    environment,
-    causal,
-    usage,
-  }
+  return finishRunDiagnostics(aggregate)
 }

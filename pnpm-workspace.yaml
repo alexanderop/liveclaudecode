@@ -3,4 +3,6 @@ allowBuilds:
   # Native accelerator for msgpackr, pulled in by effect. We do not use
   # effect's Msgpack module; msgpackr falls back to its pure-JS path.
   msgpackr-extract: false
+  # Native resolver used by @nuxt/eslint's import rules; ships prebuilt binaries.
+  unrs-resolver: true
   vue-demi: true

@@ -1,7 +1,8 @@
-import { Effect, Layer, ManagedRuntime, Result } from 'effect'
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Result } from 'effect'
 import type * as PlatformError from 'effect/PlatformError'
 import { NodeServices } from '@effect/platform-node'
 import { createError, type H3Event } from 'h3'
+import type { InvalidRequestQuery } from '#shared/schemas/request'
 import {
   CodexScanCache,
   CopilotScanCache,
@@ -13,8 +14,8 @@ import {
   type UnknownRun,
 } from './services'
 import { SessionCatalogCache, SessionLocatorCache } from './session-catalog'
-import { AcpAgentError, AcpConnector } from './acp-connection'
-import {
+import { type AcpAgentError, AcpConnector } from './acp-connection'
+import type {
   ChatBusy,
   ChatCapacity,
   InvalidChatAction,
@@ -54,6 +55,7 @@ export type AppError =
   | UnknownProject
   | UnknownRun
   | InvalidRunKey
+  | InvalidRequestQuery
   | InvalidChatAction
   | ChatBusy
   | ChatCapacity
@@ -65,13 +67,15 @@ export type AppError =
  * genuine server errors, so they surface as 500 with their reason preserved
  * rather than disappearing into a generic message.
  *
- * The `default` branch is dead for every `AppError` known today; it exists so
- * that adding a tag without a case here fails to typecheck instead of falling
- * through silently at runtime.
+ * The `default` branch is dead for every `AppError` known today; the `never`
+ * assignment keeps it that way at compile time (adding a tag without a case
+ * here fails to typecheck), while at runtime an unmapped error still becomes
+ * a real 500 instead of an unhandled value escaping the handler.
  */
-function toHttpError(error: AppError): ReturnType<typeof createError> {
+export function toHttpError(error: AppError): ReturnType<typeof createError> {
   switch (error._tag) {
     case 'InvalidRunKey':
+    case 'InvalidRequestQuery':
     case 'InvalidChatAction':
       return createError({ statusCode: 400, statusMessage: error.message })
     case 'ChatBusy':
@@ -86,8 +90,10 @@ function toHttpError(error: AppError): ReturnType<typeof createError> {
       return createError({ statusCode: 500, statusMessage: `Filesystem error: ${error.reason._tag}` })
     case 'AcpAgentError':
       return createError({ statusCode: 502, statusMessage: error.message })
-    default:
-      return error satisfies never
+    default: {
+      const _exhaustive: never = error
+      return createError({ statusCode: 500, statusMessage: 'Internal Server Error' })
+    }
   }
 }
 
@@ -96,12 +102,13 @@ function toHttpError(error: AppError): ReturnType<typeof createError> {
  *
  * `event`'s underlying request is wired to an `AbortSignal` so a client that
  * disconnects mid-poll interrupts the in-flight filesystem scan instead of
- * letting it run to completion for nobody. An interruption triggered by that
- * disconnect surfaces as a rejected `runPromise`, not as a typed `AppError`;
- * that path is swallowed rather than rethrown, since a request nobody is
- * waiting on isn't worth logging as a server error. Any other rejection (a
- * genuine defect) is rethrown unchanged, keeping the contract for live
- * requests exactly as it was.
+ * letting it run to completion for nobody. Typed failures are captured with
+ * `Effect.result` and mapped to status codes; everything else surfaces in the
+ * exit's `Cause`. Only a cause that is *interruption and nothing else* — the
+ * signature of the disconnect-triggered interrupt — is reported as the benign
+ * 499; a genuine defect is rethrown unchanged even when the client happens to
+ * have disconnected while it fired, so real bugs are never masked as
+ * cancellations.
  */
 export async function runRequest<A>(
   event: H3Event,
@@ -111,14 +118,16 @@ export async function runRequest<A>(
   const onClientDisconnect = () => controller.abort()
   event.node.req.once('close', onClientDisconnect)
   try {
-    const result = await runtime.runPromise(Effect.result(effect), { signal: controller.signal })
-    if (Result.isSuccess(result)) return result.success
-    throw toHttpError(result.failure)
-  } catch (error) {
-    if (controller.signal.aborted) {
+    const exit = await runtime.runPromiseExit(Effect.result(effect), { signal: controller.signal })
+    if (Exit.isSuccess(exit)) {
+      const result = exit.value
+      if (Result.isSuccess(result)) return result.success
+      throw toHttpError(result.failure)
+    }
+    if (controller.signal.aborted && Cause.hasInterruptsOnly(exit.cause)) {
       throw createError({ statusCode: 499, statusMessage: 'Client Closed Request' })
     }
-    throw error
+    throw Cause.squash(exit.cause)
   } finally {
     event.node.req.removeListener('close', onClientDisconnect)
   }

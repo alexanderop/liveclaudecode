@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import type { RunNode, TranscriptEvent } from '#shared/types/run'
+import type { DiagnosticIncident, TranscriptEvent } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { flattenRunTree } from '~/utils/execution-analysis'
+import { mergeActivityEvents } from '~/utils/activity-feed'
+import { findNode, flattenRunTree } from '~/utils/execution-analysis'
+import { parseTimestamp } from '~/utils/format'
+import { structuralComputed, structurallyEqual } from '~/utils/structural-computed'
 import {
   closeContext,
+  focusFile as focusInvestigationFile,
+  focusIncident as focusInvestigationIncident,
   initialWorkspaceState,
   openAgentDetails,
   openAsk,
@@ -33,7 +38,7 @@ const initialView = typeof route.query.view === 'string'
   && primaryViews.some(view => view.id === route.query.view)
   ? route.query.view as PrimaryWorkspaceKind
   : 'overview'
-const workspaceState = ref<WorkspaceState>({
+const workspaceState = shallowRef<WorkspaceState>({
   ...initialWorkspaceState(),
   primary: initialView,
 })
@@ -42,7 +47,10 @@ const contextKey = ref<string | null>(null)
 const canvasTime = ref<number | null>(null)
 const focusedLine = ref<number | null>(null)
 const focusedFile = ref<string | null>(null)
-const activityAgentBySession = reactive<Record<string, string>>({})
+const ACTIVITY_AGENT_CAPACITY = 20
+// Bounded most-recently-used map so long dashboards do not accumulate one
+// entry per session ever visited.
+const activityAgentBySession = shallowRef<ReadonlyMap<string, string>>(new Map())
 const searchOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const statusAnnouncement = ref('')
@@ -90,9 +98,14 @@ const sessionAgentCount = computed(() => flattenRunTree(live.selectedRoot.value)
 const sessionActivityCount = computed(() => live.sessionEvents.value.length || live.selectedRoot.value?.subTools || 0)
 const sessionChangeCount = computed(() => live.run.value?.files.length || 0)
 const activityAgentKey = computed({
-  get: () => activityAgentBySession[sessionIdentity.value] || 'all',
+  get: () => activityAgentBySession.value.get(sessionIdentity.value) || 'all',
   set: value => {
-    if (sessionIdentity.value) activityAgentBySession[sessionIdentity.value] = value
+    if (!sessionIdentity.value) return
+    const next = new Map(activityAgentBySession.value)
+    next.delete(sessionIdentity.value)
+    next.set(sessionIdentity.value, value)
+    while (next.size > ACTIVITY_AGENT_CAPACITY) next.delete(next.keys().next().value!)
+    activityAgentBySession.value = next
   },
 })
 
@@ -123,24 +136,13 @@ function fitPanelsToViewport(): void {
     sidebarWidth.value = clampWidth(sidebarWidth.value, SIDEBAR_MIN, sidebarMax.value)
   }
 }
-const inspectedNode = computed(() => {
-  if (!inspectedKey.value || !live.selectedRoot.value) return null
-  const visit = (node: RunNode): RunNode | null => {
-    if (node.key === inspectedKey.value) return node
-    for (const child of node.children) {
-      const found = visit(child)
-      if (found) return found
-    }
-    return null
-  }
-  return visit(live.selectedRoot.value)
-})
+const inspectedNode = computed(() => findNode(live.selectedRoot.value, inspectedKey.value))
 const activityAgents = computed(() => flattenRunTree(live.selectedRoot.value))
 const activityAgentOptions = computed(() => [
   { label: 'Whole session', value: 'all' },
   ...activityAgents.value.map(agent => ({ label: agent.label, value: agent.key })),
 ])
-const activityEvents = computed<TranscriptEvent[]>(() => {
+const activityEvents = structuralComputed<TranscriptEvent[]>(() => {
   const root = live.selectedRoot.value
   const base = live.sessionEvents.value.length
     ? live.sessionEvents.value
@@ -151,26 +153,13 @@ const activityEvents = computed<TranscriptEvent[]>(() => {
         agentType: root?.agentType || 'Main session',
         agentDepth: 0,
       }))
-  const eventKeys = new Set(base.filter(event => event.error).map(event => `${event.agentKey || ''}:${event.line}`))
-  const incidentEvents: TranscriptEvent[] = (live.run.value?.diagnostics.incidents || [])
-    .filter(incident => incident.severity !== 'info' && !eventKeys.has(`${incident.key || ''}:${incident.line}`))
-    .map(incident => ({
-      role: 'system',
-      kind: 'system',
-      ts: incident.ts,
-      line: incident.line,
-      body: incident.detail,
-      summary: incident.title,
-      tool: incident.tool,
-      error: incident.severity === 'error',
-      agentKey: incident.key,
-      agentLabel: activityAgents.value.find(agent => agent.key === incident.key)?.label || incident.who || 'Session',
-      agentType: activityAgents.value.find(agent => agent.key === incident.key)?.agentType || 'Diagnostic incident',
-    }))
-  return [...base, ...incidentEvents]
-    .filter(event => activityAgentKey.value === 'all' || event.agentKey === activityAgentKey.value)
-    .sort((left, right) => (left.ts || '').localeCompare(right.ts || '') || left.line - right.line)
-})
+  return mergeActivityEvents({
+    base,
+    incidents: live.run.value?.diagnostics.incidents || [],
+    agents: activityAgents.value,
+    agentKey: activityAgentKey.value,
+  })
+}, structurallyEqual)
 
 const searchGroups = computed(() => [{
   id: 'sessions',
@@ -229,11 +218,11 @@ function inspectAgent(key: string): void {
     nextTick(() => document.querySelector<HTMLElement>('.inspector-title strong, .inspector-close')?.focus())
   }
 }
-function inspectIncident(incident: { id?: string, key?: string, line: number, ts: string | null }): void {
+function inspectIncident(incident: DiagnosticIncident): void {
   if (incident.key) inspectAgent(incident.key)
   focusedLine.value = incident.line
-  canvasTime.value = incident.ts ? Date.parse(incident.ts) : null
-  workspaceState.value.investigation.incidentId = incident.id
+  canvasTime.value = parseTimestamp(incident.ts)
+  workspaceState.value = focusInvestigationIncident(workspaceState.value, incident.id)
 }
 function focusTime(timestamp: number | null, line: number | null = null): void {
   canvasTime.value = timestamp
@@ -241,7 +230,7 @@ function focusTime(timestamp: number | null, line: number | null = null): void {
 }
 function focusFile(path: string | null): void {
   focusedFile.value = path
-  workspaceState.value.investigation.filePath = path || undefined
+  workspaceState.value = focusInvestigationFile(workspaceState.value, path || undefined)
 }
 function openWorkspace(destination: PrimaryWorkspaceKind): void {
   const closingAgent = workspaceState.value.context.kind === 'agent-details'
@@ -263,13 +252,7 @@ function chooseDestination(destination: PrimaryWorkspaceKind | 'ask'): void {
 
 async function selectSession(project: string, key: string): Promise<void> {
   const projectRuns = live.projects.value.find(entry => entry.id === project)
-  const findRootForKey = (nodes: RunNode[]): RunNode | null => {
-    for (const node of nodes) {
-      if (node.key === key || flattenRunTree(node).some(candidate => candidate.key === key)) return node
-    }
-    return null
-  }
-  const root = projectRuns ? findRootForKey(projectRuns.roots) : null
+  const root = projectRuns?.roots.find(candidate => findNode(candidate, key)) || null
   if (root && root.key !== key) {
     if (live.selectedProject.value !== project || selectedSessionKey.value !== root.key) {
       sessionSelectionIsManual.value = true
@@ -289,14 +272,9 @@ function handleShortcut(event: KeyboardEvent): void {
     sidebarCollapsed.value = !sidebarCollapsed.value
     return
   }
-  if (event.key !== 'Escape') return
-  if (selectedContextVisible.value && contextUsesModal.value) {
-    event.preventDefault()
-    closeContextPanel()
-  } else if (selectedContextVisible.value) {
-    event.preventDefault()
-    closeContextPanel()
-  }
+  if (event.key !== 'Escape' || !selectedContextVisible.value) return
+  event.preventDefault()
+  closeContextPanel()
 }
 
 watch(
@@ -486,12 +464,17 @@ onMounted(() => {
                 :loading="live.loading.value"
                 :source-incomplete="sourceIncomplete"
                 :source-message="selectedSourceMessage"
-                :projects="live.projects.value"
                 @open="openWorkspace"
                 @ask="openAskPanel"
                 @select="inspectAgent"
-                @select-agent="selectSession"
-            />
+            >
+              <template #active-agents>
+                <ActiveAgentsOverview
+                  :projects="live.projects.value"
+                  @select="selectSession"
+                />
+              </template>
+            </RunOverview>
 
             <div v-if="workspaceState.primary === 'activity'" class="primary-list-workspace activity-workspace">
                 <header class="primary-workspace-heading">

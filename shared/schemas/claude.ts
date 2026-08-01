@@ -1,4 +1,4 @@
-import { Result, Schema } from 'effect'
+import { Effect, Result, Schema } from 'effect'
 import { NonNegativeInt, parseOrNull } from './parse'
 
 /**
@@ -384,6 +384,117 @@ export function parseClaudeRecord(value: unknown): ClaudeRecordParseResult {
     }),
   }
 }
+
+// -- Tool-use result metadata -----------------------------------------------
+
+/**
+ * An optional field whose value degrades to "absent" when it does not match
+ * the declared type. `toolUseResult` and attachment payloads vary by tool and
+ * Claude Code version, and a single odd field must not reject the whole
+ * record — the scanner previously hand-walked these payloads coercing field
+ * by field, and this keeps that per-field tolerance while the shapes live in
+ * one declared schema.
+ */
+const lenientKey = <S extends Schema.Top>(schema: S) =>
+  Schema.optionalKey(schema).pipe(Schema.catchDecoding(() => Effect.succeedNone))
+
+/** One `structuredPatch` hunk; a malformed hunk degrades to no lines. */
+const ClaudePatchHunkSchema = Schema.Struct({
+  lines: lenientKey(Schema.Array(
+    Schema.String.pipe(Schema.catchDecoding(() => Effect.succeedSome(''))),
+  )),
+})
+
+export const ClaudeToolStatsSchema = Schema.Struct({
+  readCount: lenientKey(Schema.Finite),
+  searchCount: lenientKey(Schema.Finite),
+  bashCount: lenientKey(Schema.Finite),
+  editFileCount: lenientKey(Schema.Finite),
+  linesAdded: lenientKey(Schema.Finite),
+  linesRemoved: lenientKey(Schema.Finite),
+  otherToolCount: lenientKey(Schema.Finite),
+})
+
+export const ClaudeGitOperationSchema = Schema.Struct({
+  commit: lenientKey(Schema.Struct({ sha: lenientKey(Schema.String) })),
+  push: lenientKey(Schema.Struct({ branch: lenientKey(Schema.String) })),
+  pr: lenientKey(Schema.Struct({
+    number: lenientKey(Schema.Finite),
+    action: lenientKey(Schema.String),
+    url: lenientKey(Schema.String),
+  })),
+  branch: lenientKey(Schema.Struct({
+    action: lenientKey(Schema.String),
+    ref: lenientKey(Schema.String),
+  })),
+})
+
+/**
+ * The structured metadata Claude Code attaches to a `tool_result` record as
+ * `toolUseResult`. Only the fields the dashboard consumes are declared; every
+ * one is lenient-optional so no payload accepted by the old hand-rolled
+ * walker is rejected. Plain string results simply fail to decode and the
+ * scanner skips the metadata pass, as before.
+ */
+export const ClaudeToolUseResultSchema = Schema.Struct({
+  timedOutAfterMs: lenientKey(Schema.Finite),
+  filePath: lenientKey(Schema.String),
+  structuredPatch: lenientKey(Schema.Array(
+    ClaudePatchHunkSchema.pipe(Schema.catchDecoding(() => Effect.succeedSome({}))),
+  )),
+  userModified: lenientKey(Schema.Boolean),
+  staleRecovered: lenientKey(Schema.Boolean),
+  status: lenientKey(Schema.String),
+  resolvedModel: lenientKey(Schema.String),
+  totalDurationMs: lenientKey(Schema.Finite),
+  totalTokens: lenientKey(Schema.Finite),
+  totalToolUseCount: lenientKey(Schema.Finite),
+  toolStats: lenientKey(ClaudeToolStatsSchema),
+  gitOperation: lenientKey(ClaudeGitOperationSchema),
+  isAsync: lenientKey(Schema.Boolean),
+})
+
+export type ClaudeToolUseResult = typeof ClaudeToolUseResultSchema.Type
+export type ClaudeToolStats = typeof ClaudeToolStatsSchema.Type
+
+export const parseClaudeToolUseResult = parseOrNull(ClaudeToolUseResultSchema, PRESERVE)
+
+// -- Attachment payloads ----------------------------------------------------
+
+/** Fields shared by the two hook-incident attachment shapes. */
+const hookAttachmentFields = {
+  hookEvent: lenientKey(Schema.String),
+  hookName: lenientKey(Schema.String),
+  // Free-form diagnostics: stderr may be a string or a structured value, and
+  // exitCode is stringified verbatim whatever its type.
+  stderr: Schema.optionalKey(Schema.Unknown),
+  exitCode: Schema.optionalKey(Schema.Unknown),
+  toolUseID: lenientKey(Schema.String),
+}
+
+export const ClaudeAttachmentPayloadSchema = Schema.Union([
+  Schema.Struct({ type: Schema.Literal('hook_non_blocking_error'), ...hookAttachmentFields }),
+  Schema.Struct({ type: Schema.Literal('hook_cancelled'), ...hookAttachmentFields }),
+  Schema.Struct({
+    type: Schema.Literal('read_truncation_notice'),
+    banner: Schema.optionalKey(Schema.Unknown),
+    toolUseID: lenientKey(Schema.String),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('goal_status'),
+    met: Schema.optionalKey(Schema.Unknown),
+    reason: Schema.optionalKey(Schema.Unknown),
+  }),
+]).pipe(Schema.toTaggedUnion('type'))
+
+export type ClaudeAttachmentPayload = typeof ClaudeAttachmentPayloadSchema.Type
+
+/**
+ * Attachment types beyond the four the dashboard reports simply fail to
+ * decode and return `null`; the scanner ignores them, exactly as the old
+ * hand-rolled `type` dispatch did.
+ */
+export const parseClaudeAttachment = parseOrNull(ClaudeAttachmentPayloadSchema, PRESERVE)
 
 // -- Subagent metadata ------------------------------------------------------
 

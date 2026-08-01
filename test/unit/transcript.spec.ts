@@ -413,6 +413,54 @@ describe('TranscriptScan', () => {
       assert.deepStrictEqual(diagnostics.incidents.map(incident => incident.category), ['tool', 'timeout'])
     }))
 
+  it.effect('degrades mismatched toolUseResult fields instead of dropping the record', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.assistant([fixture.tool('Agent', 'agent-1', { description: 'worker' })]),
+        fixture.userResult('agent-1', 'complete', {
+          toolUseResult: {
+            status: 123,
+            resolvedModel: { nested: true },
+            totalDurationMs: 'later',
+            toolStats: 'not-an-object',
+            gitOperation: { commit: 'abc', push: { branch: 42 } },
+            timedOutAfterMs: '5000',
+          },
+        }),
+      ])
+
+      const diagnostics = result.diagnostics()
+      assert.deepStrictEqual(diagnostics.outcomes[0], {
+        toolUseId: 'agent-1',
+        ts: fixture.T0(1),
+        status: '',
+        model: '',
+        durationMs: 0,
+        totalTokens: 0,
+        totalToolUseCount: 0,
+        stats: { reads: 0, searches: 0, commands: 0, edits: 0, linesAdded: 0, linesRemoved: 0, other: 0 },
+      })
+      // A non-object commit degrades away; a push with a non-string branch
+      // still records the push with the fallback label.
+      assert.deepStrictEqual(diagnostics.git.map(event => [event.kind, event.label]), [['push', 'Pushed branch']])
+      // A string timedOutAfterMs is not a timeout.
+      assert.deepStrictEqual(diagnostics.incidents, [])
+    }))
+
+  it.effect('ignores attachment types the dashboard does not report', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.attachment('some_future_attachment', { anything: true }),
+        fixture.attachment('goal_status', { met: false, reason: 'budget exhausted' }),
+      ])
+
+      const incidents = result.diagnostics().incidents
+      assert.deepStrictEqual(
+        incidents.map(incident => [incident.category, incident.detail]),
+        [['workflow', 'budget exhausted']],
+      )
+    }))
+
   it.effect('surfaces hook, truncation, denial, and interruption incidents', () =>
     Effect.gen(function*() {
       const result = yield* scanOf([

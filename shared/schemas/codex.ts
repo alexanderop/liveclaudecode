@@ -251,7 +251,8 @@ export type ParsedCodexRecord =
   | { kind: 'session_meta', timestamp?: string, data: CodexSessionMetaPayload }
   | { kind: 'turn_context', timestamp?: string, data: CodexTurnContextPayload }
   | { kind: 'response_item', timestamp?: string, data: CodexResponseItem }
-  | { kind: 'event_msg', timestamp?: string, data: CodexEventPayload | { readonly type: string }, known: boolean }
+  | { kind: 'event_msg', timestamp?: string, data: CodexEventPayload, known: true }
+  | { kind: 'event_msg', timestamp?: string, data: { readonly type: string }, known: false }
   | { kind: 'unknown', timestamp?: string, type: string }
 
 export type CodexParseResult =
@@ -310,12 +311,12 @@ export function parseCodexRecord(value: unknown): CodexParseResult {
     if (!known) {
       return {
         success: true,
-        record: { kind: 'event_msg', ...withTimestamp, data: eventEnvelope.success, known: false },
+        record: { kind: 'event_msg', ...withTimestamp, data: eventEnvelope.success, known: false as const },
       }
     }
     const parsed = decodeEvent(payload)
     return Result.isSuccess(parsed)
-      ? { success: true, record: { kind: 'event_msg', ...withTimestamp, data: parsed.success, known: true } }
+      ? { success: true, record: { kind: 'event_msg', ...withTimestamp, data: parsed.success, known: true as const } }
       : { success: false, known: true }
   }
   return { success: true, record: { kind: 'unknown', ...withTimestamp, type } }

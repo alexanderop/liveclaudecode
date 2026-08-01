@@ -1,89 +1,92 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import type { VueWrapper } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { VueFlow } from '@vue-flow/core'
 import RunCanvas from '~/components/RunCanvas.client.vue'
-import type { RunResponse, TimelineLane } from '#shared/types/run'
+import type { TimelineLane } from '#shared/types/run'
+import { runDiagnostics, runResponse, timelineLane } from '../fixtures/runs'
+
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+  vi.useRealTimers()
+})
 
 function lane(key: string, depth: number): TimelineLane {
-  return {
+  return timelineLane({
     key,
-    depth,
     label: key,
     agentType: depth === 2 ? 'Explore' : depth === 1 ? 'general-purpose' : '',
     kind: depth ? 'subagent' : 'session',
+    depth,
     firstTs: null,
     lastTs: null,
-    live: false,
-    errors: 0,
     tools: depth,
     spawnState: depth ? 'returned' : '',
     files: 0,
-  }
+  })
 }
 
-const run = {
+const run = runResponse({
   key: 'root',
   lanes: [
     lane('root', 0),
     lane('outer', 1),
     lane('inner', 2),
   ],
-} as RunResponse
-
-afterEach(() => {
-  vi.useRealTimers()
-  vi.restoreAllMocks()
 })
 
 describe('run canvas', () => {
   it('shows every nested agent by default', async () => {
-    const component = await mountSuspended(RunCanvas, {
+    const wrapper = component = await mountSuspended(RunCanvas, {
       props: {
         run,
         selectedKey: null,
       },
     })
 
-    expect(component.find('.canvas-options').exists()).toBe(false)
-    await component.get('button[aria-controls="canvas-display-options"]').trigger('click')
+    expect(wrapper.find('.canvas-options').exists()).toBe(false)
+    await wrapper.get('button[aria-controls="canvas-display-options"]').trigger('click')
 
-    const overview = component.get('button[title="Group nested agents into readable workstreams"]')
-    const allAgents = component.get('button[title="Show every individual agent"]')
+    const overview = wrapper.get('button[title="Group nested agents into readable workstreams"]')
+    const allAgents = wrapper.get('button[title="Show every individual agent"]')
 
     expect(overview.attributes('aria-pressed')).toBe('false')
     expect(allAgents.attributes('aria-pressed')).toBe('true')
-    expect(component.get('.canvas-title').text()).toContain('3 agents')
-    expect(component.get('.canvas-title').text()).not.toContain('workstreams')
+    expect(wrapper.get('.canvas-title').text()).toContain('3 agents')
+    expect(wrapper.get('.canvas-title').text()).not.toContain('workstreams')
   })
 
   it('starts a dense nested run in expandable workstream overview', async () => {
-    const denseRun = {
+    const denseRun = runResponse({
       key: 'root',
       lanes: [
         lane('root', 0),
         lane('outer', 1),
         ...Array.from({ length: 11 }, (_, index) => lane(`nested-${index}`, 2)),
       ],
-    } as RunResponse
-    const component = await mountSuspended(RunCanvas, {
+    })
+    const wrapper = component = await mountSuspended(RunCanvas, {
       props: {
         run: denseRun,
         selectedKey: null,
       },
     })
 
-    await component.get('button[aria-controls="canvas-display-options"]').trigger('click')
+    await wrapper.get('button[aria-controls="canvas-display-options"]').trigger('click')
 
-    expect(component.get('button[title="Group nested agents into readable workstreams"]')
+    expect(wrapper.get('button[title="Group nested agents into readable workstreams"]')
       .attributes('aria-pressed')).toBe('true')
-    expect(component.get('button[title="Show every individual agent"]')
+    expect(wrapper.get('button[title="Show every individual agent"]')
       .attributes('aria-pressed')).toBe('false')
-    expect(component.get('.canvas-title').text()).toContain('13 agents · 2 visible')
+    expect(wrapper.get('.canvas-title').text()).toContain('13 agents · 2 visible')
   })
 
   it('assigns a distinct Vue Flow store id to every canvas instance', async () => {
-    const component = await mountSuspended(defineComponent({
+    const wrapper = component = await mountSuspended(defineComponent({
       components: { RunCanvas },
       setup: () => ({ run }),
       template: `
@@ -92,11 +95,11 @@ describe('run canvas', () => {
       `,
     }))
 
-    const ids = component.findAllComponents(RunCanvas)
+    const ids = wrapper.findAllComponents(RunCanvas)
       .map(canvas => (canvas.vm as unknown as { canvasId: string }).canvasId)
-    const renderedIds = component.findAllComponents(VueFlow)
+    const renderedIds = wrapper.findAllComponents(VueFlow)
       .map(flow => flow.props('id'))
-    const storeIds = component.findAll('.canvas-view')
+    const storeIds = wrapper.findAll('.canvas-view')
       .map(canvas => canvas.attributes('data-flow-store-id'))
 
     expect(ids).toHaveLength(2)
@@ -110,7 +113,7 @@ describe('run canvas', () => {
   it('keeps a single visibility listener across KeepAlive deactivation and removes it on unmount', async () => {
     const addListener = vi.spyOn(document, 'addEventListener')
     const removeListener = vi.spyOn(document, 'removeEventListener')
-    const component = await mountSuspended(defineComponent({
+    const wrapper = component = await mountSuspended(defineComponent({
       components: { RunCanvas },
       data: () => ({ run, visible: true }),
       template: `
@@ -128,31 +131,32 @@ describe('run canvas', () => {
     expect(initialAdds).toHaveLength(1)
     const handler = initialAdds[0]![1]
 
-    await component.get('button').trigger('click')
+    await wrapper.get('button').trigger('click')
     await nextTick()
-    await component.get('button').trigger('click')
+    await wrapper.get('button').trigger('click')
     await nextTick()
     expect(visibilityAdds()).toHaveLength(1)
     expect(visibilityRemoves()).toHaveLength(0)
 
-    component.unmount()
+    wrapper.unmount()
+    component = null
     expect(visibilityRemoves()).toHaveLength(1)
     expect(visibilityRemoves()[0]![1]).toBe(handler)
   })
 
   it('stops replay and minimap timers while a cached canvas is deactivated', async () => {
     vi.useFakeTimers()
-    const replayRun = {
-      ...run,
-      diagnostics: { changes: [], incidents: [] },
+    const replayRun = runResponse({
+      key: 'root',
       lanes: run.lanes.map((item, index) => ({
         ...item,
         firstTs: `2026-07-31T08:0${index}:00.000Z`,
         lastTs: `2026-07-31T08:0${index}:30.000Z`,
       })),
       phases: [],
-    } as unknown as RunResponse
-    const component = await mountSuspended(defineComponent({
+      diagnostics: runDiagnostics({ changes: [], git: [], incidents: [] }),
+    })
+    const wrapper = component = await mountSuspended(defineComponent({
       components: { RunCanvas },
       data: () => ({ focusUpdates: 0, replayRun, visible: true }),
       template: `
@@ -167,7 +171,7 @@ describe('run canvas', () => {
         </KeepAlive>
       `,
     }))
-    const canvas = component.findComponent(RunCanvas)
+    const canvas = wrapper.findComponent(RunCanvas)
     const canvasState = canvas.vm as unknown as {
       minimapVisible: boolean
       playing: boolean
@@ -180,15 +184,15 @@ describe('run canvas', () => {
 
     expect(canvasState.playing).toBe(true)
     expect(canvasState.minimapVisible).toBe(true)
-    const updatesBeforeDeactivation = component.vm.focusUpdates
+    const updatesBeforeDeactivation = wrapper.vm.focusUpdates
 
-    await component.get('.toggle-canvas').trigger('click')
+    await wrapper.get('.toggle-canvas').trigger('click')
     await nextTick()
     expect(canvasState.playing).toBe(false)
     expect(canvasState.minimapVisible).toBe(false)
 
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(component.vm.focusUpdates).toBe(updatesBeforeDeactivation)
+    expect(wrapper.vm.focusUpdates).toBe(updatesBeforeDeactivation)
     expect(canvasState.minimapVisible).toBe(false)
   })
 })

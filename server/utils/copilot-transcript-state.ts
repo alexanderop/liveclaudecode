@@ -6,7 +6,8 @@ import type {
   TranscriptEvent,
   TranscriptStats,
 } from '#shared/types/run'
-import { statIfExists } from './filesystem-concurrency'
+import { detectFileChange } from './filesystem-concurrency'
+import { emptyCausal, emptyUsage } from './run-shared'
 
 export interface ChangedTranscriptFile {
   raw: string
@@ -27,27 +28,20 @@ export class TranscriptFile {
 
   readonly refresh = Effect.fn('TranscriptFile.refresh')(function*(this: TranscriptFile) {
     const fs = yield* FileSystem.FileSystem
-    const infoOption = yield* statIfExists(this.path)
-    if (Option.isNone(infoOption) || infoOption.value.type !== 'File') {
-      return Option.none<ChangedTranscriptFile>()
-    }
-
-    const info = infoOption.value
-    const mtime = Option.match(info.mtime, {
-      onNone: () => this.mtime,
-      onSome: value => value.getTime() / 1_000,
+    const change = yield* detectFileChange(this.path, {
+      mtime: this.mtime,
+      lastLoadedMtime: this.lastLoadedMtime,
+      lastLoadedSize: this.lastLoadedSize,
     })
-    const size = Number(info.size)
-    this.mtime = mtime
-    this.size = size
-    if (size === this.lastLoadedSize && mtime === this.lastLoadedMtime) {
-      return Option.none<ChangedTranscriptFile>()
-    }
+    if (change._tag === 'Missing') return Option.none<ChangedTranscriptFile>()
+    this.mtime = change.mtime
+    this.size = change.size
+    if (change._tag === 'Unchanged') return Option.none<ChangedTranscriptFile>()
 
     const raw = yield* fs.readFileString(this.path)
-    const rewritten = size < this.lastLoadedSize
-    this.lastLoadedMtime = mtime
-    this.lastLoadedSize = size
+    const rewritten = change.size < this.lastLoadedSize
+    this.lastLoadedMtime = change.mtime
+    this.lastLoadedSize = change.size
     return Option.some({ raw, rewritten } satisfies ChangedTranscriptFile)
   })
 }
@@ -127,13 +121,7 @@ export function emptyTranscriptDiagnostics(environment: SessionEnvironment): Run
     git: [],
     agents: [],
     environment: { ...environment },
-    causal: {
-      records: 0,
-      recordsWithUuid: 0,
-      branchPoints: 0,
-      sidechainRecords: 0,
-      interruptions: 0,
-    },
-    usage: { in: 0, out: 0, cr: 0, cw: 0 },
+    causal: emptyCausal(),
+    usage: emptyUsage(),
   }
 }

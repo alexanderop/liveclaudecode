@@ -233,10 +233,9 @@ describe('prompt cache', () => {
 
       yield* cache.get(promptPath(1))
       assert.strictEqual(reads.get(promptPath(1)), 2)
-    }).pipe(Effect.provide(Layer.mergeAll(
-      PromptCache.layer,
-      testFileSystem(promptTree(257), { onRead }),
-    )))
+    }).pipe(Effect.provide(
+      PromptCache.layer.pipe(Layer.provideMerge(testFileSystem(promptTree(257), { onRead }))),
+    ))
   })
 
   it.effect('coalesces concurrent lookups for the same path', () => {
@@ -257,14 +256,13 @@ describe('prompt cache', () => {
       assert.deepStrictEqual(results, ['One prompt', 'One prompt'])
       assert.strictEqual(reads, 1)
       assert.strictEqual(maximumActiveReads, 1)
-    }).pipe(Effect.provide(Layer.mergeAll(
-      PromptCache.layer,
-      testFileSystem({
+    }).pipe(Effect.provide(
+      PromptCache.layer.pipe(Layer.provideMerge(testFileSystem({
         [PATH]: claude.transcript([claude.userText('One prompt')]),
       }, {
         beforeRead,
         onRead: () => { reads += 1 },
-      }),
-    )))
+      }))),
+    ))
   })
 })

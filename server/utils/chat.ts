@@ -1,7 +1,8 @@
 import { dirname } from 'node:path'
-import { Context, Deferred, Duration, Effect, Fiber, Option, Result, Schema, Scope, Stream } from 'effect'
-import * as FileSystem from 'effect/FileSystem'
+import { Context, Deferred, Effect, Fiber, Option, Result, Schema, Scope, Stream } from 'effect'
+import type { Duration } from 'effect'
 import { AcpAgentError, AcpConnector, type AcpConnection } from './acp-connection'
+import { isDirectory } from './project'
 import {
   appendChatEvent,
   CHAT_RECORD_CAPACITY,
@@ -13,6 +14,7 @@ import { ScanCache, UnknownRun } from './services'
 import {
   loadSessionCatalog,
   SessionLocatorCache,
+  UNASSIGNED_PROJECT,
   type SessionEventLocation,
 } from './session-catalog'
 import {
@@ -26,7 +28,6 @@ import type {
   ChatActionResponse,
   ChatAgentId,
   ChatEventsResponse,
-  ChatStatus,
 } from '#shared/types/chat'
 
 /** A reply is already streaming for this chat — one turn in flight at a time. */
@@ -192,14 +193,6 @@ const locateChatSession = Effect.fn('locateChatSession')(function*(
  * that does not exist, so this falls back from the observed session's own
  * cwd to directories that are guaranteed to be present.
  */
-const usableDirectory = Effect.fn('usableDirectory')(function*(path: string) {
-  const fs = yield* FileSystem.FileSystem
-  return yield* fs.stat(path).pipe(
-    Effect.map(info => info.type === 'Directory'),
-    Effect.catchIf(error => error.reason._tag === 'NotFound', () => Effect.succeed(false)),
-  )
-})
-
 const resolveChatCwd = Effect.fn('resolveChatCwd')(function*(
   location: SessionEventLocation,
   transcriptPath: string,
@@ -207,11 +200,11 @@ const resolveChatCwd = Effect.fn('resolveChatCwd')(function*(
   if (location.source === 'claude') {
     const scans = yield* ScanCache
     const scan = yield* scans.get(transcriptPath)
-    if (scan.cwd && (yield* usableDirectory(scan.cwd))) return scan.cwd
+    if (scan.cwd && (yield* isDirectory(scan.cwd))) return scan.cwd
     return location.projectDirectory
   }
 
-  if (location.projectId !== '__unassigned__' && (yield* usableDirectory(location.projectId))) {
+  if (location.projectId !== UNASSIGNED_PROJECT && (yield* isDirectory(location.projectId))) {
     return location.projectId
   }
   return dirname(transcriptPath)
@@ -241,7 +234,7 @@ const requestWithTimeout = Effect.fn('requestWithTimeout')(
     connection: AcpConnection,
     method: string,
     params: unknown,
-    timeout: Duration.Input,
+    _timeout: Duration.Input,
   ) {
     return yield* connection.request(method, params)
   },
@@ -334,6 +327,12 @@ const runChatTurn = Effect.fn('runChatTurn')(function*(
   }, '10 minutes')
 
   const stop = parsePromptResult(result)
+  if (Result.isFailure(stop)) {
+    yield* Effect.logDebug('chat: unparseable session/prompt result, reporting stopReason unknown', {
+      result,
+      error: stop.failure,
+    })
+  }
   if (record.generation !== generation) return
   appendChatEvent(record, {
     kind: 'turn-end',
@@ -427,26 +426,28 @@ export const pollChatEvents = Effect.fn('pollChatEvents')(function*(
   const store = yield* ChatStore
   const record = yield* store.get(chatKey(project, key))
   if (!record) {
-    return {
+    const response: ChatEventsResponse = {
       events: [],
       next: 0,
       revision: 0,
       reset: since > 0 || revision !== 0,
-      status: 'idle' as ChatStatus,
+      status: 'idle',
       agent: null,
-    } satisfies ChatEventsResponse
+    }
+    return response
   }
   const end = record.base + record.events.length
   const reset = revision !== record.revision || since < record.base || since > end
   const events = reset ? [...record.events] : record.events.slice(since - record.base)
-  return {
+  const response: ChatEventsResponse = {
     events,
     next: end,
     revision: record.revision,
     reset,
     status: record.status,
     agent: record.agent,
-  } satisfies ChatEventsResponse
+  }
+  return response
 })
 
 export const cancelChat = Effect.fn('cancelChat')(function*(project: string, key: string) {
@@ -469,8 +470,12 @@ export const cancelChat = Effect.fn('cancelChat')(function*(project: string, key
         yield* store.settle(id, record, generation)
       }
     })
+    // Best-effort: the agent may already be gone when a cancel arrives, so a
+    // failed notification is logged rather than failing the cancellation.
     const notify = record.connection && record.sessionId
-      ? record.connection.notify('session/cancel', { sessionId: record.sessionId }).pipe(Effect.ignore)
+      ? record.connection.notify('session/cancel', { sessionId: record.sessionId }).pipe(
+          Effect.catch(error => Effect.logDebug('chat: cancel notification failed', { error })),
+        )
       : Effect.void
     yield* restore(notify).pipe(Effect.ensuring(cleanup))
     return { status: record.status } satisfies ChatActionResponse

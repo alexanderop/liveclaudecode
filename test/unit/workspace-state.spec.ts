@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   cancelExpandedLauncher,
   expandLauncher,
+  focusFile,
+  focusIncident,
   initialWorkspaceState,
   openAgentDetails,
   openAsk,
@@ -43,6 +45,25 @@ describe('progressive disclosure workspace state', () => {
       ...original,
       launcher: { kind: 'closed' },
     })
+  })
+
+  it('records and clears investigation focus without mutating the input state', () => {
+    const before = openAgentDetails(initialWorkspaceState(), 'session/worker')
+    const withIncident = focusIncident(before, 'incident-1')
+    const withFile = focusFile(withIncident, 'app/pages/index.vue')
+
+    expect(before.investigation).toEqual({ agentKey: 'session/worker' })
+    expect(withIncident.investigation).toEqual({
+      agentKey: 'session/worker',
+      incidentId: 'incident-1',
+    })
+    expect(withFile.investigation).toEqual({
+      agentKey: 'session/worker',
+      incidentId: 'incident-1',
+      filePath: 'app/pages/index.vue',
+    })
+    expect(focusFile(withFile, undefined).investigation.filePath).toBeUndefined()
+    expect(focusIncident(withFile, undefined).investigation.incidentId).toBeUndefined()
   })
 
   it('preserves an explicit primary workspace across a session switch', () => {

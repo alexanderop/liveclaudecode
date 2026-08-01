@@ -1,0 +1,41 @@
+import type { ExecutionNodeData } from '~/utils/execution-graph'
+
+export function executionNodeData(
+  overrides: Partial<ExecutionNodeData> = {},
+): ExecutionNodeData {
+  return {
+    label: 'Explore agent',
+    agentType: 'Explore',
+    tools: 3,
+    files: 1,
+    tokens: 1200,
+    firstTs: null,
+    lastTs: null,
+    depth: 1,
+    root: false,
+    state: 'active',
+    displayState: 'running',
+    overview: false,
+    agents: 1,
+    errors: 0,
+    incidents: 0,
+    issues: 0,
+    changes: 1,
+    workstream: 1,
+    memberKeys: ['explore'],
+    summary: 'Running the focused test suite',
+    currentTool: 'Bash',
+    idleMs: 0,
+    pendingChildren: 0,
+    childCount: 0,
+    collapsed: false,
+    collapsible: false,
+    muted: false,
+    onPath: true,
+    collision: false,
+    critical: true,
+    bottleneck: false,
+    focusedFile: false,
+    ...overrides,
+  }
+}

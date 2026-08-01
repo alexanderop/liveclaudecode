@@ -1,9 +1,23 @@
 import type {
+  EventsResponse,
   PublicRunNode,
   RunDiagnostics,
   RunNode,
   RunResponse,
+  SessionEventsResponse,
+  TimelineLane,
+  TranscriptEvent,
+  TreeResponse,
 } from '#shared/types/run'
+
+/** Base timestamp of the fixture session; later fixture times offset from it. */
+export const T0 = '2026-07-25T18:00:00.000Z'
+
+/** Look-back window the dashboard requests by default. */
+export const DEFAULT_HOURS = 168
+
+/** Project id used by `treeResponse` and the default `mockLiveApi` handlers. */
+export const PROJECT_ID = '/repo'
 
 export function runNode(overrides: Partial<RunNode> = {}): RunNode {
   return {
@@ -27,7 +41,7 @@ export function runNode(overrides: Partial<RunNode> = {}): RunNode {
     reads: 0,
     errors: 1,
     tokensOut: 120,
-    firstTs: '2026-07-25T18:00:00.000Z',
+    firstTs: T0,
     lastTs: '2026-07-25T18:02:00.000Z',
     mtime: 0,
     ago: 0,
@@ -72,7 +86,7 @@ function publicNode(node: RunNode): PublicRunNode {
   return publicFields
 }
 
-function diagnostics(): RunDiagnostics {
+export function runDiagnostics(overrides: Partial<RunDiagnostics> = {}): RunDiagnostics {
   return {
     incidents: [],
     turns: [],
@@ -116,6 +130,85 @@ function diagnostics(): RunDiagnostics {
     },
     usage: { in: 300, out: 120, cr: 50, cw: 0 },
     cost: { usd: 0.014, pricedRequests: 2, unpricedRequests: 0, estimated: true },
+    ...overrides,
+  }
+}
+
+export function timelineLane(overrides: Partial<TimelineLane> = {}): TimelineLane {
+  return {
+    key: 'session',
+    label: 'Ship the dashboard',
+    agentType: '',
+    kind: 'session',
+    depth: 0,
+    firstTs: T0,
+    lastTs: '2026-07-25T18:02:00.000Z',
+    live: false,
+    errors: 0,
+    tools: 3,
+    spawnState: 'returned',
+    files: 1,
+    ...overrides,
+  }
+}
+
+export function transcriptEvent(
+  body: string,
+  overrides: Partial<TranscriptEvent> = {},
+): TranscriptEvent {
+  return {
+    role: 'assistant',
+    kind: 'text',
+    ts: '2026-07-29T08:00:00.000Z',
+    line: 1,
+    body,
+    ...overrides,
+  }
+}
+
+export function eventsResponse(
+  key: string,
+  bodies: string[],
+  overrides: Partial<EventsResponse> = {},
+): EventsResponse {
+  return {
+    key,
+    events: bodies.map(body => transcriptEvent(body)),
+    next: bodies.length,
+    revision: 1,
+    reset: false,
+    node: runNode({ key }),
+    ...overrides,
+  }
+}
+
+export function sessionEventsResponse(
+  key: string,
+  bodies: string[] = [],
+  overrides: Partial<SessionEventsResponse> = {},
+): SessionEventsResponse {
+  return {
+    key,
+    events: bodies.map(body => transcriptEvent(body)),
+    total: bodies.length,
+    truncated: false,
+    ...overrides,
+  }
+}
+
+export function treeResponse(
+  roots: RunNode | RunNode[],
+  hours = DEFAULT_HOURS,
+): TreeResponse {
+  return {
+    projects: [{
+      id: PROJECT_ID,
+      name: 'repo',
+      roots: Array.isArray(roots) ? roots : [roots],
+    }],
+    sources: [],
+    now: 0,
+    hours,
   }
 }
 
@@ -140,7 +233,7 @@ export function runResponse(overrides: Partial<RunResponse> = {}): RunResponse {
     }],
     files: [['app/components/Dashboard.vue', 1]],
     phases: root.milestones,
-    diagnostics: diagnostics(),
+    diagnostics: runDiagnostics(),
     node: publicNode(root),
     root: publicNode(root),
     ...overrides,

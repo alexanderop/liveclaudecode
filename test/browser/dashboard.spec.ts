@@ -1,6 +1,13 @@
 import { expect, test } from '@playwright/test'
 import axe from 'axe-core'
 
+declare global {
+  interface Window {
+    /** Injected into the page by this spec before running the audit. */
+    axe: typeof axe
+  }
+}
+
 const hydrationPatterns = [
   'Hydration completed but contains mismatches',
   'Hydration text content mismatch',
@@ -100,7 +107,12 @@ test('hydrates the synthetic dashboard and supports its primary keyboard workflo
     await page.getByRole('button', { name: 'Color mode' }).click()
     await page.getByRole('option', { name: mode }).click()
     await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${mode.toLowerCase()}\\b`))
-    await page.waitForTimeout(300)
+    // The palette flips with the root color-scheme; wait for it to be applied
+    // and for the mode picker to fully close before auditing contrast.
+    await expect.poll(() =>
+      page.evaluate(() => getComputedStyle(document.documentElement).colorScheme),
+    ).toBe(mode.toLowerCase())
+    await expect(page.getByRole('option', { name: mode })).toHaveCount(0)
 
     const violations = await page.evaluate(async () => {
       const results = await window.axe.run(document, {

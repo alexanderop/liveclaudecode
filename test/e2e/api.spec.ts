@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +11,7 @@ import * as codex from '../fixtures/codex'
 import * as copilot from '../fixtures/copilot'
 
 const SESSION = 'sess-1'
+const OLD_SESSION = 'sess-old'
 const CODEX_SESSION = '11111111-1111-4111-8111-111111111111'
 const CODEX_AGENT = '22222222-2222-4222-8222-222222222222'
 const COPILOT_SESSION = '33333333-3333-4333-8333-333333333333'
@@ -56,6 +57,16 @@ fixture.writeSubagent(join(directory, SESSION), 'agent-a', [
   fixture.assistant([fixture.tool('Edit', 'e1', { file_path: '/repo/src/a.ts' })]),
   fixture.userResult('e1', 'ok'),
 ], { agentType: 'implementation-worker', description: 'slice A', toolUseId: 'spawn-a' })
+
+// A session whose file mtime predates even the LCC_HOURS default window, so
+// it is only reachable through an explicit `?hours=0` (all time) override.
+const oldTranscriptPath = join(directory, `${OLD_SESSION}.jsonl`)
+fixture.writeTranscript(oldTranscriptPath, [
+  fixture.userText('Archived request'),
+  fixture.assistant([fixture.text('Archived result')]),
+])
+const oldMtime = new Date('2001-01-01T00:00:00.000Z')
+utimesSync(oldTranscriptPath, oldMtime, oldMtime)
 
 codex.writeRollout(codexRootPath, [
   codex.sessionMeta(CODEX_SESSION, {
@@ -130,6 +141,14 @@ vi.stubEnv('LCC_CODEX_SESSIONS', codexDirectory)
 vi.stubEnv('LCC_VSCODE_USER_DATA', vscodeDirectory)
 vi.stubEnv('LCC_COPILOT_SESSIONS', copilotCliDirectory)
 vi.stubEnv('LCC_HOURS', '99999')
+
+// Scripted ACP agents so POST /api/chat can be exercised over HTTP without a
+// real agent binary. `LCC_ACP_*` values are split on whitespace, so this
+// requires a checkout path without spaces (as the repo's tooling already does).
+const fakeAcpAgent = fileURLToPath(new URL('../fixtures/acp-agent.mjs', import.meta.url))
+const nodeBinary = process.execPath.includes(' ') ? 'node' : process.execPath
+vi.stubEnv('LCC_ACP_CLAUDE', `${nodeBinary} ${fakeAcpAgent} reply`)
+vi.stubEnv('LCC_ACP_CODEX', `${nodeBinary} ${fakeAcpAgent} hang`)
 
 function sourceSnapshot(root: string) {
   return Object.fromEntries(
@@ -434,5 +453,127 @@ describe('read-only API', async () => {
       codex: sourceSnapshot(codexDirectory),
       copilot: sourceSnapshot(vscodeDirectory),
     }).toEqual(before)
+  })
+
+  async function projectIdContaining(rootKey: string): Promise<string> {
+    const tree = await $fetch<TreeResponse>('/api/tree')
+    const project = tree.projects.find(item => item.roots.some(root => root.key === rootKey))
+    expect(project, `expected a project containing ${rootKey}`).toBeDefined()
+    return project!.id
+  }
+
+  it('honors the ?hours override on the tree, run, and events endpoints', async () => {
+    const scoped = await $fetch<TreeResponse>('/api/tree')
+    expect(scoped.hours).toBe(99_999)
+    expect(scoped.projects.flatMap(project => project.roots.map(root => root.key)))
+      .not.toContain(OLD_SESSION)
+
+    const allTime = await $fetch<TreeResponse>('/api/tree?hours=0')
+    expect(allTime.hours).toBe(0)
+    expect(allTime.projects.flatMap(project => project.roots.map(root => root.key)))
+      .toContain(OLD_SESSION)
+
+    await expect($fetch(`/api/run?key=${OLD_SESSION}`)).rejects.toMatchObject({ statusCode: 404 })
+    const run = await $fetch<RunResponse>(`/api/run?key=${OLD_SESSION}&hours=0`)
+    expect(run.root.key).toBe(OLD_SESSION)
+
+    await expect($fetch(`/api/events?key=${OLD_SESSION}&since=0`))
+      .rejects.toMatchObject({ statusCode: 404 })
+    const events = await $fetch<EventsResponse>(`/api/events?key=${OLD_SESSION}&since=0&hours=0`)
+    expect(events.key).toBe(OLD_SESSION)
+    expect(events.events.length).toBeGreaterThan(0)
+  })
+
+  it('honors ?project scoping on run and events lookups', async () => {
+    const project = encodeURIComponent(await projectIdContaining(SESSION))
+
+    const scopedRun = await $fetch<RunResponse>(`/api/run?key=${SESSION}&project=${project}`)
+    expect(scopedRun.root.key).toBe(SESSION)
+    const scopedEvents = await $fetch<EventsResponse>(
+      `/api/events?key=${SESSION}&since=0&project=${project}`,
+    )
+    expect(scopedEvents.key).toBe(SESSION)
+
+    const wrongProject = encodeURIComponent('/does-not-exist')
+    await expect($fetch(`/api/run?key=${SESSION}&project=${wrongProject}`))
+      .rejects.toMatchObject({ statusCode: 404 })
+    await expect($fetch(`/api/events?key=${SESSION}&since=0&project=${wrongProject}`))
+      .rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  it('answers a chat send action over HTTP through a scripted ACP agent', async () => {
+    const project = await projectIdContaining(SESSION)
+    const chatUrl = `/api/chat?project=${encodeURIComponent(project)}&key=${SESSION}&since=0&revision=0`
+
+    try {
+      const sent = await $fetch<ChatActionResponse>('/api/chat', {
+        method: 'POST',
+        body: {
+          action: 'send',
+          project,
+          key: SESSION,
+          agent: 'claude',
+          text: 'What did this session ship?',
+        },
+      })
+      expect(['starting', 'busy']).toContain(sent.status)
+
+      const finished = await vi.waitFor(async () => {
+        const polled = await $fetch<ChatEventsResponse>(chatUrl)
+        expect(polled.status).toBe('idle')
+        expect(polled.events.length).toBeGreaterThanOrEqual(3)
+        return polled
+      }, { timeout: 15_000, interval: 250 })
+
+      expect(finished.agent).toBe('claude')
+      // The reply chunk is delivered on the update stream while the turn end
+      // comes from the prompt response, so their relative order is unspecified.
+      expect(finished.events[0]).toEqual({ kind: 'user', text: 'What did this session ship?' })
+      expect(finished.events).toContainEqual({
+        kind: 'assistant-chunk',
+        agent: 'claude',
+        text: 'Fake agent reply.',
+      })
+      expect(finished.events).toContainEqual({ kind: 'turn-end', stopReason: 'end_turn' })
+      expect(finished.events).toHaveLength(3)
+    } finally {
+      await $fetch('/api/chat', {
+        method: 'POST',
+        body: { action: 'reset', project, key: SESSION },
+      })
+    }
+  })
+
+  it('cancels an in-flight chat turn over HTTP', async () => {
+    const key = `codex:${CODEX_SESSION}`
+    const project = await projectIdContaining(key)
+    const chatUrl = `/api/chat?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=0&revision=0`
+
+    try {
+      // The scripted codex agent accepts the prompt but never answers it.
+      await $fetch<ChatActionResponse>('/api/chat', {
+        method: 'POST',
+        body: { action: 'send', project, key, agent: 'codex', text: 'Hang until cancelled' },
+      })
+      await vi.waitFor(async () => {
+        const polled = await $fetch<ChatEventsResponse>(chatUrl)
+        expect(polled.status).toBe('busy')
+      }, { timeout: 15_000, interval: 250 })
+
+      const cancelled = await $fetch<ChatActionResponse>('/api/chat', {
+        method: 'POST',
+        body: { action: 'cancel', project, key },
+      })
+      expect(cancelled.status).toBe('idle')
+
+      const after = await $fetch<ChatEventsResponse>(chatUrl)
+      expect(after.status).toBe('idle')
+      expect(after.events.at(-1)).toEqual({ kind: 'turn-end', stopReason: 'cancelled' })
+    } finally {
+      await $fetch('/api/chat', {
+        method: 'POST',
+        body: { action: 'reset', project, key },
+      })
+    }
   })
 })

@@ -115,6 +115,12 @@ export class AcpConnector extends Context.Service<AcpConnector, {
           params: unknown,
         ) {
           const parsed = parsePermissionRequest(params)
+          if (Result.isFailure(parsed)) {
+            yield* Effect.logDebug('ACP: unparseable session/request_permission answered as cancelled', {
+              params,
+              error: parsed.failure,
+            })
+          }
           const result = Result.isSuccess(parsed)
             ? permissionOutcome(parsed.success, options.permission(parsed.success))
             : { outcome: { outcome: 'cancelled' as const } }
@@ -150,7 +156,14 @@ export class AcpConnector extends Context.Service<AcpConnector, {
           if (message.method !== undefined) {
             if (message.method === 'session/update') {
               const notification = parseSessionNotification(message.params)
-              if (Result.isSuccess(notification)) yield* Queue.offer(updates, notification.success)
+              if (Result.isSuccess(notification)) {
+                yield* Queue.offer(updates, notification.success)
+              } else {
+                yield* Effect.logDebug('ACP: dropped malformed session/update notification', {
+                  params: message.params,
+                  error: notification.failure,
+                })
+              }
             }
             return
           }

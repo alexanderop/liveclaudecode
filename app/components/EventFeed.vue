@@ -3,6 +3,8 @@ import security from '@comark/nuxt/plugins/security'
 import type { TranscriptEvent } from '#shared/types/run'
 import type { FeedDensity } from '~/composables/useLiveRuns'
 import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
+import { parseTimestamp } from '~/utils/format'
+import { toolUseIcon, toolUseLabel } from '~/utils/tool-display'
 
 const markdownPlugins = [
   security({
@@ -31,12 +33,15 @@ const feed = useTemplateRef('feed')
 const pinnedToBottom = ref(true)
 const BOTTOM_THRESHOLD = 32
 const { arrivedState } = useScroll(feed, { offset: { bottom: BOTTOM_THRESHOLD }, eventListenerOptions: { passive: true } })
+// Not a computed: `resumeFollowing` manually overrides `pinnedToBottom` to
+// re-pin without waiting for the scroll to arrive, so the scroll state can
+// only be copied in one direction here.
 watch(() => arrivedState.bottom, bottom => { pinnedToBottom.value = bottom })
 
 const visibleEvents = computed(() => props.events.filter((event) => {
-  if (props.asOf != null && event.ts) {
-    const timestamp = Date.parse(event.ts)
-    if (Number.isFinite(timestamp) && timestamp > props.asOf) return false
+  if (props.asOf != null) {
+    const timestamp = parseTimestamp(event.ts)
+    if (timestamp !== null && timestamp > props.asOf) return false
   }
   if (props.errorsOnly) return Boolean(event.error)
   if (event.error) return true
@@ -97,21 +102,7 @@ function labelFor(event: TranscriptEvent): string {
   if (event.kind === 'thinking') return 'Reasoning'
   if (event.kind === 'tool_result') return event.error ? `${event.tool || 'Action'} failed` : `${event.tool || 'Action'} result`
   if (event.kind !== 'tool_use') return event.summary || (event.error ? 'Incident' : 'System')
-
-  const labels: Record<string, string> = {
-    Read: 'Read file',
-    Grep: 'Searched code',
-    Glob: 'Located files',
-    Bash: 'Ran command',
-    Edit: 'Edited file',
-    Write: 'Wrote file',
-    Agent: 'Delegated work',
-    Task: 'Delegated work',
-    TodoWrite: 'Updated plan',
-    WebSearch: 'Searched the web',
-    WebFetch: 'Read web page',
-  }
-  return labels[event.tool || ''] || event.tool || 'Used tool'
+  return toolUseLabel(event.tool)
 }
 
 function iconFor(event: TranscriptEvent): string {
@@ -121,21 +112,7 @@ function iconFor(event: TranscriptEvent): string {
   if (event.kind === 'text') return 'i-lucide-sparkles'
   if (event.kind === 'thinking') return 'i-lucide-brain'
   if (event.kind === 'tool_result') return 'i-lucide-corner-down-right'
-
-  const icons: Record<string, string> = {
-    Read: 'i-lucide-file-search',
-    Grep: 'i-lucide-search',
-    Glob: 'i-lucide-folder-search',
-    Bash: 'i-lucide-square-terminal',
-    Edit: 'i-lucide-file-pen-line',
-    Write: 'i-lucide-file-plus-2',
-    Agent: 'i-lucide-git-fork',
-    Task: 'i-lucide-git-fork',
-    TodoWrite: 'i-lucide-list-checks',
-    WebSearch: 'i-lucide-globe-2',
-    WebFetch: 'i-lucide-globe-2',
-  }
-  return icons[event.tool || ''] || 'i-lucide-wrench'
+  return toolUseIcon(event.tool)
 }
 
 function resultSummary(event: TranscriptEvent): string {
@@ -146,7 +123,7 @@ function resultSummary(event: TranscriptEvent): string {
 function focusEvent(event: TranscriptEvent): void {
   if (event.agentKey) emit('select', event.agentKey)
   else if (event.childKey) emit('select', event.childKey)
-  emit('focus-time', event.ts ? Date.parse(event.ts) : null, event.line)
+  emit('focus-time', parseTimestamp(event.ts), event.line)
 }
 
 async function scrollToBottom(): Promise<void> {

@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import type { ProjectRuns, RunNode } from '#shared/types/run'
+import type { ProjectRuns } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { flattenRunTree } from '~/utils/execution-analysis'
+import { formatRelativeAge, sessionSourceLabel } from '~/utils/format'
+import { buildParentIndex, flattenRunTree } from '~/utils/execution-analysis'
 import {
   agentState,
+  agentStateIcon,
   lastActivityTime,
   type AgentDisplayState,
 } from '~/utils/session-state'
+import { structuralComputed, structurallyEqual } from '~/utils/structural-computed'
 
 const props = defineProps<{
   projects: ProjectRuns[]
@@ -24,52 +27,35 @@ const stateOrder: Partial<Record<AgentDisplayState, number>> = {
   waiting: 2,
 }
 
-const activeAgents = computed(() => props.projects.flatMap(project => project.roots.flatMap(root => {
-  const nodes = flattenRunTree(root)
-  const parentByKey = new Map<string, RunNode>()
-  nodes.forEach(node => node.children.forEach(child => parentByKey.set(child.key, node)))
+// The clock-dependent idle age is derived per card in the template so the
+// 10s tick does not rebuild (or structurally change) this list.
+const activeAgents = structuralComputed(() => props.projects.flatMap(project => project.roots.flatMap(root => {
+  const parentByKey = buildParentIndex(root)
 
-  return nodes.flatMap((node) => {
+  return flattenRunTree(root).flatMap((node) => {
     const state = agentState(node)
     if (!node.live && node.spawnState !== 'running') return []
-    const timestamp = lastActivityTime(node)
     return [{
       node,
       root,
       project,
       parent: parentByKey.get(node.key) || null,
       state,
-      timestamp,
-      idleMs: timestamp === null ? null : Math.max(0, now.value - timestamp),
+      timestamp: lastActivityTime(node),
     }]
   })
 })).sort((left, right) => (stateOrder[left.state.state] ?? 9) - (stateOrder[right.state.state] ?? 9)
   || (right.timestamp || 0) - (left.timestamp || 0)
-  || left.node.label.localeCompare(right.node.label)))
+  || left.node.label.localeCompare(right.node.label)), structurallyEqual)
 
 const activeSessionCount = computed(() => new Set(activeAgents.value.map(agent => `${agent.project.id}\0${agent.root.key}`)).size)
 const activeProjectCount = computed(() => new Set(activeAgents.value.map(agent => agent.project.id)).size)
 
-function providerLabel(node: RunNode): string {
-  if (node.source === 'claude') return 'Claude'
-  if (node.source === 'codex') return 'Codex'
-  return 'Copilot'
-}
-
-function stateIcon(state: AgentDisplayState): string {
-  if (state === 'running') return 'i-lucide-hammer'
-  if (state === 'thinking') return 'i-lucide-brain'
-  return 'i-lucide-clock-3'
-}
-
-function relativeAge(milliseconds: number | null): string {
-  if (milliseconds === null) return 'No recent event'
-  const seconds = Math.floor(milliseconds / 1_000)
-  if (seconds < 5) return 'Updated now'
-  if (seconds < 60) return `Updated ${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `Updated ${minutes}m ago`
-  return `Updated ${Math.floor(minutes / 60)}h ago`
+function updatedAge(timestamp: number | null): string {
+  return formatRelativeAge(
+    timestamp === null ? null : Math.max(0, now.value - timestamp),
+    { prefix: 'Updated', noneLabel: 'No recent event' },
+  )
 }
 
 </script>
@@ -106,11 +92,11 @@ function relativeAge(milliseconds: number | null): string {
           <span class="active-agent-project" :title="agent.project.name">
             <UIcon name="i-lucide-folder" />{{ agent.project.name }}
           </span>
-          <span class="active-agent-provider" :class="agent.node.source">{{ providerLabel(agent.node) }}</span>
+          <span class="active-agent-provider" :class="agent.node.source">{{ sessionSourceLabel(agent.node.source) }}</span>
         </span>
 
         <span class="active-agent-identity">
-          <span class="active-agent-avatar" :class="agent.state.state"><UIcon :name="stateIcon(agent.state.state)" /></span>
+          <span class="active-agent-avatar" :class="agent.state.state"><UIcon :name="agentStateIcon(agent.state.state)" /></span>
           <span>
             <strong :title="agent.node.label">{{ normalizeSessionLabel(agent.node.label, agent.node.key) }}</strong>
             <small>
@@ -131,7 +117,7 @@ function relativeAge(milliseconds: number | null): string {
 
         <span class="active-agent-card-footer">
           <span>{{ normalizeSessionLabel(agent.root.label, agent.root.key) }}</span>
-          <time>{{ relativeAge(agent.idleMs) }}</time>
+          <time>{{ updatedAge(agent.timestamp) }}</time>
           <UIcon name="i-lucide-arrow-up-right" />
         </span>
       </button>

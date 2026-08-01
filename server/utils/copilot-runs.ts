@@ -13,8 +13,8 @@ import {
 import { parseCopilotWorkspaceJson } from '#shared/schemas/copilot'
 import type { RunNode } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { FILE_CONCURRENCY, FileDiscoveryLimiter, ignoreNotFound, statIfExists } from './filesystem-concurrency'
-import { bySubLastDesc, freshnessCutoff, isFreshMtime, selectLatestById } from './run-shared'
+import { FILE_CONCURRENCY, FileDiscoveryLimiter, freshFilesIn, ignoreNotFound, statIfExists } from './filesystem-concurrency'
+import { bySubLastDesc, countUnreadable, freshnessCutoff, isFreshFileInfo, selectLatestById } from './run-shared'
 
 export interface CopilotDiscovery {
   locations: CopilotSessionLocation[]
@@ -51,6 +51,9 @@ function normalizeWorkspace(value: string): string {
     try {
       return fileURLToPath(value)
     } catch {
+      // A malformed or non-local URI throws TypeError (ERR_INVALID_URL /
+      // ERR_INVALID_URL_SCHEME / ERR_INVALID_FILE_URL_HOST); the raw value is
+      // still a usable display label, so keep it.
       return value
     }
   }
@@ -89,22 +92,17 @@ const sessionFiles = Effect.fn('sessionFiles')(function*(
   workspace: string,
   cutoff: number,
 ) {
-  const fs = yield* FileSystem.FileSystem
-  const limiter = yield* FileDiscoveryLimiter
-  const directoryResult = yield* Effect.result(optionalDirectory(directory))
-  if (Result.isFailure(directoryResult)) return { locations: [], unreadable: 1 } satisfies LocationResult
-  if (Option.isNone(directoryResult.success)) return { locations: [], unreadable: 0 } satisfies LocationResult
-  const names = directoryResult.success.value.filter(name => name.endsWith('.jsonl'))
-  const [failures, fresh] = yield* Effect.partition(names, name => Effect.gen(function*() {
-    const path = join(directory, name)
-    const info = yield* limiter.withPermit(fs.stat(path))
-    return info.type === 'File' && isFreshMtime(info.mtime, cutoff)
-      ? Option.some({ path, application, workspace, format: 'vscode' as const })
-      : Option.none<CopilotSessionLocation>()
-  }), { concurrency: FILE_CONCURRENCY })
+  const listed = yield* freshFilesIn(directory, name => name.endsWith('.jsonl'), cutoff).pipe(
+    // A directory that does not exist yet is routine; one that cannot be read
+    // counts as a single unreadable entry, as it always has.
+    ignoreNotFound(() => Effect.succeed({ paths: [] as string[], unreadable: 0 })),
+    Effect.catch(error => Effect.logDebug('Copilot session directory unreadable', { directory, error }).pipe(
+      Effect.as({ paths: [] as string[], unreadable: 1 }),
+    )),
+  )
   return {
-    locations: Arr.getSomes(fresh),
-    unreadable: failures.length,
+    locations: listed.paths.map(path => ({ path, application, workspace, format: 'vscode' as const })),
+    unreadable: listed.unreadable,
   } satisfies LocationResult
 })
 
@@ -137,7 +135,8 @@ const scanWorkspaceStorage = Effect.fn('scanWorkspaceStorage')(function*(
   )
   return {
     locations: perWorkspace.flatMap(result => result.locations),
-    unreadable: failures.length + perWorkspace.reduce((total, result) => total + result.unreadable, 0),
+    unreadable: (yield* countUnreadable(`scanWorkspaceStorage(${storage})`, failures))
+      + perWorkspace.reduce((total, result) => total + result.unreadable, 0),
   } satisfies LocationResult
 })
 
@@ -198,7 +197,7 @@ const scanUserDataRoot = Effect.fn('scanUserDataRoot')(function*(root: string, c
       ...profiles.flatMap(result => result.locations),
     ],
     unreadable: stores.reduce((total, store) => total + store.unreadable, 0)
-      + profileFailures.length
+      + (yield* countUnreadable(`scanUserDataRoot profiles(${root})`, profileFailures))
       + profiles.reduce((total, result) => total + result.unreadable, 0)
       + (Result.isFailure(profilesResult) ? 1 : 0),
   }
@@ -220,15 +219,14 @@ const scanCopilotCliRoot = Effect.fn('scanCopilotCliRoot')(function*(root: strin
     if (directoryInfo.type !== 'Directory') return Option.none<CopilotSessionLocation>()
     const path = join(directory, 'events.jsonl')
     const info = yield* limiter.withPermit(statIfExists(path))
-    if (Option.isNone(info) || info.value.type !== 'File') return Option.none<CopilotSessionLocation>()
-    return isFreshMtime(info.value.mtime, cutoff)
+    return Option.isSome(info) && isFreshFileInfo(info.value, cutoff)
       ? Option.some({ path, application: 'Copilot CLI', workspace: '', format: 'cli' as const })
       : Option.none<CopilotSessionLocation>()
   }), { concurrency: FILE_CONCURRENCY })
   return {
     present: true,
     locations: Arr.getSomes(entries),
-    unreadable: failures.length,
+    unreadable: yield* countUnreadable(`scanCopilotCliRoot(${root})`, failures),
   }
 })
 
@@ -323,7 +321,8 @@ export const buildCopilotTree = Effect.fn('buildCopilotTree')(function*(hours: n
         + item.scan.structuralMalformed,
       0,
     ),
-    unreadable: discovery.unreadable + unreadableScans.length,
+    unreadable: discovery.unreadable
+      + (yield* countUnreadable('buildCopilotTree scans', unreadableScans)),
     duplicates,
     rootsPresent: discovery.rootsPresent,
     genericExcluded,

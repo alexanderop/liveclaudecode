@@ -51,6 +51,26 @@ export const ActivityQuerySchema = Schema.Struct({
   limit: integerFromString(800, 100, 2_000),
 })
 
+export type SessionQuery = typeof SessionQuerySchema.Type
+export type CursorQuery = typeof CursorQuerySchema.Type
+export type ActivityQuery = typeof ActivityQuerySchema.Type
+
+/**
+ * A request query string that failed to decode. Individual fields stay
+ * lenient (each falls back to its default), so in practice this fires only
+ * for a query that is not an object at all — but when it does fire, the
+ * failure flows through the typed error channel and maps to a 400 in
+ * `server/utils/runtime.ts` instead of escaping as a thrown decode error.
+ */
+export class InvalidRequestQuery extends Schema.TaggedErrorClass<InvalidRequestQuery>()(
+  'InvalidRequestQuery',
+  { reason: Schema.String },
+) {
+  override get message(): string {
+    return `Invalid request query: ${this.reason}`
+  }
+}
+
 /**
  * Coerces the configured hours value (an env-style setting, not user input)
  * to a non-negative finite number with `SchemaGetter.Number()`, falling back
@@ -94,15 +114,27 @@ const RequestedHoursSchema = Schema.String.pipe(
   ),
 )
 
-const decodeSessionQuery = Schema.decodeUnknownSync(SessionQuerySchema)
-const decodeCursorQuery = Schema.decodeUnknownSync(CursorQuerySchema)
-const decodeActivityQuery = Schema.decodeUnknownSync(ActivityQuerySchema)
+const decodeSessionQuery = Schema.decodeUnknownResult(SessionQuerySchema)
+const decodeCursorQuery = Schema.decodeUnknownResult(CursorQuerySchema)
+const decodeActivityQuery = Schema.decodeUnknownResult(ActivityQuerySchema)
 const decodeConfiguredHours = Schema.decodeUnknownSync(ConfiguredHoursSchema)
 const decodeRequestedHours = Schema.decodeUnknownResult(RequestedHoursSchema)
 
-export const parseSessionQuery = (input: unknown) => decodeSessionQuery(input)
-export const parseCursorQuery = (input: unknown) => decodeCursorQuery(input)
-export const parseActivityQuery = (input: unknown) => decodeActivityQuery(input)
+/**
+ * Wrap a query decoder so its failure is a typed `InvalidRequestQuery` inside
+ * the request Effect, rather than a synchronous throw before the handler's
+ * Effect ever runs (which would bypass the error mapping in runtime.ts).
+ */
+const queryParser = <T>(decode: (input: unknown) => Result.Result<T, Schema.SchemaError>) =>
+  (input: unknown): Effect.Effect<T, InvalidRequestQuery> =>
+    Result.match(decode(input), {
+      onSuccess: value => Effect.succeed(value),
+      onFailure: error => Effect.fail(new InvalidRequestQuery({ reason: error.message })),
+    })
+
+export const parseSessionQuery = queryParser(decodeSessionQuery)
+export const parseCursorQuery = queryParser(decodeCursorQuery)
+export const parseActivityQuery = queryParser(decodeActivityQuery)
 
 export function parseHours(configuredValue: unknown, requestedValue: unknown): number {
   const fallback = decodeConfiguredHours(configuredValue)

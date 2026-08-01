@@ -41,8 +41,12 @@ describe('Claude on-disk schemas', () => {
     expect(parsed.success).toBe(true)
     if (!parsed.success || parsed.record.kind !== 'assistant') return
     expect(parsed.record.data.attributionSkill).toBe('frontend-design')
-    expect(parsed.record.data.futureTopLevelField).toEqual({ enabled: true })
-    expect(parsed.record.data.message.usage?.futureUsageField).toBe(3)
+    // The schema is lenient and preserves unknown fields at runtime, but they
+    // are (intentionally) absent from the decoded static type.
+    expect((parsed.record.data as unknown as Record<string, unknown>).futureTopLevelField)
+      .toEqual({ enabled: true })
+    expect((parsed.record.data.message.usage as Record<string, unknown> | undefined)?.futureUsageField)
+      .toBe(3)
     expect(parsed.record.data.message.usage?.cache_creation).toEqual({
       ephemeral_5m_input_tokens: 4,
       ephemeral_1h_input_tokens: 8,

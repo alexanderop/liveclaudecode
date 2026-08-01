@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { CostSummary, ProjectRuns, SessionSourceStatus } from '#shared/types/run'
-import type { SessionSort } from '~/utils/session-filter'
+import type { SessionSourceFilter } from '~/composables/useSessionFilters'
+import { sessionSourceLabel } from '~/utils/format'
+import { compareRoots, type SessionSort } from '~/utils/session-filter'
 
 const props = defineProps<{
   projects: ProjectRuns[]
@@ -14,7 +16,7 @@ const props = defineProps<{
 }>()
 
 const query = defineModel<string>('query', { required: true })
-const sourceFilter = defineModel<'all' | 'claude' | 'codex' | 'copilot'>('sourceFilter', { required: true })
+const sourceFilter = defineModel<SessionSourceFilter>('sourceFilter', { required: true })
 const projectFilter = defineModel<string>('projectFilter', { required: true })
 const liveOnly = defineModel<boolean>('liveOnly', { required: true })
 const attentionOnly = defineModel<boolean>('attentionOnly', { required: true })
@@ -27,7 +29,7 @@ const emit = defineEmits<{
   collapse: []
 }>()
 const organization = ref<'project' | 'list'>('project')
-const collapsedProjects = ref(new Set<string>())
+const collapsedProjects = shallowRef(new Set<string>())
 const filtersOpen = ref(false)
 
 const allRoots = computed(() => props.allProjects.flatMap(project => project.roots))
@@ -46,10 +48,8 @@ const activeFilterCount = computed(() => [
 ].filter(Boolean).length)
 const recentRoots = computed(() => props.projects
   .flatMap(project => project.roots.map(root => ({ project: project.id, root })))
-  .sort((a, b) => sessionSort.value === 'subagents'
-    ? (b.root.subAgents ?? 0) - (a.root.subAgents ?? 0) || (b.root.subLast || '').localeCompare(a.root.subLast || '')
-    : (b.root.subLast || '').localeCompare(a.root.subLast || '')))
-const sourceOptions: Array<{ value: 'all' | 'claude' | 'codex' | 'copilot', label: string }> = [
+  .sort((a, b) => compareRoots(a.root, b.root, sessionSort.value)))
+const sourceOptions: Array<{ value: SessionSourceFilter, label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
@@ -118,28 +118,20 @@ function toggleProject(project: string): void {
   collapsedProjects.value = next
 }
 
-watch(liveOnly, value => {
-  if (value) attentionOnly.value = false
+// Tri-state view over the composable's two exclusive filter refs: writing a
+// scope updates both refs consistently, replacing the pair of mutually
+// re-triggering watchers this component used to need.
+const sessionScope = computed<'all' | 'live' | 'attention'>({
+  get: () => liveOnly.value ? 'live' : attentionOnly.value ? 'attention' : 'all',
+  set: (scope) => {
+    liveOnly.value = scope === 'live'
+    attentionOnly.value = scope === 'attention'
+  },
 })
-
-watch(attentionOnly, value => {
-  if (value) liveOnly.value = false
+const liveOnlyToggle = computed({
+  get: () => sessionScope.value === 'live',
+  set: (enabled: boolean) => { sessionScope.value = enabled ? 'live' : 'all' },
 })
-
-function showAllSessions(): void {
-  liveOnly.value = false
-  attentionOnly.value = false
-}
-
-function showRunning(): void {
-  liveOnly.value = true
-  attentionOnly.value = false
-}
-
-function showAttention(): void {
-  liveOnly.value = false
-  attentionOnly.value = true
-}
 
 function organizeBy(value: 'project' | 'list'): void {
   organization.value = value
@@ -175,9 +167,9 @@ function organizeBy(value: 'project' | 'list'): void {
         class="primary-nav-item"
         color="neutral"
         variant="ghost"
-        :class="{ selected: !liveOnly && !attentionOnly }"
-        :aria-pressed="!liveOnly && !attentionOnly"
-        @click="showAllSessions"
+        :class="{ selected: sessionScope === 'all' }"
+        :aria-pressed="sessionScope === 'all'"
+        @click="sessionScope = 'all'"
       >
         <UIcon name="i-lucide-panels-top-left" />
         <span>Sessions</span>
@@ -188,9 +180,9 @@ function organizeBy(value: 'project' | 'list'): void {
         class="primary-nav-item"
         color="neutral"
         variant="ghost"
-        :class="{ selected: liveOnly }"
-        :aria-pressed="liveOnly"
-        @click="showRunning"
+        :class="{ selected: sessionScope === 'live' }"
+        :aria-pressed="sessionScope === 'live'"
+        @click="sessionScope = 'live'"
       >
         <UIcon name="i-lucide-radio" />
         <span>Running</span>
@@ -201,9 +193,9 @@ function organizeBy(value: 'project' | 'list'): void {
         class="primary-nav-item"
         color="neutral"
         variant="ghost"
-        :class="{ selected: attentionOnly }"
-        :aria-pressed="attentionOnly"
-        @click="showAttention"
+        :class="{ selected: sessionScope === 'attention' }"
+        :aria-pressed="sessionScope === 'attention'"
+        @click="sessionScope = 'attention'"
       >
         <UIcon name="i-lucide-circle-alert" />
         <span>Needs attention</span>
@@ -342,7 +334,7 @@ function organizeBy(value: 'project' | 'list'): void {
           />
         </label>
         <div class="filters">
-          <UCheckbox v-model="liveOnly" class="toggle" label="Live only" />
+          <UCheckbox v-model="liveOnlyToggle" class="toggle" label="Live only" />
           <UCheckbox v-model="hideIdle" class="toggle" label="Hide empty" />
         </div>
         <div v-if="unhealthySources.length" class="source-statuses" aria-live="polite">
@@ -352,7 +344,7 @@ function organizeBy(value: 'project' | 'list'): void {
             :class="source.state"
             :color="source.state === 'degraded' ? 'warning' : 'error'"
             variant="soft"
-            :title="source.source === 'claude' ? 'Claude' : source.source === 'codex' ? 'Codex' : 'Copilot'"
+            :title="sessionSourceLabel(source.source)"
             :description="source.message"
             icon="i-lucide-triangle-alert"
           />

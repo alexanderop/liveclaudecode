@@ -1,5 +1,10 @@
 .nuxt/
 .output/
+tmp/
+*.tsbuildinfo
+*.log
+.env
+.env.*
 node_modules/
 coverage/
 playwright-report/

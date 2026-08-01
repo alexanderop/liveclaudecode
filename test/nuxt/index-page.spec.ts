@@ -1,22 +1,22 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import type { VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
-import { runNode, runResponse } from '../fixtures/runs'
+import { mockLiveApi } from '../fixtures/live-api'
+import { runNode } from '../fixtures/runs'
+
+let component: VueWrapper | null = null
 
 afterEach(() => {
-  vi.unstubAllGlobals()
+  component?.unmount()
+  component = null
 })
 
 describe('session view controls', () => {
   it('exposes and updates the selected event density', async () => {
     const root = runNode({ subErrors: 0, errors: 0 })
-    vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
-      if (url === '/api/tree') return { projects: [{ id: '/repo', name: 'repo', roots: [root] }], sources: [], now: 0, hours: 168 }
-      if (url.startsWith('/api/run')) return runResponse({ root, node: root })
-      if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
-      return { key: root.key, events: [], next: 0, revision: 1, reset: false, node: root }
-    }))
-    const component = await mountSuspended(IndexPage, {
+    mockLiveApi(root)
+    const wrapper = component = await mountSuspended(IndexPage, {
       global: {
         stubs: {
           EventFeed: true,
@@ -30,9 +30,9 @@ describe('session view controls', () => {
         },
       },
     })
-    await vi.waitFor(() => expect(component.get('[data-destination="activity"]').attributes('disabled')).toBeUndefined())
-    await component.get('[data-destination="activity"]').trigger('click')
-    const density = component.get('[role="group"][aria-label="Event detail"]')
+    await vi.waitFor(() => expect(wrapper.get('[data-destination="activity"]').attributes('disabled')).toBeUndefined())
+    await wrapper.get('[data-destination="activity"]').trigger('click')
+    const density = wrapper.get('[role="group"][aria-label="Event detail"]')
     const buttons = density.findAll('button')
 
     expect(buttons.map(button => button.attributes('aria-pressed'))).toEqual([
@@ -40,6 +40,7 @@ describe('session view controls', () => {
       'true',
       'false',
     ])
+    expect(wrapper.findComponent({ name: 'EventFeed' }).props('density')).toBe('normal')
 
     await buttons[0]!.trigger('click')
 
@@ -48,5 +49,6 @@ describe('session view controls', () => {
       'false',
       'false',
     ])
+    expect(wrapper.findComponent({ name: 'EventFeed' }).props('density')).toBe('compact')
   })
 })

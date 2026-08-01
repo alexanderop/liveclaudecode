@@ -13,7 +13,11 @@ export interface SessionFilterOptions {
   sort: SessionSort
 }
 
-function compareRoots(left: RunNode, right: RunNode, sort: SessionSort): number {
+/**
+ * Orders session roots by the active sort: most subagents first (falling back
+ * to recency for ties), or most recently updated first.
+ */
+export function compareRoots(left: RunNode, right: RunNode, sort: SessionSort): number {
   const leftSubagents = left.subAgents ?? 0
   const rightSubagents = right.subAgents ?? 0
   if (sort === 'subagents' && leftSubagents !== rightSubagents) {

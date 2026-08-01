@@ -55,7 +55,11 @@ function recordingCopilotCache(locations: CopilotSessionLocation[]) {
               : new CopilotTranscriptScan(location.path, location.application, location.workspace)
             scans.set(location.path, scan)
           }
-          return yield* scan.refresh()
+          // Branch to narrow the union: both classes have private state, so a
+          // union-typed method call collapses `this` to `never`.
+          return yield* (scan instanceof CopilotCliTranscriptScan
+            ? scan.refresh()
+            : scan.refresh())
         }),
         peek: path => Effect.sync(() => Option.fromUndefinedOr(scans.get(path))),
       })
@@ -82,8 +86,7 @@ function layer(
     Layer.succeed(VsCodeUserDataDirectories)([VSCODE]),
     Layer.succeed(CopilotSessionStateDirectory)(COPILOT_CLI),
     Layer.succeed(WorkingDirectory)('/work'),
-    testFileSystem(tree, { ...fileSystemOptions, denied, beforeRead }),
-  )
+  ).pipe(Layer.provideMerge(testFileSystem(tree, { ...fileSystemOptions, denied, beforeRead })))
 }
 
 describe('unified session catalog', () => {

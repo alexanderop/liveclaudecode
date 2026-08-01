@@ -7,7 +7,7 @@ import type {
   TranscriptEvent,
   TreeResponse,
 } from '#shared/types/run'
-import { runNode, runResponse } from './runs'
+import { runNode, runResponse, transcriptEvent } from './runs'
 
 export const browserProject = '/mock-project'
 
@@ -58,13 +58,10 @@ export function browserTextEvent(
   body: string,
   line: number,
 ): TranscriptEvent {
-  return {
-    role: 'assistant',
-    kind: 'text',
+  return transcriptEvent(body, {
     ts: `2026-07-31T10:00:0${line}.000Z`,
     line,
-    body,
-  }
+  })
 }
 
 export function browserEvents(

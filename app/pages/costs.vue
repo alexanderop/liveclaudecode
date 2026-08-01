@@ -3,7 +3,6 @@ import type {
   CostOverviewGroup,
   CostOverviewResponse,
   SessionSource,
-  Usage,
 } from '#shared/types/run'
 import ChartLine from '~/components/charts/LineChart.vue'
 import ChartSparkline from '~/components/charts/Sparkline.vue'
@@ -26,11 +25,6 @@ const sourceMeta: Record<SessionSource, { icon: string, color: string }> = {
   claude: { icon: 'i-lucide-sparkles', color: '#d9915b' },
   codex: { icon: 'i-lucide-square-terminal', color: '#65b89a' },
   copilot: { icon: 'i-lucide-github', color: '#6f9de8' },
-}
-const modelPalette: Record<SessionSource, string[]> = {
-  claude: ['#d9915b', '#efb27e', '#f1c79f', '#ba7044'],
-  codex: ['#65b89a', '#96d5bd', '#45977b', '#bce9d8'],
-  copilot: ['#6f9de8', '#9abcf2', '#477fcf', '#bed2f7'],
 }
 
 const { data, status, error, refresh } = await useFetch<CostOverviewResponse>('/api/costs', {
@@ -66,8 +60,8 @@ const chartModels = computed(() => chartUsesCost.value
 const chartDates = computed(() => [...new Set(chartModels.value.flatMap(model => model.days.map(day => day.date)))].sort())
 const chartCategories = computed<Record<string, ChartCategory>>(() => Object.fromEntries(
   chartModels.value.map((model, index) => [seriesKey(model), {
-    name: `${model.label} · ${shortHarness(model.source)}`,
-    color: modelColor(model, index),
+    name: `${model.label} · ${sessionSourceLabel(model.source)}`,
+    color: modelColor(model, visibleModels.value, index),
   }]),
 ))
 const chartData = computed<ChartDatum[]>(() => {
@@ -85,33 +79,15 @@ const chartData = computed<ChartDatum[]>(() => {
     })),
   }))
 })
-const largestMetric = computed(() => Math.max(1, ...visibleModels.value.map(modelMetric)))
+const largestMetric = computed(() => Math.max(
+  1,
+  ...visibleModels.value.map(model => modelMetric(model, chartUsesCost.value)),
+))
 const degradedSources = computed(() => data.value?.sources.filter(source => source.state !== 'ready') || [])
 
 function normalizeHours(value: unknown): number {
   const parsed = Number(Array.isArray(value) ? value[0] : value)
   return [0, 24, 168, 720].includes(parsed) ? parsed : 720
-}
-
-function usageTotal(usage?: Usage): number {
-  return usage ? usage.in + usage.out + usage.cr + usage.cw : 0
-}
-
-function seriesKey(model: CostOverviewGroup): string {
-  return `${model.source}-${model.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
-}
-
-function modelColor(model: CostOverviewGroup, index = 0): string {
-  const sameSource = visibleModels.value.filter(item => item.source === model.source)
-  const sourceIndex = sameSource.findIndex(item => item.label === model.label)
-  const colors = modelPalette[model.source]
-  return colors[(sourceIndex < 0 ? index : sourceIndex) % colors.length]!
-}
-
-function modelMetric(model: CostOverviewGroup): number {
-  return chartUsesCost.value && model.pricedRequests
-    ? model.estimatedUsd || 0
-    : usageTotal(model.usage)
 }
 
 function formatDay(date: string): string {
@@ -123,23 +99,8 @@ function formatTokens(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 }
 
-function shortHarness(source: SessionSource): string {
-  return source === 'claude' ? 'Claude' : source === 'codex' ? 'Codex' : 'Copilot'
-}
-
 function spendLabel(group: CostOverviewGroup): string {
   return group.estimatedUsd === null ? 'Rate unavailable' : formatUsd(group.estimatedUsd)
-}
-
-function pricingLabel(group: CostOverviewGroup): string {
-  if (group.estimatedUsd === null) return 'Rate unavailable'
-  if (group.source === 'codex') return 'OpenAI API equivalent'
-  if (group.source === 'copilot') return 'GitHub AI Credits'
-  return 'Claude API estimate'
-}
-
-function sparkline(group: CostOverviewGroup): number[] {
-  return group.days.map(day => group.estimatedUsd === null ? usageTotal(day.usage) : day.estimatedUsd)
 }
 
 function selectHarness(source: HarnessFilter): void {
@@ -148,15 +109,7 @@ function selectHarness(source: HarnessFilter): void {
 
 function exportCsv(): void {
   if (!data.value || !import.meta.client) return
-  const rows = [
-    ['Harness', 'Model', 'Estimated USD', 'Pricing', 'Sessions', 'Input', 'Output', 'Cache read', 'Cache write'],
-    ...data.value.models.map(model => [
-      shortHarness(model.source), model.label, model.estimatedUsd ?? '',
-      pricingLabel(model),
-      model.sessions, model.usage.in, model.usage.out, model.usage.cr, model.usage.cw,
-    ]),
-  ]
-  const csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n')
+  const csv = serializeCostCsv(data.value.models)
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
@@ -184,7 +137,7 @@ function exportCsv(): void {
       </section>
 
       <UAlert v-if="error" class="state-alert" color="error" variant="soft" icon="i-lucide-cloud-off" title="Could not read cost data" description="The local transcript scan failed. Retry after checking the server output." />
-      <UAlert v-else-if="degradedSources.length" class="state-alert" color="warning" variant="soft" icon="i-lucide-triangle-alert" title="Some transcript data was skipped" :description="degradedSources.map(source => `${shortHarness(source.source)}: ${source.message}`).join(' · ')" />
+      <UAlert v-else-if="degradedSources.length" class="state-alert" color="warning" variant="soft" icon="i-lucide-triangle-alert" title="Some transcript data was skipped" :description="degradedSources.map(source => `${sessionSourceLabel(source.source)}: ${source.message}`).join(' · ')" />
 
       <section v-if="loading && !data" class="summary-grid" aria-label="Loading cost overview">
         <USkeleton v-for="index in 4" :key="index" class="h-24 rounded-xl" />
@@ -198,7 +151,7 @@ function exportCsv(): void {
         </section>
 
         <section class="harness-section">
-          <header><div><span class="section-kicker">01 · HARNESS VIEW</span><h2>Where is usage happening?</h2></div><button v-if="selectedHarness !== 'all'" @click="selectHarness('all')">Reset to all</button></header>
+          <header><div><span class="section-kicker">01 · HARNESS VIEW</span><h2>Where is usage happening?</h2></div><button v-if="selectedHarness !== 'all'" type="button" @click="selectHarness('all')">Reset to all</button></header>
           <div class="harness-grid">
             <button
               v-for="harness in harnesses"
@@ -241,8 +194,8 @@ function exportCsv(): void {
               <ol>
                 <li v-for="(model, index) in visibleModels" :key="`${model.source}-${model.label}`">
                   <span class="rank">{{ String(index + 1).padStart(2, '0') }}</span>
-                  <span class="model-name"><strong>{{ model.label }}</strong><small><i :style="{ background: modelColor(model, index) }" />{{ shortHarness(model.source) }}</small></span>
-                  <span class="bar"><i :style="{ width: `${modelMetric(model) / largestMetric * 100}%`, background: modelColor(model, index) }" /></span>
+                  <span class="model-name"><strong>{{ model.label }}</strong><small><i :style="{ background: modelColor(model, visibleModels, index) }" />{{ sessionSourceLabel(model.source) }}</small></span>
+                  <span class="bar"><i :style="{ width: `${modelMetric(model, chartUsesCost) / largestMetric * 100}%`, background: modelColor(model, visibleModels, index) }" /></span>
                   <strong class="model-cost">{{ chartUsesCost && model.pricedRequests ? formatUsd(model.estimatedUsd || 0) : formatTokens(usageTotal(model.usage)) }}<small>{{ model.sessions }} session{{ model.sessions === 1 ? '' : 's' }}</small></strong>
                 </li>
               </ol>
@@ -257,7 +210,7 @@ function exportCsv(): void {
               <thead><tr><th>Model / harness</th><th>Spend</th><th>Pricing</th><th>Sessions</th><th>Total tokens</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th></tr></thead>
               <tbody>
                 <tr v-for="(model, index) in visibleModels" :key="`${model.source}-${model.label}`">
-                  <td><i :style="{ background: modelColor(model, index) }" /><span><strong>{{ model.label }}</strong><small>{{ shortHarness(model.source) }}</small></span></td>
+                  <td><i :style="{ background: modelColor(model, visibleModels, index) }" /><span><strong>{{ model.label }}</strong><small>{{ sessionSourceLabel(model.source) }}</small></span></td>
                   <td><strong>{{ spendLabel(model) }}</strong></td><td>{{ pricingLabel(model) }}</td><td>{{ model.sessions }}</td><td>{{ formatTokens(usageTotal(model.usage)) }}</td><td>{{ formatTokens(model.usage.in) }}</td><td>{{ formatTokens(model.usage.out) }}</td><td>{{ formatTokens(model.usage.cr) }}</td><td>{{ formatTokens(model.usage.cw) }}</td>
                 </tr>
               </tbody>

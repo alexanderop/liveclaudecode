@@ -13,6 +13,7 @@ import {
 } from '#server/utils/chat'
 import { ChatStore } from '#server/utils/chat-store'
 import { parseChatAction } from '#shared/schemas/chat'
+import type { ChatEvent } from '#shared/types/chat'
 import { SessionCatalogCache, SessionLocatorCache } from '#server/utils/session-catalog'
 import {
   CodexScanCache,
@@ -109,15 +110,17 @@ function chatLayer(
     Layer.succeed(CodexSessionsDirectory)(CODEX),
     Layer.succeed(VsCodeUserDataDirectories)([]),
     Layer.succeed(WorkingDirectory)('/repo'),
-    testFileSystem({
-      '/repo/.keep': '',
-      [TRANSCRIPT]: codex.rollout([
-        codex.sessionMeta('chat-run', { cwd: '/repo' }),
-        codex.message('user', 'Run the tests'),
-      ]),
-    }),
-  )
+  ).pipe(Layer.provideMerge(testFileSystem({
+    '/repo/.keep': '',
+    [TRANSCRIPT]: codex.rollout([
+      codex.sessionMeta('chat-run', { cwd: '/repo' }),
+      codex.message('user', 'Run the tests'),
+    ]),
+  })))
 }
+
+const isTurnEnd = (event: ChatEvent): event is Extract<ChatEvent, { kind: 'turn-end' }> =>
+  event.kind === 'turn-end'
 
 const waitForIdle = Effect.fn('waitForIdle')(function*(project: string, key: string) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -178,12 +181,12 @@ describe('session chat', () => {
       const second = yield* waitForIdle('/repo', 'codex:chat-run')
 
       assert.strictEqual(prompts.length, 2)
-      const firstPrompt = prompts[0] as { prompt: Array<{ text: string }> }
-      const secondPrompt = prompts[1] as { prompt: Array<{ text: string }> }
+      const firstPrompt = prompts[0] as { prompt: Array<{ type: string, text: string }> }
+      const secondPrompt = prompts[1] as { prompt: Array<{ type: string, text: string }> }
       assert.strictEqual(firstPrompt.prompt.length, 2)
       assert.isTrue(firstPrompt.prompt[0]!.text.includes(TRANSCRIPT))
       assert.deepStrictEqual(secondPrompt.prompt, [{ type: 'text', text: 'What should I fix?' }])
-      assert.strictEqual(second.events.filter(event => event.kind === 'turn-end').length, 2)
+      assert.strictEqual(second.events.filter(isTurnEnd).length, 2)
     }).pipe(Effect.provide(chatLayer(prompts)))
   })
 
@@ -363,7 +366,7 @@ describe('session chat', () => {
       const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
       assert.deepStrictEqual(response.events.map(event => event.kind), ['user', 'turn-end'])
       assert.strictEqual(
-        response.events.find(event => event.kind === 'turn-end')?.stopReason,
+        response.events.find(isTurnEnd)?.stopReason,
         'cancelled',
       )
     }).pipe(Effect.provide(chatLayer([], [], connector)))
@@ -400,7 +403,7 @@ describe('session chat', () => {
       ], { concurrency: 2 })
 
       const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
-      const terminalEvents = response.events.filter(event => event.kind === 'turn-end')
+      const terminalEvents = response.events.filter(isTurnEnd)
       assert.strictEqual(terminalEvents.length, 1)
       assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
     }).pipe(Effect.provide(chatLayer([], [], connector)))
@@ -448,7 +451,7 @@ describe('session chat', () => {
       yield* Fiber.join(cancelling)
 
       const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
-      const terminalEvents = response.events.filter(event => event.kind === 'turn-end')
+      const terminalEvents = response.events.filter(isTurnEnd)
       assert.strictEqual(response.status, 'idle')
       assert.strictEqual(terminalEvents.length, 1)
       assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
@@ -542,7 +545,7 @@ describe('session chat', () => {
 
       assert.isTrue(turnInterrupted)
       const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
-      const terminalEvents = response.events.filter(event => event.kind === 'turn-end')
+      const terminalEvents = response.events.filter(isTurnEnd)
       assert.strictEqual(response.status, 'idle')
       assert.strictEqual(terminalEvents.length, 1)
       assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')

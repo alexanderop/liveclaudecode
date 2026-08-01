@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { RunNode } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { formatTime } from '~/utils/format'
+import { formatTime, sessionSourceLabel } from '~/utils/format'
 
 const props = defineProps<{
   node: RunNode
@@ -21,10 +21,6 @@ interface RunTreeItem {
   onSelect: () => void
 }
 
-function sourceLabel(node: RunNode): string {
-  return node.source === 'claude' ? 'Claude' : node.source === 'codex' ? 'Codex' : 'Copilot'
-}
-
 function statusLabel(node: RunNode): string {
   if (node.spawnState === 'running' || node.subLive || (node.live && node.kind === 'subagent')) return 'running'
   if (node.subErrors) return `${node.subErrors} err`
@@ -34,7 +30,7 @@ function statusLabel(node: RunNode): string {
 function metadata(node: RunNode): string {
   const agentCount = Math.max(1, node.subAgents + 1)
   return [
-    sourceLabel(node),
+    sessionSourceLabel(node.source),
     formatTime(node.subLast || node.lastTs, false),
     agentCount > 1 ? `${agentCount} agents` : '',
   ].filter(Boolean).join(' · ')
@@ -78,7 +74,7 @@ const selectedItem = computed(() => {
       <span
         class="tree-status"
         :class="[item.node.source, { running: item.node.subLive, error: item.node.subErrors && !item.node.subLive }]"
-        :title="`${sourceLabel(item.node)} · ${item.node.agentType || item.node.sourceDetail || 'Session'}`"
+        :title="`${sessionSourceLabel(item.node.source)} · ${item.node.agentType || item.node.sourceDetail || 'Session'}`"
       >
         <UIcon :name="item.node.kind === 'subagent' ? 'i-lucide-bot' : 'i-lucide-message-square-code'" />
       </span>

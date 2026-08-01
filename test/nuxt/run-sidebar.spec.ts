@@ -1,288 +1,250 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { describe, expect, it } from 'vitest'
+import type { VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 import RunSidebar from '~/components/RunSidebar.vue'
 import type { RunNode } from '#shared/types/run'
+import { DEFAULT_HOURS, PROJECT_ID, runNode } from '../fixtures/runs'
 
-function run(): RunNode {
-  return {
-    source: 'claude',
-    sourceDetail: 'Claude Code',
-    key: 'session',
-    kind: 'session',
-    sid: 'session',
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+  // Select and organize menus teleport into document.body.
+  document.body.innerHTML = ''
+})
+
+function sidebarRun(overrides: Partial<RunNode> = {}): RunNode {
+  return runNode({
     label: 'Test server for bugs',
-    agentType: '',
-    toolUseId: null,
-    model: '',
-    spawnDepth: null,
-    parentAgentId: null,
-    stoppedByUser: false,
-    spawnState: '',
-    children: [],
-    records: 1,
-    tools: 2,
-    toolCounts: { Bash: 2 },
-    reads: 0,
     errors: 0,
-    tokensOut: 10,
-    firstTs: '2026-07-25T18:00:00.000Z',
-    lastTs: '2026-07-25T18:00:02.000Z',
-    mtime: 0,
-    ago: 0,
-    live: false,
-    size: 10,
-    todos: null,
-    skills: [],
-    milestones: [],
-    current: null,
-    files: [],
-    commands: [],
-    finalText: '',
-    subAgents: 0,
-    subRunning: 0,
     subErrors: 0,
-    subTools: 2,
-    subFiles: {},
-    subLast: '2026-07-25T18:00:02.000Z',
-    subLive: false,
-  }
+    spawnState: '',
+    ...overrides,
+  })
+}
+
+const degradedSources = [
+  { source: 'claude', state: 'ready', sessions: 0, malformed: 0, message: '' },
+  {
+    source: 'codex',
+    state: 'degraded',
+    sessions: 1,
+    malformed: 2,
+    message: '2 malformed records skipped',
+  },
+] as const
+
+async function mountSidebar(overrides: Record<string, unknown> = {}) {
+  const wrapper = await mountSuspended(RunSidebar, {
+    global: { stubs: { UTooltip: { template: '<slot />' } } },
+    props: {
+      projects: [],
+      allProjects: [],
+      sources: [],
+      projectOptions: [],
+      loading: false,
+      selectedProject: null,
+      selectedKey: null,
+      query: '',
+      sourceFilter: 'all',
+      projectFilter: 'all',
+      liveOnly: false,
+      attentionOnly: false,
+      hideIdle: true,
+      minimumSubagents: 0,
+      sessionSort: 'updated',
+      hours: DEFAULT_HOURS,
+      ...overrides,
+    },
+  })
+  component = wrapper
+  return wrapper
+}
+
+function menuEntry(role: string, text: string): HTMLElement | undefined {
+  return [...document.body.querySelectorAll<HTMLElement>(`[role="${role}"]`)]
+    .find(entry => entry.textContent?.includes(text))
 }
 
 describe('RunSidebar', () => {
   it('groups sessions under the current project by default and can flatten the list', async () => {
-    const root = run()
-    const component = await mountSuspended(RunSidebar, {
-      global: { stubs: { UTooltip: { template: '<slot />' } } },
-      props: {
-        projects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
-        allProjects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
-        sources: [
-          { source: 'claude', state: 'ready', sessions: 1, malformed: 0, message: '' },
-          { source: 'codex', state: 'ready', sessions: 0, malformed: 0, message: '' },
-        ],
-        costs: {
-          currency: 'USD',
-          usd: 4.7,
-          todayUsd: 1.23,
-          last7DaysUsd: 4.7,
-          coverageHours: 168,
-          pricedRequests: 12,
-          unpricedRequests: 0,
-          estimated: true,
-        },
-        projectOptions: [{ id: 'workout', name: 'workoutTracker' }],
-        loading: false,
-        selectedProject: null,
-        selectedKey: null,
-        query: '',
-        sourceFilter: 'all',
-        projectFilter: 'all',
-        liveOnly: false,
-        attentionOnly: false,
-        hideIdle: true,
-        minimumSubagents: 0,
-        sessionSort: 'updated',
-        hours: 168,
+    const root = sidebarRun()
+    const wrapper = await mountSidebar({
+      projects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
+      allProjects: [{ id: 'workout', name: 'workoutTracker', roots: [root] }],
+      sources: [
+        { source: 'claude', state: 'ready', sessions: 1, malformed: 0, message: '' },
+        { source: 'codex', state: 'ready', sessions: 0, malformed: 0, message: '' },
+      ],
+      costs: {
+        currency: 'USD',
+        usd: 4.7,
+        todayUsd: 1.23,
+        last7DaysUsd: 4.7,
+        coverageHours: DEFAULT_HOURS,
+        pricedRequests: 12,
+        unpricedRequests: 0,
+        estimated: true,
       },
+      projectOptions: [{ id: 'workout', name: 'workoutTracker' }],
     })
-    const project = component.get('.project-row')
+    const project = wrapper.get('.project-row')
 
     expect(project.text()).toContain('workoutTracker')
     expect(project.attributes('aria-expanded')).toBe('true')
-    expect(component.text()).toContain('Test server for bugs')
-    expect(component.get('.sidebar-cost-summary').text()).toContain('Today$1.23')
-    expect(component.get('.sidebar-cost-summary').text()).toContain('Last 7 days$4.70')
-    expect(component.get('.sidebar-cost-summary').text()).toContain(
+    expect(wrapper.text()).toContain('Test server for bugs')
+    expect(wrapper.get('.sidebar-cost-summary').text()).toContain('Today$1.23')
+    expect(wrapper.get('.sidebar-cost-summary').text()).toContain('Last 7 days$4.70')
+    expect(wrapper.get('.sidebar-cost-summary').text()).toContain(
       'Transcript-only estimate; excludes hidden helper calls and plan billing.',
     )
-    expect(component.findAll('.primary-nav-item').map(item => item.attributes('aria-pressed'))).toEqual([
+    expect(wrapper.findAll('.primary-nav-item').map(item => item.attributes('aria-pressed'))).toEqual([
       'true',
       'false',
       'false',
       undefined,
     ])
-    expect(component.get('a[href="/costs"]').text()).toContain('Costs')
+    expect(wrapper.get('a[href="/costs"]').text()).toContain('Costs')
 
-    await component.get('button[aria-label="Hide sidebar"]').trigger('click')
-    expect(component.emitted('collapse')).toEqual([[]])
+    await wrapper.get('button[aria-label="Hide sidebar"]').trigger('click')
+    expect(wrapper.emitted('collapse')).toEqual([[]])
 
     await project.trigger('click')
     expect(project.attributes('aria-expanded')).toBe('false')
-    expect(component.get('.project-runs').attributes('style')).toContain('display: none')
+    expect(wrapper.get('.project-runs').attributes('style')).toContain('display: none')
 
-    await component.get('button[aria-label="Organize sidebar"]').trigger('click')
-    const listOption = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-      .find(button => button.textContent?.includes('In one list'))
+    await wrapper.get('button[aria-label="Organize sidebar"]').trigger('click')
+    const listOption = menuEntry('menuitem', 'In one list')
     expect(listOption).toBeDefined()
     listOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await component.vm.$nextTick()
+    await wrapper.vm.$nextTick()
 
-    expect(component.find('.project-row').exists()).toBe(false)
-    expect(component.text()).toContain('Recent sessions')
-    expect(component.text()).toContain('Test server for bugs')
+    expect(wrapper.find('.project-row').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Recent sessions')
+    expect(wrapper.text()).toContain('Test server for bugs')
 
-    await component.findAll('.primary-nav-item')[1]!.trigger('click')
-    expect(component.emitted('update:liveOnly')).toContainEqual([true])
+    await wrapper.findAll('.primary-nav-item')[1]!.trigger('click')
+    expect(wrapper.emitted('update:liveOnly')).toContainEqual([true])
   })
 
   it('renders every discovered project and selects a run with its project id', async () => {
-    const first = run()
-    const second = { ...run(), key: 'second-session', sid: 'second-session', label: 'Other run' }
-    const component = await mountSuspended(RunSidebar, {
-      global: { stubs: { UTooltip: { template: '<slot />' } } },
-      props: {
-        projects: [
-          { id: 'workout', name: 'workoutTracker', roots: [first] },
-          { id: 'other', name: 'other-project', roots: [second] },
-        ],
-        allProjects: [
-          { id: 'workout', name: 'workoutTracker', roots: [first] },
-          { id: 'other', name: 'other-project', roots: [second] },
-        ],
-        sources: [
-          { source: 'claude', state: 'ready', sessions: 2, malformed: 0, message: '' },
-          { source: 'codex', state: 'ready', sessions: 0, malformed: 0, message: '' },
-        ],
-        projectOptions: [
-          { id: 'workout', name: 'workoutTracker' },
-          { id: 'other', name: 'other-project' },
-        ],
-        loading: false,
-        selectedProject: null,
-        selectedKey: null,
-        query: '',
-        sourceFilter: 'all',
-        projectFilter: 'all',
-        liveOnly: false,
-        attentionOnly: false,
-        hideIdle: true,
-        minimumSubagents: 0,
-        sessionSort: 'updated',
-        hours: 168,
-      },
+    const first = sidebarRun()
+    const second = sidebarRun({ key: 'second-session', sid: 'second-session', label: 'Other run' })
+    const projects = [
+      { id: 'workout', name: 'workoutTracker', roots: [first] },
+      { id: 'other', name: 'other-project', roots: [second] },
+    ]
+    const wrapper = await mountSidebar({
+      projects,
+      allProjects: projects,
+      sources: [
+        { source: 'claude', state: 'ready', sessions: 2, malformed: 0, message: '' },
+        { source: 'codex', state: 'ready', sessions: 0, malformed: 0, message: '' },
+      ],
+      projectOptions: [
+        { id: 'workout', name: 'workoutTracker' },
+        { id: 'other', name: 'other-project' },
+      ],
     })
 
-    expect(component.findAll('.project-row').map(row => row.text())).toEqual([
+    expect(wrapper.findAll('.project-row').map(row => row.text())).toEqual([
       expect.stringContaining('workoutTracker'),
       expect.stringContaining('other-project'),
     ])
-    await component.findAll('.tree-node')[1]!.trigger('click')
-    expect(component.emitted('select')).toContainEqual(['other', 'second-session'])
+    await wrapper.findAll('.tree-node')[1]!.trigger('click')
+    expect(wrapper.emitted('select')).toContainEqual(['other', 'second-session'])
   })
 
-  it('updates provider/project filters and distinguishes loading, empty, and degraded states', async () => {
-    const component = await mountSuspended(RunSidebar, {
-      global: { stubs: { UTooltip: { template: '<slot />' } } },
-      props: {
-        projects: [],
-        allProjects: [],
-        sources: [
-          { source: 'claude', state: 'ready', sessions: 0, malformed: 0, message: '' },
-          {
-            source: 'codex',
-            state: 'degraded',
-            sessions: 1,
-            malformed: 2,
-            message: '2 malformed records skipped',
-          },
-        ],
-        projectOptions: [{ id: '/repo', name: 'repo' }],
-        loading: true,
-        selectedProject: null,
-        selectedKey: null,
-        query: '',
-        sourceFilter: 'all',
-        projectFilter: 'all',
-        liveOnly: false,
-        attentionOnly: false,
-        hideIdle: true,
-        minimumSubagents: 0,
-        sessionSort: 'updated',
-        hours: 168,
-      },
-    })
+  it('hides source health while loading and reveals degraded details in the filters', async () => {
+    const wrapper = await mountSidebar({ sources: degradedSources, loading: true })
 
-    expect(component.text()).toContain('Loading local sessions')
-    expect(component.find('.source-statuses').exists()).toBe(false)
-    await component.get('.sidebar-filter-toggle').trigger('click')
-    expect(component.text()).toContain('Codex')
-    expect(component.text()).toContain('2 malformed records skipped')
+    expect(wrapper.text()).toContain('Loading local sessions')
+    expect(wrapper.find('.source-statuses').exists()).toBe(false)
 
-    const codexButton = component.findAll('.source-filters button')
+    await wrapper.get('.sidebar-filter-toggle').trigger('click')
+    expect(wrapper.get('.source-statuses').text()).toContain('Codex')
+    expect(wrapper.get('.source-statuses').text()).toContain('2 malformed records skipped')
+  })
+
+  it('emits provider filter updates for each source button', async () => {
+    const wrapper = await mountSidebar({ sources: degradedSources })
+    await wrapper.get('.sidebar-filter-toggle').trigger('click')
+
+    const codexButton = wrapper.findAll('.source-filters button')
       .find(button => button.text() === 'Codex')
     expect(codexButton).toBeDefined()
     await codexButton!.trigger('click')
-    expect(component.emitted('update:sourceFilter')).toContainEqual(['codex'])
+    expect(wrapper.emitted('update:sourceFilter')).toContainEqual(['codex'])
 
-    const copilotButton = component.findAll('.source-filters button')
+    const copilotButton = wrapper.findAll('.source-filters button')
       .find(button => button.text() === 'Copilot')
     expect(copilotButton).toBeDefined()
     await copilotButton!.trigger('click')
-    expect(component.emitted('update:sourceFilter')).toContainEqual(['copilot'])
+    expect(wrapper.emitted('update:sourceFilter')).toContainEqual(['copilot'])
+  })
 
-    await component.get('[aria-label="Filter by project"]').trigger('click')
-    const projectOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
-      .find(option => option.textContent?.includes('repo'))
+  it('emits project filter updates from the project select', async () => {
+    const wrapper = await mountSidebar({
+      sources: degradedSources,
+      projectOptions: [{ id: PROJECT_ID, name: 'repo' }],
+    })
+    await wrapper.get('.sidebar-filter-toggle').trigger('click')
+
+    await wrapper.get('[aria-label="Filter by project"]').trigger('click')
+    const projectOption = menuEntry('option', 'repo')
     expect(projectOption).toBeDefined()
     projectOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await component.vm.$nextTick()
-    expect(component.emitted('update:projectFilter')).toContainEqual(['/repo'])
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:projectFilter')).toContainEqual([PROJECT_ID])
+  })
 
-    await component.get('[aria-label="Filter by minimum subagents"]').trigger('click')
-    const minimumOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
-      .find(option => option.textContent?.includes('5 or more'))
+  it('emits minimum subagent filter updates', async () => {
+    const wrapper = await mountSidebar({ sources: degradedSources })
+    await wrapper.get('.sidebar-filter-toggle').trigger('click')
+
+    await wrapper.get('[aria-label="Filter by minimum subagents"]').trigger('click')
+    const minimumOption = menuEntry('option', '5 or more')
     expect(minimumOption).toBeDefined()
     minimumOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await component.vm.$nextTick()
-    expect(component.emitted('update:minimumSubagents')).toContainEqual([5])
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:minimumSubagents')).toContainEqual([5])
+  })
 
-    await component.get('[aria-label="Sort sessions"]').trigger('click')
-    const sortOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
-      .find(option => option.textContent?.includes('Most subagents'))
+  it('emits session sort updates', async () => {
+    const wrapper = await mountSidebar({ sources: degradedSources })
+    await wrapper.get('.sidebar-filter-toggle').trigger('click')
+
+    await wrapper.get('[aria-label="Sort sessions"]').trigger('click')
+    const sortOption = menuEntry('option', 'Most subagents')
     expect(sortOption).toBeDefined()
     sortOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await component.vm.$nextTick()
-    expect(component.emitted('update:sessionSort')).toContainEqual(['subagents'])
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:sessionSort')).toContainEqual(['subagents'])
+  })
 
-    await component.setProps({ loading: false })
-    expect(component.text()).not.toContain('Loading local sessions')
-    expect(component.text()).toContain('No matching sessions')
+  it('distinguishes the empty state from loading once results settle', async () => {
+    const wrapper = await mountSidebar({ sources: degradedSources, loading: true })
+    expect(wrapper.text()).toContain('Loading local sessions')
+
+    await wrapper.setProps({ loading: false })
+    expect(wrapper.text()).not.toContain('Loading local sessions')
+    expect(wrapper.text()).toContain('No matching sessions')
   })
 
   it('selects a date range and explains empty Copilot results in that range', async () => {
-    const component = await mountSuspended(RunSidebar, {
-      global: { stubs: { UTooltip: { template: '<slot />' } } },
-      props: {
-        projects: [],
-        allProjects: [],
-        sources: [],
-        projectOptions: [],
-        loading: false,
-        selectedProject: null,
-        selectedKey: null,
-        query: '',
-        sourceFilter: 'copilot',
-        projectFilter: 'all',
-        liveOnly: false,
-        attentionOnly: false,
-        hideIdle: true,
-        minimumSubagents: 0,
-        sessionSort: 'updated',
-        hours: 24,
-      },
-    })
+    const wrapper = await mountSidebar({ sourceFilter: 'copilot', hours: 24 })
 
-    expect(component.text()).toContain('No Copilot chats were found for last 24 hours')
-    expect(component.text()).toContain('Try a longer date range')
+    expect(wrapper.text()).toContain('No Copilot chats were found for last 24 hours')
+    expect(wrapper.text()).toContain('Try a longer date range')
 
-    await component.get('.sidebar-filter-toggle').trigger('click')
-    await component.get('[aria-label="Filter by date range"]').trigger('click')
-    const allTimeOption = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
-      .find(option => option.textContent?.includes('All time'))
+    await wrapper.get('.sidebar-filter-toggle').trigger('click')
+    await wrapper.get('[aria-label="Filter by date range"]').trigger('click')
+    const allTimeOption = menuEntry('option', 'All time')
     expect(allTimeOption).toBeDefined()
     allTimeOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await component.vm.$nextTick()
+    await wrapper.vm.$nextTick()
 
-    expect(component.emitted('update:hours')).toContainEqual([0])
+    expect(wrapper.emitted('update:hours')).toContainEqual([0])
   })
 })

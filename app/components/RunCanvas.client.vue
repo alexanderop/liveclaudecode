@@ -18,7 +18,6 @@ import {
   onBeforeUnmount,
   onDeactivated,
   onMounted,
-  provide,
   ref,
   shallowRef,
   useId,
@@ -27,7 +26,7 @@ import {
 import { useDocumentVisibility, useIntervalFn, useTimeoutFn } from '@vueuse/core'
 import type { DiagnosticIncident, RunNode, RunResponse } from '#shared/types/run'
 import ExecutionAgentNode from '~/components/ExecutionAgentNode.vue'
-import { ExecutionCanvasKey } from '~/composables/useExecutionCanvas'
+import { provideExecutionCanvas } from '~/composables/useExecutionCanvas'
 import {
   buildExecutionGraph,
   DEFAULT_EXECUTION_DETAIL,
@@ -38,7 +37,8 @@ import {
   type ExecutionLens,
   type ExecutionNodeData,
 } from '~/utils/execution-graph'
-import { analyzeCoordination, flattenRunTree } from '~/utils/execution-analysis'
+import { analyzeCoordination, buildParentIndex, flattenRunTree } from '~/utils/execution-analysis'
+import { parseTimestamp } from '~/utils/format'
 import { structuralComputed, structurallyEqual } from '~/utils/structural-computed'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 
@@ -118,17 +118,11 @@ const issues = computed(() => (props.run?.diagnostics?.incidents || [])
   .filter(incident => incident.severity !== 'info')
   .sort((a, b) => (a.ts || '').localeCompare(b.ts || '')))
 
-function parsedTime(value: string | null): number | null {
-  if (!value) return null
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
 const replayRange = computed(() => {
   const values = [
-    ...(props.run?.lanes.flatMap(lane => [parsedTime(lane.firstTs), parsedTime(lane.lastTs)]) || []),
-    ...(props.run?.diagnostics?.incidents?.map(incident => parsedTime(incident.ts)) || []),
-    ...(props.run?.diagnostics?.changes?.map(change => parsedTime(change.ts)) || []),
+    ...(props.run?.lanes.flatMap(lane => [parseTimestamp(lane.firstTs), parseTimestamp(lane.lastTs)]) || []),
+    ...(props.run?.diagnostics?.incidents?.map(incident => parseTimestamp(incident.ts)) || []),
+    ...(props.run?.diagnostics?.changes?.map(change => parseTimestamp(change.ts)) || []),
   ].filter((value): value is number => value !== null)
   const start = values.length ? Math.min(...values) : 0
   const end = values.length ? Math.max(...values, sessionLive.value ? Date.now() : 0) : start
@@ -141,13 +135,13 @@ const replayLabel = computed(() => replayAt.value === null
 const replayMarkers = computed(() => {
   const markers = [
     ...(props.run?.diagnostics.incidents || []).map(incident => ({
-      ts: parsedTime(incident.ts),
+      ts: parseTimestamp(incident.ts),
       label: incident.title,
       kind: incident.severity === 'error' ? 'error' : 'warning',
       incident,
     })),
     ...(props.run?.phases || []).map(phase => ({
-      ts: parsedTime(phase.ts),
+      ts: parseTimestamp(phase.ts),
       label: phase.title,
       kind: 'phase',
       incident: null,
@@ -163,13 +157,12 @@ const rootNodes = computed(() => flattenRunTree(props.root || null))
 const nodeIndex = computed(() => new Map(rootNodes.value.map(node => [node.key, node])))
 const breadcrumb = computed(() => {
   if (!props.selectedKey || !props.root) return []
-  const parent = new Map<string, string>()
-  for (const node of rootNodes.value) node.children.forEach(child => parent.set(child.key, node.key))
+  const parents = buildParentIndex(props.root)
   const keys: string[] = []
   let key: string | undefined = props.selectedKey
   while (key) {
     keys.unshift(key)
-    key = parent.get(key)
+    key = parents.get(key)?.key
   }
   return keys.map(item => ({ key: item, label: normalizeSessionLabel(nodeIndex.value.get(item)?.label || item, item) }))
 })
@@ -191,7 +184,7 @@ const {
   id: flowStoreId,
 } = useVueFlow(canvasId)
 
-provide(ExecutionCanvasKey, {
+provideExecutionCanvas({
   layoutDirection,
   selectNode: key => emit('select', key),
   toggleNode,
@@ -402,7 +395,7 @@ function navigateIncident(direction: 1 | -1): void {
   const incident = issues.value[index]!
   if (incident.key) emit('select', incident.key)
   emit('inspect-incident', incident)
-  if (incident.ts) setReplayTime(parsedTime(incident.ts))
+  if (incident.ts) setReplayTime(parseTimestamp(incident.ts))
 }
 
 function selectRelated(direction: 'parent' | 'child' | 'previous' | 'next'): void {
@@ -537,7 +530,7 @@ onBeforeUnmount(deactivateCanvas)
         </div>
         <label v-if="searchOpen" id="canvas-search-control" class="canvas-search">
           <UIcon name="i-lucide-search" />
-          <input v-model="searchQuery" type="search" placeholder="Find agent or activity" aria-label="Search canvas" />
+          <input v-model="searchQuery" type="search" placeholder="Find agent or activity" aria-label="Search canvas" >
           <button v-if="searchQuery" type="button" aria-label="Clear canvas search" @click="searchQuery = ''"><UIcon name="i-lucide-x" /></button>
         </label>
         <div v-if="optionsOpen" id="canvas-display-options" class="canvas-options">
@@ -652,7 +645,7 @@ onBeforeUnmount(deactivateCanvas)
         <button type="button" :aria-label="playing ? 'Pause replay' : 'Play replay'" @click="togglePlayback"><UIcon :name="playing ? 'i-lucide-pause' : 'i-lucide-play'" /></button>
         <span>{{ new Date(replayRange.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span>
         <div class="replay-track">
-          <input :value="replayValue" type="range" :min="replayRange.start" :max="replayRange.end" :step="Math.max(1, Math.round((replayRange.end - replayRange.start) / 500))" aria-label="Replay session timeline" @input="onReplayInput" />
+          <input :value="replayValue" type="range" :min="replayRange.start" :max="replayRange.end" :step="Math.max(1, Math.round((replayRange.end - replayRange.start) / 500))" aria-label="Replay session timeline" @input="onReplayInput" >
           <button
             v-for="(marker, index) in replayMarkers"
             :key="`${marker.kind}-${marker.ts}-${index}`"

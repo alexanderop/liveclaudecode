@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+
 export const T0 = 1_785_052_800_000
 
 function clean<T>(value: T): T {
@@ -172,5 +175,3 @@ export function writeLog(path: string, records: unknown[]): void {
 export function appendRecords(path: string, records: unknown[]): void {
   appendFileSync(path, records.map(record => `${JSON.stringify(record)}\n`).join(''))
 }
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'

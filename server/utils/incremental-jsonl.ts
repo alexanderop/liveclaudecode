@@ -1,7 +1,7 @@
 import { Effect, Option, Stream } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
-import { ignoreNotFound, statIfExists } from './filesystem-concurrency'
+import { detectFileChange, ignoreNotFound } from './filesystem-concurrency'
 
 const utf8 = new TextDecoder()
 
@@ -72,18 +72,10 @@ export const consumeNewRecords = Effect.fn('consumeNewRecords')(function*(
   path: string,
   state: IncrementalScanState,
 ): Effect.fn.Return<ConsumeNewRecordsResult, PlatformError.PlatformError, FileSystem.FileSystem> {
-  const infoOption = yield* statIfExists(path)
-  if (Option.isNone(infoOption) || infoOption.value.type !== 'File') {
-    return { records: [], next: state }
-  }
-
-  const info = infoOption.value
-  const mtime = Option.match(info.mtime, {
-    onNone: () => state.mtime,
-    onSome: date => date.getTime() / 1_000,
-  })
-  const size = Number(info.size)
-  if (size === state.lastLoadedSize && mtime === state.lastLoadedMtime) {
+  const change = yield* detectFileChange(path, state)
+  if (change._tag === 'Missing') return { records: [], next: state }
+  const { mtime, size } = change
+  if (change._tag === 'Unchanged') {
     return { records: [], next: { ...state, mtime, size } }
   }
 

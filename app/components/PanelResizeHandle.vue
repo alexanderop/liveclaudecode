@@ -1,6 +1,5 @@
 <script setup lang="ts">
 const props = defineProps<{
-  modelValue: number
   min: number
   max: number
   defaultValue: number
@@ -8,9 +7,7 @@ const props = defineProps<{
   label: string
 }>()
 
-const emit = defineEmits<{
-  'update:modelValue': [width: number]
-}>()
+const modelValue = defineModel<number>({ required: true })
 
 const dragging = ref(false)
 let startX = 0
@@ -23,7 +20,7 @@ function clamp(width: number): number {
 function updateFromPointer(event: PointerEvent): void {
   if (!dragging.value) return
   const multiplier = props.direction === 'right' ? 1 : -1
-  emit('update:modelValue', clamp(startWidth + ((event.clientX - startX) * multiplier)))
+  modelValue.value = clamp(startWidth + ((event.clientX - startX) * multiplier))
 }
 
 function stopDragging(): void {
@@ -36,7 +33,7 @@ function startDragging(event: PointerEvent): void {
   if (event.button !== 0) return
   event.preventDefault()
   startX = event.clientX
-  startWidth = props.modelValue
+  startWidth = modelValue.value
   dragging.value = true
   document.documentElement.classList.add('panel-resizing')
 }
@@ -50,18 +47,18 @@ function resizeWithKeyboard(event: KeyboardEvent): void {
   const multiplier = props.direction === 'right' ? 1 : -1
   let next: number
 
-  if (event.key === 'ArrowLeft') next = props.modelValue - (step * multiplier)
-  else if (event.key === 'ArrowRight') next = props.modelValue + (step * multiplier)
+  if (event.key === 'ArrowLeft') next = modelValue.value - (step * multiplier)
+  else if (event.key === 'ArrowRight') next = modelValue.value + (step * multiplier)
   else if (event.key === 'Home') next = props.min
   else if (event.key === 'End') next = props.max
   else return
 
   event.preventDefault()
-  emit('update:modelValue', clamp(next))
+  modelValue.value = clamp(next)
 }
 
 function resetWidth(): void {
-  emit('update:modelValue', clamp(props.defaultValue))
+  modelValue.value = clamp(props.defaultValue)
 }
 
 onBeforeUnmount(stopDragging)

@@ -1,10 +1,18 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { describe, expect, it } from 'vitest'
+import type { VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 import RunDiagnostics from '~/components/RunDiagnostics.vue'
-import type { RunResponse } from '#shared/types/run'
+import { runDiagnostics, runResponse } from '../fixtures/runs'
 
-const run = {
-  diagnostics: {
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+})
+
+const run = runResponse({
+  diagnostics: runDiagnostics({
     incidents: [{
       id: '1:api',
       severity: 'error',
@@ -25,8 +33,6 @@ const run = {
       who: 'worker',
       key: 'session/worker',
     }],
-    compactions: [],
-    outcomes: [],
     changes: [],
     git: [],
     agents: [{
@@ -42,34 +48,27 @@ const run = {
       branchPoints: 2,
       sidechainRecords: 14,
     }],
-    environment: {
-      cwd: '/repo',
-      gitBranch: 'feature',
-      version: '2.1.220',
-      entrypoint: 'cli',
-      permissionMode: 'default',
-    },
     causal: { records: 20, recordsWithUuid: 18, branchPoints: 2, sidechainRecords: 14, interruptions: 0 },
     usage: { in: 10, out: 20, cr: 100, cw: 30 },
-  },
-} as unknown as RunResponse
+  }),
+})
 
 describe('RunDiagnostics', () => {
   it('shows native incidents and timing and can select their agent', async () => {
-    const component = await mountSuspended(RunDiagnostics, {
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
       props: { run, selectedKey: null },
     })
 
-    expect(component.text()).toContain('Claude API rate_limit')
-    expect(component.text()).toContain('1m5s')
-    expect(component.text()).toContain('claude-sonnet-5')
+    expect(wrapper.get('.incident-row').text()).toContain('Claude API rate_limit')
+    expect(wrapper.get('.turn-row').text()).toContain('1m5s')
+    expect(wrapper.get('.context-row').text()).toContain('claude-sonnet-5')
 
-    await component.get('.incident-row').trigger('click')
-    expect(component.emitted('select')).toContainEqual(['session/worker'])
+    await wrapper.get('.incident-row').trigger('click')
+    expect(wrapper.emitted('select')).toContainEqual(['session/worker'])
 
-    await component.setProps({ selectedKey: 'session/worker' })
-    expect(component.get('.incident-row').attributes('aria-current')).toBe('true')
-    expect(component.get('.turn-row').attributes('aria-current')).toBe('true')
-    expect(component.get('.context-row').attributes('aria-current')).toBe('true')
+    await wrapper.setProps({ selectedKey: 'session/worker' })
+    expect(wrapper.get('.incident-row').attributes('aria-current')).toBe('true')
+    expect(wrapper.get('.turn-row').attributes('aria-current')).toBe('true')
+    expect(wrapper.get('.context-row').attributes('aria-current')).toBe('true')
   })
 })

@@ -15,7 +15,7 @@ export interface ProjectDirectory {
  * error is not the same as "this is not a directory". Only NotFound is folded
  * into `false`; anything else propagates.
  */
-const isDirectory = Effect.fn('isDirectory')(function*(path: string) {
+export const isDirectory = Effect.fn('isDirectory')(function*(path: string) {
   const fs = yield* FileSystem.FileSystem
   return yield* fs.stat(path).pipe(
     Effect.map(info => info.type === 'Directory'),

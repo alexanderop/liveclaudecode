@@ -1,7 +1,15 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { describe, expect, it } from 'vitest'
+import type { VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 import RunNowBoard from '~/components/RunNowBoard.vue'
 import { runNode, runResponse } from '../fixtures/runs'
+
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+})
 
 describe('RunNowBoard', () => {
   it('summarizes the session and opens an agent from the attention-sorted board', async () => {
@@ -26,15 +34,15 @@ describe('RunNowBoard', () => {
       subTools: 6,
       subLive: true,
     })
-    const component = await mountSuspended(RunNowBoard, {
+    const wrapper = component = await mountSuspended(RunNowBoard, {
       props: { root, run: runResponse() },
     })
 
-    expect(component.get('.now-health').text()).toContain('1 active')
-    expect(component.findAll('.now-agent')[0]!.text()).toContain('Timeline audit')
-    expect(component.findAll('.now-agent')[0]!.text()).toContain('Read')
+    expect(wrapper.get('.now-health').text()).toContain('1 active')
+    expect(wrapper.findAll('.now-agent')[0]!.text()).toContain('Timeline audit')
+    expect(wrapper.findAll('.now-agent')[0]!.text()).toContain('Read')
 
-    await component.findAll('.now-agent')[0]!.trigger('click')
-    expect(component.emitted('select')).toEqual([['worker']])
+    await wrapper.findAll('.now-agent')[0]!.trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['worker']])
   })
 })

@@ -1,4 +1,5 @@
 import { DateTime, Option, Predicate } from 'effect'
+import { addUsage, emptyUsage } from './run-shared'
 import type {
   ContextUsageSample,
   CostEstimate,
@@ -366,17 +367,6 @@ const SOURCE_LABELS: Record<SessionSource, string> = {
   claude: 'Claude Code',
   codex: 'OpenAI Codex',
   copilot: 'GitHub Copilot',
-}
-
-function emptyUsage(): Usage {
-  return { in: 0, out: 0, cr: 0, cw: 0 }
-}
-
-function addUsage(target: Usage, usage: Usage): void {
-  target.in += usage.in
-  target.out += usage.out
-  target.cr += usage.cr
-  target.cw += usage.cw
 }
 
 function overviewGroup(

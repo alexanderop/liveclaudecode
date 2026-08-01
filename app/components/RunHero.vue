@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { RunNode } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import { sessionSourceLabel } from '~/utils/format'
+import { sessionDisplayState, type SessionDisplayKind } from '~/utils/session-state'
 import type { PrimaryWorkspaceKind } from '~/utils/workspace-state'
 
 const props = withDefaults(defineProps<{
@@ -14,20 +16,20 @@ const props = withDefaults(defineProps<{
 const followActive = defineModel<boolean>('followActive', { required: true })
 const emit = defineEmits<{ showSidebar: [] }>()
 
-const sourceLabel = computed(() => {
-  const source = props.root?.source
-  return source === 'claude' ? 'Claude' : source === 'codex' ? 'Codex' : source === 'copilot' ? 'Copilot' : 'Local'
-})
+const sourceLabel = computed(() => sessionSourceLabel(props.root?.source))
 const title = computed(() => normalizeSessionLabel(props.root?.label || '', 'Local sessions'))
 const showFollow = computed(() => ['overview', 'map', 'activity'].includes(props.workspace))
+const statusPresentation: Record<SessionDisplayKind, { label: string, class: string }> = {
+  inactive: { label: 'No session', class: 'inactive' },
+  running: { label: 'Running', class: 'running' },
+  stopped: { label: 'Stopped', class: 'warning' },
+  failed: { label: 'Failed', class: 'failed' },
+  warning: { label: 'Warnings', class: 'warning' },
+  completed: { label: 'Complete', class: 'completed' },
+}
 const status = computed(() => {
-  const root = props.root
-  if (!root) return { label: 'No session', class: 'inactive', icon: 'i-lucide-circle' }
-  if (root.subLive) return { label: 'Running', class: 'running', icon: 'i-lucide-radio' }
-  if (root.stoppedByUser) return { label: 'Stopped', class: 'warning', icon: 'i-lucide-circle-stop' }
-  if (root.subErrors && !root.finalText) return { label: 'Failed', class: 'failed', icon: 'i-lucide-circle-x' }
-  if (root.subErrors) return { label: 'Warnings', class: 'warning', icon: 'i-lucide-triangle-alert' }
-  return { label: 'Complete', class: 'completed', icon: 'i-lucide-circle-check' }
+  const state = sessionDisplayState(props.root, { emptyKind: 'completed' })
+  return { ...statusPresentation[state.kind], icon: state.icon }
 })
 </script>
 

@@ -1,8 +1,13 @@
 <script setup lang="ts">
-import type { ProjectRuns, RunNode, RunResponse } from '#shared/types/run'
+import type { RunNode, RunResponse } from '#shared/types/run'
 import { normalizeSessionLabel, normalizeSessionSummary } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
-import { agentState } from '~/utils/session-state'
+import {
+  agentState,
+  agentStateIcon,
+  sessionDisplayState,
+  type SessionDisplayKind,
+} from '~/utils/session-state'
 import type { PrimaryWorkspaceKind } from '~/utils/workspace-state'
 
 const props = withDefaults(defineProps<{
@@ -12,21 +17,18 @@ const props = withDefaults(defineProps<{
   sourceIncomplete?: boolean
   sourceMessage?: string
   selectedKey?: string | null
-  projects?: ProjectRuns[]
 }>(), {
   root: null,
   loading: false,
   sourceIncomplete: false,
   sourceMessage: '',
   selectedKey: null,
-  projects: () => [],
 })
 
 const emit = defineEmits<{
   open: [destination: PrimaryWorkspaceKind]
   ask: []
   select: [key: string]
-  selectAgent: [project: string, key: string]
 }>()
 
 const toast = useToast()
@@ -54,18 +56,24 @@ const stateCounts = computed(() => agentSummaries.value.reduce<Record<string, nu
 }, {}))
 
 const displayState = computed(() => {
-  const root = overviewRoot.value
-  if (!root) return { kind: 'inactive', label: 'No recorded activity', icon: 'i-lucide-circle' }
-  if (root.subLive) return { kind: 'running', label: 'Running', icon: 'i-lucide-radio' }
-  if (root.stoppedByUser) return { kind: 'failed', label: 'Stopped', icon: 'i-lucide-circle-stop' }
-  if ((errorCount.value || root.subErrors) && !root.finalText) {
-    return { kind: 'failed', label: 'Failed', icon: 'i-lucide-circle-x' }
+  const state = sessionDisplayState(overviewRoot.value, {
+    errorCount: errorCount.value,
+    attentionCount: attentionCount.value,
+  })
+  const labels: Record<SessionDisplayKind, string> = {
+    inactive: overviewRoot.value ? 'No activity' : 'No recorded activity',
+    running: 'Running',
+    stopped: 'Stopped',
+    failed: 'Failed',
+    warning: 'Completed with warnings',
+    completed: 'Completed',
   }
-  if (attentionCount.value || root.subErrors) {
-    return { kind: 'warning', label: 'Completed with warnings', icon: 'i-lucide-triangle-alert' }
+  return {
+    // A stop keeps the failed tone this view has always used.
+    kind: state.kind === 'stopped' ? 'failed' : state.kind,
+    label: labels[state.kind],
+    icon: state.icon,
   }
-  if (root.finalText || root.lastTs) return { kind: 'completed', label: 'Completed', icon: 'i-lucide-circle-check' }
-  return { kind: 'inactive', label: 'No activity', icon: 'i-lucide-circle' }
 })
 
 const sessionTitle = computed(() => normalizeSessionLabel(
@@ -119,13 +127,6 @@ const metrics = computed<Array<{ label: string, value: string | number, icon: st
   ]
 })
 
-function stateIcon(state: string): string {
-  if (state === 'running' || state === 'thinking') return 'i-lucide-radio'
-  if (state === 'warning' || state === 'waiting') return 'i-lucide-triangle-alert'
-  if (state === 'failed') return 'i-lucide-circle-x'
-  return 'i-lucide-circle-check'
-}
-
 async function copyTranscriptPath(): Promise<void> {
   if (!props.run?.transcriptPath) return
   try {
@@ -154,7 +155,12 @@ async function copyTranscriptPath(): Promise<void> {
     <template v-else>
       <header class="overview-header">
         <div class="overview-title-block">
-          <span class="overview-status-icon" :class="displayState.kind"><UIcon :name="displayState.icon" /></span>
+          <span
+            class="overview-status-icon"
+            :class="displayState.kind"
+            role="img"
+            :aria-label="displayState.label"
+          ><UIcon :name="displayState.icon" /></span>
           <div>
             <span class="section-eyebrow">Session overview</span>
             <h1 data-workspace-heading tabindex="-1">{{ sessionTitle }}</h1>
@@ -166,10 +172,7 @@ async function copyTranscriptPath(): Promise<void> {
         <span class="overview-status-pill" :class="displayState.kind">{{ displayState.label }}</span>
       </header>
 
-      <ActiveAgentsOverview
-        :projects="projects"
-        @select="(project, key) => emit('selectAgent', project, key)"
-      />
+      <slot name="active-agents" />
 
       <section class="overview-outcome" aria-labelledby="overview-outcome-heading">
         <div>
@@ -222,7 +225,7 @@ async function copyTranscriptPath(): Promise<void> {
             class="overview-agent-row"
             @click="emit('select', node.key)"
           >
-            <span class="agent-state-icon" :class="state.state"><UIcon :name="stateIcon(state.state)" /></span>
+            <span class="agent-state-icon" :class="state.state"><UIcon :name="agentStateIcon(state.state)" /></span>
             <span class="agent-identity">
               <strong>{{ normalizeSessionLabel(node.label, node.key) }}</strong>
               <small>{{ index === 0 ? 'Main session' : node.agentType || 'Subagent' }}</small>

@@ -151,6 +151,7 @@ export const CopilotWorkspaceMetadataSchema = Schema.Struct({
   folder: Schema.optionalKey(Schema.String),
   workspace: Schema.optionalKey(Schema.String),
 })
+export type CopilotWorkspaceMetadata = typeof CopilotWorkspaceMetadataSchema.Type
 
 export const CopilotResponseEnvelopeSchema = Schema.Struct({
   kind: Schema.optionalKey(Schema.String),
@@ -240,7 +241,6 @@ const decodeTool = Schema.decodeUnknownResult(CopilotToolPartSchema, PRESERVE)
 const decodeTextEdit = Schema.decodeUnknownResult(CopilotTextEditPartSchema, PRESERVE)
 
 export const parseCopilotSnapshot = parseOrNull(CopilotSessionSnapshotSchema, PRESERVE)
-export const parseCopilotWorkspace = parseOrNull(CopilotWorkspaceMetadataSchema, PRESERVE)
 
 /**
  * `workspace.json` is a JSON file on disk. Composing with `fromJsonString`

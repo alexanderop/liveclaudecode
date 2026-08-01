@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import security from '@comark/nuxt/plugins/security'
-import type {
-  ChatAction,
-  ChatAgentId,
-  ChatEventsResponse,
-  ChatStatus,
-} from '#shared/types/chat'
+import type { ChatAgentId } from '#shared/types/chat'
 import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
 
 const props = defineProps<{
@@ -48,16 +43,12 @@ const {
   selectedAgent,
   draft,
 } = toRefs(sessionState)
-const actionPending = ref(false)
-const pollPending = ref(false)
-const requestError = ref('')
-const pollLoop = useIntervalFn(() => void poll(), 800, { immediate: false })
-let pollController: AbortController | undefined
-let pollGeneration = 0
-let actionController: AbortController | undefined
-let actionGeneration = 0
-let active = false
-let disposed = false
+const { actionPending, requestError, ...transport } = useChatTransport({
+  project: () => props.project,
+  sessionKey: () => props.sessionKey,
+  hours: () => props.hours,
+  state: { events, since, revision, status, selectedAgent },
+})
 
 const busy = computed(() => status.value === 'starting' || status.value === 'busy')
 const canSend = computed(() => Boolean(
@@ -80,8 +71,11 @@ const rows = computed<ChatRow[]>(() => {
     if (event.kind === 'assistant-chunk' || event.kind === 'thought-chunk') {
       const kind = event.kind === 'assistant-chunk' ? 'assistant' : 'thought'
       const previous = output.at(-1)
-      if (previous?.kind === kind && previous.agent === event.agent) previous.text += event.text
-      else output.push({ kind, agent: event.agent, text: event.text })
+      if (previous?.kind === kind && previous.agent === event.agent) {
+        output[output.length - 1] = { ...previous, text: previous.text + event.text }
+      } else {
+        output.push({ kind, agent: event.agent, text: event.text })
+      }
       continue
     }
     if (event.kind === 'user') {
@@ -93,11 +87,15 @@ const rows = computed<ChatRow[]>(() => {
       continue
     }
     if (event.kind === 'tool') {
-      const previous = output.findLast(row => row.kind === 'tool' && row.toolCallId === event.toolCallId)
+      const index = output.findLastIndex(row => row.kind === 'tool' && row.toolCallId === event.toolCallId)
+      const previous = output[index]
       if (previous?.kind === 'tool') {
-        previous.title = event.title || previous.title
-        previous.toolKind = event.toolKind || previous.toolKind
-        previous.status = event.status || previous.status
+        output[index] = {
+          ...previous,
+          title: event.title || previous.title,
+          toolKind: event.toolKind || previous.toolKind,
+          status: event.status || previous.status,
+        }
       } else {
         output.push({ ...event })
       }
@@ -108,146 +106,34 @@ const rows = computed<ChatRow[]>(() => {
   return output
 })
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'The local chat agent is unavailable.'
-}
-
-async function poll(): Promise<void> {
-  const project = props.project
-  const key = props.sessionKey
-  const requestedHours = props.hours
-  if (!project || !key || pollPending.value) return
-  const generation = pollGeneration
-  const controller = new AbortController()
-  pollController = controller
-  pollPending.value = true
-  try {
-    const response = await $fetch<ChatEventsResponse>(
-      `/api/chat?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&since=${since.value}&revision=${revision.value}&hours=${requestedHours}`,
-      { signal: controller.signal },
-    )
-    if (
-      controller.signal.aborted
-      || generation !== pollGeneration
-      || props.project !== project
-      || props.sessionKey !== key
-      || props.hours !== requestedHours
-    ) return
-    since.value = response.next
-    revision.value = response.revision
-    status.value = response.status
-    if (response.agent) selectedAgent.value = response.agent
-    if (response.reset) events.value = [...response.events]
-    else events.value.push(...response.events)
-    requestError.value = ''
-  } catch (error) {
-    if (controller.signal.aborted || generation !== pollGeneration) return
-    requestError.value = errorMessage(error)
-  } finally {
-    if (pollController === controller) {
-      pollController = undefined
-      pollPending.value = false
-    }
-  }
-}
-
-async function act(action: ChatAction): Promise<boolean> {
-  const generation = actionGeneration
-  const controller = new AbortController()
-  actionController = controller
-  actionPending.value = true
-  requestError.value = ''
-  try {
-    const response = await $fetch<{ status: ChatStatus }>(`/api/chat?hours=${props.hours}`, {
-      method: 'POST',
-      body: action,
-      signal: controller.signal,
-    })
-    if (controller.signal.aborted || generation !== actionGeneration || disposed) return false
-    status.value = response.status
-    if (active) await poll()
-    return true
-  } catch (error) {
-    if (controller.signal.aborted || generation !== actionGeneration || disposed) return false
-    requestError.value = errorMessage(error)
-    return false
-  } finally {
-    if (actionController === controller) {
-      actionController = undefined
-      actionPending.value = false
-    }
-  }
+function rowKey(row: ChatRow, index: number): string {
+  return row.kind === 'tool' ? `tool-${row.toolCallId}` : `${row.kind}-${index}`
 }
 
 async function send(): Promise<void> {
   const text = draft.value.trim()
   if (!canSend.value || !text) return
-  const accepted = await act({
-    action: 'send',
-    project: props.project,
-    key: props.sessionKey,
-    agent: selectedAgent.value,
-    text,
-  })
-  if (accepted) draft.value = ''
+  if (await transport.send(text)) draft.value = ''
 }
 
 async function cancel(): Promise<void> {
   if (!busy.value || actionPending.value) return
-  await act({ action: 'cancel', project: props.project, key: props.sessionKey })
+  await transport.cancel()
 }
 
 async function reset(): Promise<void> {
   if (actionPending.value) return
-  const accepted = await act({ action: 'reset', project: props.project, key: props.sessionKey })
-  if (!accepted) return
-  events.value = []
-  since.value = 0
-  revision.value = 0
-  status.value = 'idle'
+  await transport.reset()
 }
 
-watch(
-  () => `${props.project}\0${props.sessionKey}\0${props.hours}`,
-  () => {
-    events.value = []
-    since.value = 0
-    revision.value = 0
-    status.value = 'idle'
-    requestError.value = ''
-    void poll()
-  },
-)
-
-function startPolling(): void {
-  active = true
+function activate(): void {
   touchSessionState()
-  void poll()
-  pollLoop.resume()
+  transport.resume()
 }
 
-function stopPolling(): void {
-  active = false
-  pollLoop.pause()
-  pollGeneration += 1
-  pollController?.abort()
-  pollController = undefined
-  pollPending.value = false
-}
-
-function dispose(): void {
-  disposed = true
-  stopPolling()
-  actionGeneration += 1
-  actionController?.abort()
-  actionController = undefined
-  actionPending.value = false
-}
-
-onMounted(startPolling)
-onActivated(startPolling)
-onDeactivated(stopPolling)
-onUnmounted(dispose)
+onMounted(activate)
+onActivated(activate)
+onDeactivated(() => transport.pause())
 </script>
 
 <template>
@@ -296,7 +182,7 @@ onUnmounted(dispose)
         variant="naked"
       />
 
-      <template v-for="(row, index) in rows" :key="`${row.kind}-${index}`">
+      <template v-for="(row, index) in rows" :key="rowKey(row, index)">
         <UChatMessage
           v-if="row.kind === 'user'"
           class="chat-message user"

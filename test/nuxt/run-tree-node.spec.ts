@@ -1,71 +1,33 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { describe, expect, it } from 'vitest'
+import type { VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 import RunTreeNode from '~/components/RunTreeNode.vue'
-import type { RunNode } from '#shared/types/run'
+import { runNode } from '../fixtures/runs'
 
-function node(overrides: Partial<RunNode> = {}): RunNode {
-  return {
-    source: 'claude',
-    sourceDetail: 'Claude Code',
-    key: 'session',
-    kind: 'session',
-    sid: 'session',
-    label: 'Ship the dashboard',
-    agentType: '',
-    toolUseId: null,
-    model: '',
-    spawnDepth: null,
-    parentAgentId: null,
-    stoppedByUser: false,
-    spawnState: '',
-    children: [],
-    records: 1,
-    tools: 2,
-    toolCounts: { Bash: 2 },
-    reads: 0,
-    errors: 0,
-    tokensOut: 10,
-    firstTs: '2026-07-25T18:00:00.000Z',
-    lastTs: '2026-07-25T18:00:02.000Z',
-    mtime: 0,
-    ago: 0,
-    live: false,
-    size: 10,
-    todos: null,
-    skills: [],
-    milestones: [],
-    current: null,
-    files: [],
-    commands: [],
-    finalText: '',
-    subAgents: 0,
-    subRunning: 0,
-    subErrors: 0,
-    subTools: 2,
-    subFiles: {},
-    subLast: '2026-07-25T18:00:02.000Z',
-    subLive: false,
-    ...overrides,
-  }
-}
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+})
 
 describe('RunTreeNode', () => {
   it('renders a compact title and emits keyboard-accessible button clicks', async () => {
-    const component = await mountSuspended(RunTreeNode, {
-      props: { node: node(), depth: 0, selectedKey: 'session' },
+    const wrapper = component = await mountSuspended(RunTreeNode, {
+      props: { node: runNode(), depth: 0, selectedKey: 'session' },
     })
-    expect(component.text()).toContain('Ship the dashboard')
-    expect(component.get('.tree-meta').text()).toContain('Claude')
-    expect(component.get('button').classes()).toContain('selected')
-    expect(component.get('button').attributes('aria-selected')).toBe('true')
-    await component.get('button').trigger('click')
-    expect(component.emitted('select')).toEqual([['session']])
+    expect(wrapper.text()).toContain('Ship the dashboard')
+    expect(wrapper.get('.tree-meta').text()).toContain('Claude')
+    expect(wrapper.get('button').classes()).toContain('selected')
+    expect(wrapper.get('button').attributes('aria-selected')).toBe('true')
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['session']])
   })
 
   it('identifies Codex sessions and includes scannable provider metadata', async () => {
-    const component = await mountSuspended(RunTreeNode, {
+    const wrapper = component = await mountSuspended(RunTreeNode, {
       props: {
-        node: node({
+        node: runNode({
           source: 'codex',
           sourceDetail: 'Codex Desktop',
           key: 'codex:session',
@@ -75,15 +37,15 @@ describe('RunTreeNode', () => {
       },
     })
 
-    expect(component.get('.tree-status').classes()).toContain('codex')
-    expect(component.get('.tree-status').attributes('title')).toContain('Codex Desktop')
-    expect(component.get('.tree-meta').text()).toContain('Codex')
+    expect(wrapper.get('.tree-status').classes()).toContain('codex')
+    expect(wrapper.get('.tree-status').attributes('title')).toContain('Codex Desktop')
+    expect(wrapper.get('.tree-meta').text()).toContain('Codex')
   })
 
   it('identifies Copilot sessions and includes scannable provider metadata', async () => {
-    const component = await mountSuspended(RunTreeNode, {
+    const wrapper = component = await mountSuspended(RunTreeNode, {
       props: {
-        node: node({
+        node: runNode({
           source: 'copilot',
           sourceDetail: 'VS Code Insiders · agent',
           key: 'copilot:session',
@@ -93,15 +55,15 @@ describe('RunTreeNode', () => {
       },
     })
 
-    expect(component.get('.tree-status').classes()).toContain('copilot')
-    expect(component.get('.tree-status').attributes('title')).toContain('VS Code Insiders · agent')
-    expect(component.get('.tree-meta').text()).toContain('Copilot')
+    expect(wrapper.get('.tree-status').classes()).toContain('copilot')
+    expect(wrapper.get('.tree-status').attributes('title')).toContain('VS Code Insiders · agent')
+    expect(wrapper.get('.tree-meta').text()).toContain('Copilot')
   })
 
   it('shows live worker status without exposing the current command', async () => {
-    const component = await mountSuspended(RunTreeNode, {
+    const wrapper = component = await mountSuspended(RunTreeNode, {
       props: {
-        node: node({
+        node: runNode({
           kind: 'subagent',
           agentType: 'implementation-worker',
           spawnState: 'running',
@@ -111,37 +73,40 @@ describe('RunTreeNode', () => {
         selectedKey: null,
       },
     })
-    expect(component.text()).toContain('running')
-    expect(component.get('.tree-status').attributes('title')).toContain('implementation-worker')
-    expect(component.text()).not.toContain('Bash pnpm test')
+    // The status badge carries only the state; the current command stays out
+    // of the row entirely (title, metadata, and status are the only copy).
+    expect(wrapper.get('.tree-end').text()).toBe('running')
+    expect(wrapper.get('.tree-title').text()).toBe('Ship the dashboard')
+    expect(wrapper.get('.tree-meta').text()).not.toContain('pnpm test')
+    expect(wrapper.get('.tree-status').attributes('title')).toContain('implementation-worker')
   })
 
   it('toggles nested agents when a parent row is clicked', async () => {
-    const child = node({
+    const child = runNode({
       key: 'child',
       kind: 'subagent',
       label: 'Nested worker',
       agentType: 'implementation-worker',
     })
-    const component = await mountSuspended(RunTreeNode, {
+    const wrapper = component = await mountSuspended(RunTreeNode, {
       props: {
-        node: node({ children: [child], subAgents: 1 }),
+        node: runNode({ children: [child], subAgents: 1 }),
         depth: 0,
         selectedKey: null,
       },
     })
-    const parent = component.findAll('button.tree-node')[0]!
+    const parent = wrapper.findAll('button.tree-node')[0]!
 
     expect(parent.attributes('aria-expanded')).toBe('true')
-    expect(component.get('.tree-children').isVisible()).toBe(true)
+    expect(wrapper.get('.tree-children').isVisible()).toBe(true)
 
     await parent.trigger('click')
-    expect(component.emitted('select')).toEqual([['session']])
+    expect(wrapper.emitted('select')).toEqual([['session']])
     expect(parent.attributes('aria-expanded')).toBe('false')
-    expect(component.find('.tree-children').exists()).toBe(false)
+    expect(wrapper.find('.tree-children').exists()).toBe(false)
 
     await parent.trigger('click')
     expect(parent.attributes('aria-expanded')).toBe('true')
-    expect(component.get('.tree-children').attributes('style')).toBeUndefined()
+    expect(wrapper.get('.tree-children').attributes('style')).toBeUndefined()
   })
 })

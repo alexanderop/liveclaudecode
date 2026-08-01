@@ -1,4 +1,5 @@
 import type { DiagnosticIncident, RunNode } from '#shared/types/run'
+import { parseTimestamp } from './format'
 
 export type AgentDisplayState =
   | 'running'
@@ -14,6 +15,19 @@ export interface AgentStateSummary {
   label: string
   detail: string
   issueCount: number
+}
+
+/** Icon shown next to an agent's display state. */
+export function agentStateIcon(state: AgentDisplayState): string {
+  return {
+    running: 'i-lucide-hammer',
+    thinking: 'i-lucide-brain',
+    waiting: 'i-lucide-clock-3',
+    completed: 'i-lucide-circle-check',
+    warning: 'i-lucide-triangle-alert',
+    failed: 'i-lucide-circle-x',
+    inactive: 'i-lucide-circle-check',
+  }[state]
 }
 
 export function agentDisplayStateLabel(state: AgentDisplayState): string {
@@ -96,8 +110,72 @@ export function agentState(
 }
 
 export function lastActivityTime(node: RunNode): number | null {
-  const value = node.current?.ts || node.lastTs || node.firstTs
-  if (!value) return null
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
+  return parseTimestamp(node.current?.ts || node.lastTs || node.firstTs)
+}
+
+export type SessionDisplayKind =
+  | 'inactive'
+  | 'running'
+  | 'stopped'
+  | 'failed'
+  | 'warning'
+  | 'completed'
+
+export interface SessionDisplayState {
+  kind: SessionDisplayKind
+  icon: string
+}
+
+/** The root fields the session status ladder depends on. */
+export type SessionDisplayRoot = Pick<
+  RunNode,
+  'subLive' | 'stoppedByUser' | 'subErrors' | 'finalText' | 'lastTs'
+>
+
+export interface SessionDisplayStateOptions {
+  /**
+   * Diagnostic error incidents recorded for the session; folded into the
+   * failed check alongside the root's own error count.
+   *
+   * @default 0
+   */
+  errorCount?: number
+  /**
+   * Warning or error incidents that need review; folded into the warning
+   * check alongside the root's own error count.
+   *
+   * @default 0
+   */
+  attentionCount?: number
+  /**
+   * Kind reported for a root that recorded neither a final result nor any
+   * activity.
+   *
+   * @default 'inactive'
+   */
+  emptyKind?: SessionDisplayKind
+}
+
+/**
+ * Shared running/stopped/failed/warning/completed ladder for a session root.
+ * Components map the returned kind to their own labels and tone classes.
+ */
+export function sessionDisplayState(
+  root: SessionDisplayRoot | null | undefined,
+  options: SessionDisplayStateOptions = {},
+): SessionDisplayState {
+  const { errorCount = 0, attentionCount = 0, emptyKind = 'inactive' } = options
+  if (!root) return { kind: 'inactive', icon: 'i-lucide-circle' }
+  if (root.subLive) return { kind: 'running', icon: 'i-lucide-radio' }
+  if (root.stoppedByUser) return { kind: 'stopped', icon: 'i-lucide-circle-stop' }
+  if ((errorCount || root.subErrors) && !root.finalText) {
+    return { kind: 'failed', icon: 'i-lucide-circle-x' }
+  }
+  if (attentionCount || root.subErrors) {
+    return { kind: 'warning', icon: 'i-lucide-triangle-alert' }
+  }
+  if (root.finalText || root.lastTs) return { kind: 'completed', icon: 'i-lucide-circle-check' }
+  return emptyKind === 'completed'
+    ? { kind: 'completed', icon: 'i-lucide-circle-check' }
+    : { kind: emptyKind, icon: 'i-lucide-circle' }
 }

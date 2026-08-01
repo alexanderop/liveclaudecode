@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { RunNode, RunResponse } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { flattenRunTree } from '~/utils/execution-analysis'
+import { formatRelativeAge } from '~/utils/format'
+import { buildParentIndex, flattenRunTree } from '~/utils/execution-analysis'
 import { agentState, lastActivityTime, type AgentDisplayState } from '~/utils/session-state'
 
 const props = defineProps<{
@@ -24,8 +25,7 @@ const stateOrder: Record<AgentDisplayState, number> = {
 
 const agents = computed(() => {
   const nodes = flattenRunTree(props.root)
-  const parentByKey = new Map<string, RunNode>()
-  nodes.forEach(node => node.children.forEach(child => parentByKey.set(child.key, node)))
+  const parentByKey = buildParentIndex(props.root)
   return nodes.map((node, index) => {
     const status = agentState(node, props.run?.diagnostics.incidents)
     const timestamp = lastActivityTime(node)
@@ -51,16 +51,6 @@ const activeCount = computed(() => counts.value.running + counts.value.thinking)
 const completedCount = computed(() => counts.value.completed + counts.value.warning)
 const issueCount = computed(() => agents.value.reduce((total, agent) => total + agent.status.issueCount, 0))
 
-function relativeAge(milliseconds: number | null): string {
-  if (milliseconds === null) return 'No event'
-  const seconds = Math.floor(milliseconds / 1_000)
-  if (seconds < 5) return 'Now'
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  return `${Math.floor(minutes / 60)}h ago`
-}
-
 </script>
 
 <template>
@@ -81,7 +71,11 @@ function relativeAge(milliseconds: number | null): string {
       </section>
 
       <section class="now-health" :class="{ warning: issueCount, failed: counts.failed }">
-        <span class="now-health-icon">
+        <span
+          class="now-health-icon"
+          role="img"
+          :aria-label="counts.failed ? 'Session failed' : activeCount ? 'Session active' : issueCount ? 'Session needs attention' : 'Session healthy'"
+        >
           <UIcon :name="counts.failed ? 'i-lucide-circle-x' : activeCount ? 'i-lucide-radio' : issueCount ? 'i-lucide-circle-alert' : 'i-lucide-circle-check'" />
         </span>
         <span>
@@ -125,7 +119,7 @@ function relativeAge(milliseconds: number | null): string {
             <strong>{{ agent.node.current?.tool || (agent.node.finalText ? 'Result returned' : agent.status.label) }}</strong>
             <small>{{ agent.node.current?.summary || agent.status.detail }}</small>
           </span>
-          <time>{{ relativeAge(agent.idleMs) }}</time>
+          <time>{{ formatRelativeAge(agent.idleMs) }}</time>
           <span class="now-state" :class="agent.status.state">
             <i />{{ agent.status.label }}
             <b v-if="agent.status.issueCount">{{ agent.status.issueCount }}</b>

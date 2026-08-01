@@ -1,4 +1,4 @@
-import { Clock, Effect, Predicate, Result } from 'effect'
+import { Effect, Predicate, Result } from 'effect'
 import {
   parseCodexPlanInput,
   parseCodexRecord,
@@ -42,8 +42,10 @@ import {
   pushIncident,
   recordFileChange,
   recordMilestones,
+  statsNow,
   toolStatsFromCounts,
 } from './transcript-scan-core'
+import { emptyEnvironment, emptyUsage } from './run-shared'
 
 interface CodexToolRecord {
   name: string
@@ -158,13 +160,7 @@ export class CodexTranscriptScan {
   readonly incidents: DiagnosticIncident[] = []
   readonly compactions: ScanDiagnostics['compactions'] = []
   readonly metadata: CodexSessionMetadata = { ...EMPTY_METADATA }
-  readonly environment: SessionEnvironment = {
-    cwd: '',
-    gitBranch: '',
-    version: '',
-    entrypoint: '',
-    permissionMode: '',
-  }
+  readonly environment: SessionEnvironment = emptyEnvironment()
   todos: Todo[] | null = null
   firstPrompt = ''
   finalText = ''
@@ -172,7 +168,7 @@ export class CodexTranscriptScan {
   effort = ''
   firstTs: Timestamp = null
   lastTs: Timestamp = null
-  usage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
+  usage: Usage = emptyUsage()
   taskActive = false
   mtime = 0
   size = 0
@@ -217,7 +213,7 @@ export class CodexTranscriptScan {
     if (record.kind === 'session_meta') this.ingestSessionMeta(record.data)
     else if (record.kind === 'turn_context') this.ingestTurnContext(record.data)
     else if (record.kind === 'response_item') this.ingestResponseItem(record.data, line, timestamp)
-    else if (record.kind === 'event_msg' && record.known) this.ingestEvent(record.data as CodexEventPayload, line, timestamp)
+    else if (record.kind === 'event_msg' && record.known) this.ingestEvent(record.data, line, timestamp)
   }
 
   private ingestSessionMeta(data: CodexSessionMetaPayload): void {
@@ -490,7 +486,7 @@ export class CodexTranscriptScan {
   }
 
   get stats(): Effect.Effect<TranscriptStats> {
-    return Clock.currentTimeMillis.pipe(Effect.map(millis => this.statsAt(millis / 1_000)))
+    return statsNow(this)
   }
 
   statsAt(now: number): TranscriptStats {

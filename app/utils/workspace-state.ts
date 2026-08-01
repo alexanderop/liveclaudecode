@@ -110,6 +110,20 @@ export function closeContext(state: WorkspaceState): WorkspaceState {
   }
 }
 
+export function focusIncident(
+  state: WorkspaceState,
+  incidentId: string | undefined,
+): WorkspaceState {
+  return { ...state, investigation: { ...state.investigation, incidentId } }
+}
+
+export function focusFile(
+  state: WorkspaceState,
+  filePath: string | undefined,
+): WorkspaceState {
+  return { ...state, investigation: { ...state.investigation, filePath } }
+}
+
 export function switchSelectedSession(state: WorkspaceState): WorkspaceState {
   return {
     ...state,

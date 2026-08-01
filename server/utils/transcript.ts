@@ -1,10 +1,10 @@
-import { Clock, Effect, Predicate } from 'effect'
+import { Effect, Predicate } from 'effect'
 import { consumeNewRecords } from './incremental-jsonl'
 import {
   clip,
   commandOk,
-  findMilestones,
   resultText,
+  safeStringify,
   shortPath,
   toolSummary,
 } from './transcript-content'
@@ -14,16 +14,22 @@ import {
   pushIncident,
   recordFileChange,
   recordMilestones,
+  statsNow,
   toolStatsFromCounts,
 } from './transcript-scan-core'
+import { emptyEnvironment } from './run-shared'
 import {
   parseClaudeAssistantBlock,
+  parseClaudeAttachment,
   parseClaudeRecord,
+  parseClaudeToolUseResult,
   parseClaudeUserBlock,
   type ClaudeAssistantRecord,
   type ClaudeSessionStateRecord,
   type ClaudeSystemRecord,
+  type ClaudeToolStats,
   type ClaudeToolUseBlock,
+  type ClaudeToolUseResult,
   type ClaudeUserRecord,
   type ParsedClaudeRecord,
 } from '#shared/schemas/claude'
@@ -79,16 +85,15 @@ function asNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
-function toolStats(value: unknown): ToolStats {
-  const stats = Predicate.isObject(value) ? value : {}
+function toolStatsOf(stats: ClaudeToolStats | undefined): ToolStats {
   return {
-    reads: asNumber(stats.readCount),
-    searches: asNumber(stats.searchCount),
-    commands: asNumber(stats.bashCount),
-    edits: asNumber(stats.editFileCount),
-    linesAdded: asNumber(stats.linesAdded),
-    linesRemoved: asNumber(stats.linesRemoved),
-    other: asNumber(stats.otherToolCount),
+    reads: stats?.readCount ?? 0,
+    searches: stats?.searchCount ?? 0,
+    commands: stats?.bashCount ?? 0,
+    edits: stats?.editFileCount ?? 0,
+    linesAdded: stats?.linesAdded ?? 0,
+    linesRemoved: stats?.linesRemoved ?? 0,
+    other: stats?.otherToolCount ?? 0,
   }
 }
 
@@ -121,13 +126,7 @@ export class TranscriptScan {
   readonly changeDetails: ChangeDetail[] = []
   readonly gitEvents: GitEvent[] = []
   readonly counts: Record<string, number> = {}
-  readonly environment: SessionEnvironment = {
-    cwd: '',
-    gitBranch: '',
-    version: '',
-    entrypoint: '',
-    permissionMode: '',
-  }
+  readonly environment: SessionEnvironment = emptyEnvironment()
   private readonly causalChildren = new Map<string, number>()
   private causalRecords = 0
   private causalRecordsWithUuid = 0
@@ -421,12 +420,7 @@ export class TranscriptScan {
       this.commandByToolId.set(id, run)
     }
 
-    let inputText = ''
-    try {
-      inputText = clip(JSON.stringify(input, null, 2))[0]
-    } catch {
-      inputText = ''
-    }
+    const inputText = clip(safeStringify(input, '', 2))[0]
     return {
       role: 'assistant',
       kind: 'tool_use',
@@ -473,6 +467,9 @@ export class TranscriptScan {
       : rawContent
         ? [{ type: 'text', text: rawContent }]
         : []
+    // Plain string results fail this decode and yield null; only the
+    // structured metadata payloads the dashboard consumes decode.
+    const toolUseResult = parseClaudeToolUseResult(record.toolUseResult)
 
     for (const rawBlock of blocks) {
       const block = parseClaudeUserBlock(rawBlock)
@@ -481,11 +478,9 @@ export class TranscriptScan {
         this.turnComplete = false
         const id = block.data.tool_use_id
         this.openTools.delete(id)
-        if (
-          this.spawnIds.has(id)
-          && Predicate.isObject(record.toolUseResult)
-          && record.toolUseResult.isAsync === true
-        ) this.asyncSpawns.add(id)
+        if (this.spawnIds.has(id) && toolUseResult?.isAsync === true) {
+          this.asyncSpawns.add(id)
+        }
         const text = resultText(block.data.content)
         const isError = Boolean(block.data.is_error) || text.trimStart().toLowerCase().startsWith('error')
         if (isError) this.errors += 1
@@ -505,7 +500,7 @@ export class TranscriptScan {
             toolUseId: id,
           })
         }
-        this.ingestToolMetadata(record.toolUseResult, source, id, line, ts)
+        this.ingestToolMetadata(toolUseResult, source, id, line, ts)
         this.events.push({
           role: 'tool',
           kind: 'tool_result',
@@ -547,20 +542,20 @@ export class TranscriptScan {
   }
 
   private ingestToolMetadata(
-    value: unknown,
+    result: ClaudeToolUseResult | null,
     source: ToolRecord | undefined,
     toolUseId: string,
     line: number,
     ts: Timestamp,
   ): void {
-    if (!Predicate.isObject(value) || !source) return
+    if (!result || !source) return
 
-    if (typeof value.timedOutAfterMs === 'number') {
+    if (result.timedOutAfterMs !== undefined) {
       this.addIncident({
         severity: 'error',
         category: 'timeout',
         title: `${source.name} timed out`,
-        detail: `Timed out after ${Math.round(value.timedOutAfterMs / 1_000)} seconds`,
+        detail: `Timed out after ${Math.round(result.timedOutAfterMs / 1_000)} seconds`,
         ts,
         line,
         tool: source.name,
@@ -568,20 +563,16 @@ export class TranscriptScan {
       })
     }
 
-    if ((EDIT_TOOLS.has(source.name)) && (value.structuredPatch || value.filePath)) {
+    if (EDIT_TOOLS.has(source.name) && (result.structuredPatch !== undefined || result.filePath)) {
       let linesAdded = 0
       let linesRemoved = 0
-      if (Array.isArray(value.structuredPatch)) {
-        for (const hunk of value.structuredPatch) {
-          if (!Predicate.isObject(hunk) || !Array.isArray(hunk.lines)) continue
-          for (const patchLine of hunk.lines) {
-            if (typeof patchLine !== 'string') continue
-            if (patchLine.startsWith('+') && !patchLine.startsWith('+++')) linesAdded += 1
-            if (patchLine.startsWith('-') && !patchLine.startsWith('---')) linesRemoved += 1
-          }
+      for (const hunk of result.structuredPatch ?? []) {
+        for (const patchLine of hunk.lines ?? []) {
+          if (patchLine.startsWith('+') && !patchLine.startsWith('+++')) linesAdded += 1
+          if (patchLine.startsWith('-') && !patchLine.startsWith('---')) linesRemoved += 1
         }
       }
-      const path = asString(value.filePath)
+      const path = result.filePath
         || asString(source.input.file_path)
         || asString(source.input.notebook_path)
         || asString(source.input.path)
@@ -593,11 +584,11 @@ export class TranscriptScan {
           path: shortPath(path, this.cwd),
           linesAdded,
           linesRemoved,
-          userModified: value.userModified === true,
-          staleRecovered: value.staleRecovered === true,
+          userModified: result.userModified === true,
+          staleRecovered: result.staleRecovered === true,
         })
       }
-      if (value.staleRecovered === true) {
+      if (result.staleRecovered === true) {
         this.addIncident({
           severity: 'warning',
           category: 'tool',
@@ -615,90 +606,86 @@ export class TranscriptScan {
       this.outcomes.push({
         toolUseId,
         ts,
-        status: asString(value.status),
-        model: asString(value.resolvedModel),
-        durationMs: asNumber(value.totalDurationMs),
-        totalTokens: asNumber(value.totalTokens),
-        totalToolUseCount: asNumber(value.totalToolUseCount),
-        stats: toolStats(value.toolStats),
+        status: result.status ?? '',
+        model: result.resolvedModel ?? '',
+        durationMs: result.totalDurationMs ?? 0,
+        totalTokens: result.totalTokens ?? 0,
+        totalToolUseCount: result.totalToolUseCount ?? 0,
+        stats: toolStatsOf(result.toolStats),
       })
     }
 
-    if (Predicate.isObject(value.gitOperation)) {
-      const operation = value.gitOperation
-      const commit = Predicate.isObject(operation.commit) ? operation.commit : null
-      const push = Predicate.isObject(operation.push) ? operation.push : null
-      const pr = Predicate.isObject(operation.pr) ? operation.pr : null
-      const branch = Predicate.isObject(operation.branch) ? operation.branch : null
-      if (commit) {
+    const operation = result.gitOperation
+    if (operation) {
+      if (operation.commit) {
         this.gitEvents.push({
           toolUseId,
           ts,
           kind: 'commit',
-          label: `Commit ${asString(commit.sha).slice(0, 10) || 'created'}`,
+          label: `Commit ${(operation.commit.sha ?? '').slice(0, 10) || 'created'}`,
         })
       }
-      if (push) {
+      if (operation.push) {
         this.gitEvents.push({
           toolUseId,
           ts,
           kind: 'push',
-          label: `Pushed ${asString(push.branch) || 'branch'}`,
+          label: `Pushed ${operation.push.branch || 'branch'}`,
         })
       }
-      if (pr) {
+      if (operation.pr) {
         this.gitEvents.push({
           toolUseId,
           ts,
           kind: 'pr',
-          label: `PR #${asNumber(pr.number)} ${asString(pr.action)}`.trim(),
-          ...(asString(pr.url) ? { url: asString(pr.url) } : {}),
+          label: `PR #${operation.pr.number ?? 0} ${operation.pr.action ?? ''}`.trim(),
+          ...(operation.pr.url ? { url: operation.pr.url } : {}),
         })
       }
-      if (branch) {
+      if (operation.branch) {
         this.gitEvents.push({
           toolUseId,
           ts,
           kind: 'branch',
-          label: `${asString(branch.action) || 'Updated'} ${asString(branch.ref) || 'branch'}`,
+          label: `${operation.branch.action || 'Updated'} ${operation.branch.ref || 'branch'}`,
         })
       }
     }
   }
 
   private ingestAttachment(value: unknown, line: number, ts: Timestamp): void {
-    if (!Predicate.isObject(value)) return
-    const type = asString(value.type)
-    if (type === 'hook_non_blocking_error' || type === 'hook_cancelled') {
-      const cancelled = type === 'hook_cancelled'
+    const attachment = parseClaudeAttachment(value)
+    if (!attachment) return
+    if (attachment.type === 'hook_non_blocking_error' || attachment.type === 'hook_cancelled') {
+      const cancelled = attachment.type === 'hook_cancelled'
       this.addIncident({
         severity: cancelled ? 'warning' : 'error',
         category: 'hook',
         title: cancelled ? 'Hook was cancelled' : 'Hook failed',
-        detail: [asString(value.hookEvent), asString(value.hookName), compactText(value.stderr, 140)]
+        detail: [attachment.hookEvent ?? '', attachment.hookName ?? '', compactText(attachment.stderr, 140)]
           .filter(Boolean)
           .join(' · '),
         ts,
         line,
-        code: value.exitCode === undefined ? undefined : String(value.exitCode),
-        toolUseId: asString(value.toolUseID) || undefined,
+        code: attachment.exitCode === undefined ? undefined : String(attachment.exitCode),
+        toolUseId: attachment.toolUseID || undefined,
       })
-    } else if (type === 'read_truncation_notice') {
+    } else if (attachment.type === 'read_truncation_notice') {
       this.addIncident({
         severity: 'warning',
         category: 'truncation',
         title: 'File read was truncated',
-        detail: compactText(value.banner) || 'Claude did not receive the complete file content.',
+        detail: compactText(attachment.banner) || 'Claude did not receive the complete file content.',
         ts,
         line,
-        toolUseId: asString(value.toolUseID) || undefined,
+        toolUseId: attachment.toolUseID || undefined,
       })
-    } else if (type === 'goal_status' && value.met === false) {
+    } else if (attachment.type === 'goal_status' && attachment.met === false) {
       this.addIncident({
         severity: 'warning',
         category: 'workflow',
         title: 'Goal condition was not met',
-        detail: compactText(value.reason) || 'The workflow stopped before satisfying its goal.',
+        detail: compactText(attachment.reason) || 'The workflow stopped before satisfying its goal.',
         ts,
         line,
       })
@@ -750,9 +737,7 @@ export class TranscriptScan {
    * `TestClock` instead of depending on wall-clock time.
    */
   get stats(): Effect.Effect<TranscriptStats> {
-    return Clock.currentTimeMillis.pipe(
-      Effect.map(millis => this.statsAt(millis / 1_000)),
-    )
+    return statsNow(this)
   }
 
   statsAt(now: number): TranscriptStats {

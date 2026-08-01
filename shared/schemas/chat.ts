@@ -1,4 +1,5 @@
-import { Result, Schema, SchemaTransformation } from 'effect'
+import { Schema, SchemaTransformation } from 'effect'
+import type { Result } from 'effect'
 
 export const ChatAgentIdSchema = Schema.Literals(['claude', 'codex', 'copilot'])
 

@@ -3,6 +3,8 @@ import type { RunNode, RunResponse, TranscriptEvent } from '#shared/types/run'
 import type { FeedDensity } from '~/composables/useLiveRuns'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
+import { mergeAgentFileChanges } from '~/utils/file-changes'
+import { parseTimestamp } from '~/utils/format'
 import { agentState } from '~/utils/session-state'
 
 const props = defineProps<{
@@ -57,18 +59,8 @@ const selectedOutcome = computed(() => props.run?.diagnostics.outcomes.find(outc
 const selectedIncidents = computed(() => (props.run?.diagnostics.incidents || []).filter(incident => incident.key === props.selectedKey))
 const agentIndex = computed(() => new Map(flattenRunTree(props.root).map(node => [node.key, node])))
 const selectedChanges = computed(() => (props.run?.diagnostics.changes || []).filter(change => change.key === props.selectedKey))
-const selectedFiles = computed(() => {
-  const files = new Map<string, { path: string, ops: number, added: number, removed: number }>()
-  for (const file of props.selected?.files || []) files.set(file.path, { path: file.path, ops: file.ops, added: 0, removed: 0 })
-  for (const change of selectedChanges.value) {
-    const file = files.get(change.path) || { path: change.path, ops: 0, added: 0, removed: 0 }
-    file.ops += 1
-    file.added += change.linesAdded
-    file.removed += change.linesRemoved
-    files.set(change.path, file)
-  }
-  return [...files.values()].sort((a, b) => b.ops - a.ops || a.path.localeCompare(b.path))
-})
+const selectedFiles = computed(() =>
+  mergeAgentFileChanges(props.selected?.files || [], selectedChanges.value))
 const promptEvent = computed(() => props.events.find(event => event.kind === 'prompt'))
 const lastText = computed(() => [...props.events].reverse().find(event => event.kind === 'text'))
 
@@ -76,7 +68,7 @@ function focusIncident(index: number): void {
   const incident = selectedIncidents.value[index]
   if (!incident) return
   activeTab.value = 'activity'
-  emit('focus-time', incident.ts ? Date.parse(incident.ts) : null, incident.line)
+  emit('focus-time', parseTimestamp(incident.ts), incident.line)
 }
 
 function focusEventTime(timestamp: number | null, line: number): void {

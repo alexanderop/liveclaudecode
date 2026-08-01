@@ -251,7 +251,7 @@ describe('run hierarchy', () => {
         assert.strictEqual(yield* firstPrompt('/retry/session.jsonl'), '')
         assert.strictEqual(yield* firstPrompt('/retry/session.jsonl'), 'Recovered prompt')
         assert.strictEqual(attempts, 2)
-      }).pipe(Effect.provide(Layer.mergeAll(PromptCache.layer, fileSystem)))
+      }).pipe(Effect.provide(PromptCache.layer.pipe(Layer.provideMerge(fileSystem))))
     },
   )
 

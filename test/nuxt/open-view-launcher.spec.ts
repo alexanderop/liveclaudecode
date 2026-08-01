@@ -1,10 +1,18 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { describe, expect, it } from 'vitest'
+import type { VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 import OpenViewLauncher from '~/components/OpenViewLauncher.vue'
+
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+})
 
 describe('OpenViewLauncher', () => {
   it('renders persistent session navigation with useful destination counts', async () => {
-    const component = await mountSuspended(OpenViewLauncher, {
+    const wrapper = component = await mountSuspended(OpenViewLauncher, {
       props: {
         current: 'activity',
         agentCount: 3,
@@ -15,19 +23,19 @@ describe('OpenViewLauncher', () => {
       },
     })
 
-    expect(component.get('nav').attributes('aria-label')).toBe('Session views')
-    expect(component.findAll('.session-view-tabs button')).toHaveLength(5)
-    expect(component.get('[data-destination="activity"]').attributes('aria-current')).toBe('page')
-    expect(component.get('[data-destination="map"] .session-view-count').text()).toBe('3')
-    expect(component.get('[data-destination="changes"] .session-view-count').text()).toBe('2')
-    expect(component.get('[data-destination="diagnostics"] .session-view-count').text()).toBe('1')
+    expect(wrapper.get('nav').attributes('aria-label')).toBe('Session views')
+    expect(wrapper.findAll('.session-view-tabs button')).toHaveLength(5)
+    expect(wrapper.get('[data-destination="activity"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.get('[data-destination="map"] .session-view-count').text()).toBe('3')
+    expect(wrapper.get('[data-destination="changes"] .session-view-count').text()).toBe('2')
+    expect(wrapper.get('[data-destination="diagnostics"] .session-view-count').text()).toBe('1')
 
-    await component.get('[data-destination="changes"]').trigger('click')
-    expect(component.emitted('select')).toEqual([['changes']])
+    await wrapper.get('[data-destination="changes"]').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['changes']])
   })
 
   it('keeps Ask separate from inspection views and exposes its active state', async () => {
-    const component = await mountSuspended(OpenViewLauncher, {
+    const wrapper = component = await mountSuspended(OpenViewLauncher, {
       props: {
         current: 'overview',
         agentCount: 1,
@@ -38,10 +46,10 @@ describe('OpenViewLauncher', () => {
       },
     })
 
-    expect(component.get('.session-ask-action').attributes('aria-pressed')).toBe('true')
-    expect(component.get('.session-ask-indicator').attributes('aria-label')).toBe('Ask conversation active')
+    expect(wrapper.get('.session-ask-action').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('.session-ask-indicator').attributes('aria-label')).toBe('Ask conversation active')
 
-    await component.get('.session-ask-action').trigger('click')
-    expect(component.emitted('select')).toEqual([['ask']])
+    await wrapper.get('.session-ask-action').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['ask']])
   })
 })

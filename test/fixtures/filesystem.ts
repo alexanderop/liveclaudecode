@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Stream } from 'effect'
+import { Effect, type Layer, Option, Stream } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import * as PlatformError from 'effect/PlatformError'
 

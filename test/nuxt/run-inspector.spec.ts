@@ -1,143 +1,98 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import type { VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 import RunInspector from '~/components/RunInspector.vue'
 import type { RunNode, RunResponse } from '#shared/types/run'
+import { runNode, runResponse, timelineLane, transcriptEvent } from '../fixtures/runs'
 
-function node(key: string, options: Partial<RunNode> = {}): RunNode {
-  return {
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+})
+
+function inspectorNode(key: string, overrides: Partial<RunNode> = {}): RunNode {
+  return runNode({
     key,
-    label: key,
-    agentType: key === 'root' ? '' : 'reviewer',
-    source: 'claude',
-    sourceDetail: '',
-    kind: key === 'root' ? 'session' : 'subagent',
     sid: key,
-    toolUseId: null,
+    label: key,
+    kind: key === 'root' ? 'session' : 'subagent',
+    agentType: key === 'root' ? '' : 'reviewer',
+    sourceDetail: '',
     model: '',
     spawnDepth: key === 'root' ? 0 : 1,
     parentAgentId: key === 'root' ? null : 'root',
-    stoppedByUser: false,
     spawnState: '',
-    children: [],
-    subAgents: 0,
-    subRunning: 0,
-    subErrors: 0,
-    subTools: 0,
-    subFiles: {},
-    subLast: null,
-    subLive: false,
-    records: 1,
     tools: 0,
     toolCounts: {},
-    reads: 0,
     errors: 0,
     tokensOut: 0,
     firstTs: null,
     lastTs: null,
-    mtime: 0,
-    ago: 0,
-    live: false,
-    size: 0,
     todos: null,
-    skills: [],
     milestones: [],
     current: null,
     files: [],
     commands: [],
     finalText: '',
-    ...options,
-  }
+    subErrors: 0,
+    subTools: 0,
+    subFiles: {},
+    subLast: null,
+    ...overrides,
+  })
 }
 
-function run(root: RunNode, selected: RunNode): RunResponse {
-  return {
+function laneFor(node: RunNode, depth: number) {
+  return timelineLane({
+    key: node.key,
+    label: node.label,
+    agentType: node.agentType,
+    kind: node.kind,
+    depth,
+    firstTs: node.firstTs,
+    lastTs: node.lastTs,
+    live: node.live,
+    errors: node.errors,
+    tools: node.tools,
+    spawnState: node.spawnState,
+    files: node.files.length,
+  })
+}
+
+function inspectorRun(root: RunNode, selected: RunNode): RunResponse {
+  return runResponse({
     key: root.key,
     transcriptPath: `/claude/projects/repo/${selected.key}.jsonl`,
-    lanes: [
-      {
-        key: root.key,
-        label: root.label,
-        agentType: root.agentType,
-        kind: root.kind,
-        depth: 0,
-        firstTs: root.firstTs,
-        lastTs: root.lastTs,
-        live: root.live,
-        errors: root.errors,
-        tools: root.tools,
-        spawnState: root.spawnState,
-        files: root.files.length,
-      },
-      {
-        key: selected.key,
-        label: selected.label,
-        agentType: selected.agentType,
-        kind: selected.kind,
-        depth: 1,
-        firstTs: selected.firstTs,
-        lastTs: selected.lastTs,
-        live: selected.live,
-        errors: selected.errors,
-        tools: selected.tools,
-        spawnState: selected.spawnState,
-        files: selected.files.length,
-      },
-    ],
+    lanes: [laneFor(root, 0), laneFor(selected, 1)],
     files: [],
     phases: [],
-    diagnostics: {
-      incidents: [],
-      turns: [],
-      compactions: [],
-      outcomes: [],
-      changes: [],
-      git: [],
-      agents: [],
-      environment: {
-        cwd: '',
-        gitBranch: '',
-        version: '',
-        entrypoint: '',
-        permissionMode: '',
-      },
-      causal: {
-        records: 0,
-        recordsWithUuid: 0,
-        branchPoints: 0,
-        sidechainRecords: 0,
-        interruptions: 0,
-      },
-      usage: { in: 0, out: 0, cr: 0, cw: 0 },
-    },
     node: selected,
     root,
-  }
+  })
 }
 
 describe('run inspector', () => {
   it('describes the selected node and exposes close and agent-selection actions', async () => {
-    const child = node('review', {
+    const child = inspectorNode('review', {
       label: 'Review accessibility',
       live: true,
       tools: 3,
       toolCounts: { Read: 2, Grep: 1 },
       firstTs: '2026-07-28T10:00:00.000Z',
     })
-    const root = node('root', { children: [child] })
-    const component = await mountSuspended(RunInspector, {
+    const root = inspectorNode('root', { children: [child] })
+    const wrapper = component = await mountSuspended(RunInspector, {
       props: {
-        run: run(root, child),
+        run: inspectorRun(root, child),
         root,
         selected: child,
         selectedKey: child.key,
-        events: [{
-          role: 'assistant',
-          kind: 'text',
+        events: [transcriptEvent('Reviewed the accessibility flow.', {
           ts: '2026-07-28T10:00:01.000Z',
-          line: 1,
-          body: 'Reviewed the accessibility flow.',
-        }],
+        })],
         eventsLoading: false,
         density: 'normal',
         errorsOnly: false,
@@ -145,30 +100,31 @@ describe('run inspector', () => {
       },
     })
 
-    expect(component.get('.inspector-title').text()).toContain('Review accessibility')
-    expect(component.get('[role="tab"][aria-selected="true"]').text()).toContain('Summary')
-    expect(component.get('.status-value').text()).toBe('Thinking')
-    expect(component.text()).toContain('Claude')
-    expect(component.text()).toContain('Read 2')
+    expect(wrapper.get('.inspector-title').text()).toContain('Review accessibility')
+    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('Summary')
+    expect(wrapper.get('.status-value').text()).toBe('Thinking')
+    expect(wrapper.findAll('.property-row').map(row => row.text()))
+      .toContainEqual('ProviderClaude')
+    expect(wrapper.findAll('.tool-chip').map(chip => chip.text()))
+      .toContainEqual('Read 2')
 
-    await component.findAll('.agent-row')[0]!.trigger('click')
-    expect(component.emitted('select')?.[0]).toEqual(['root'])
+    await wrapper.findAll('.agent-row')[0]!.trigger('click')
+    expect(wrapper.emitted('select')?.[0]).toEqual(['root'])
 
-    await component.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
+    await wrapper.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
     await flushPromises()
-    expect(component.findAll('.event')).toHaveLength(1)
+    expect(wrapper.findAll('.event')).toHaveLength(1)
 
-    await component.get('.inspector-close').trigger('click')
-    expect(component.emitted('close')).toHaveLength(1)
-
+    await wrapper.get('.inspector-close').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
   it('shows a loading state while switching to another agent activity stream', async () => {
-    const child = node('review', { label: 'Review accessibility' })
-    const root = node('root', { children: [child] })
-    const component = await mountSuspended(RunInspector, {
+    const child = inspectorNode('review', { label: 'Review accessibility' })
+    const root = inspectorNode('root', { children: [child] })
+    const wrapper = component = await mountSuspended(RunInspector, {
       props: {
-        run: run(root, child),
+        run: inspectorRun(root, child),
         root,
         selected: child,
         selectedKey: child.key,
@@ -181,9 +137,9 @@ describe('run inspector', () => {
     })
     await flushPromises()
 
-    await component.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
+    await wrapper.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
     await flushPromises()
-    expect(component.get('.inspector-activity-loading').text()).toContain('Loading agent activity')
-    expect(component.find('.feed').exists()).toBe(false)
+    expect(wrapper.get('.inspector-activity-loading').text()).toContain('Loading agent activity')
+    expect(wrapper.find('.feed').exists()).toBe(false)
   })
 })

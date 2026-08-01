@@ -1,12 +1,24 @@
-import { Predicate } from 'effect'
-import type { DiagnosticIncident, Milestone, Timestamp } from '#shared/types/run'
-import { findMilestones } from './transcript-content'
+import { Clock, Effect, Predicate } from 'effect'
+import type { DiagnosticIncident, Milestone, Timestamp, TranscriptStats } from '#shared/types/run'
+import { findMilestones, safeStringify } from './transcript-content'
 
 /**
  * Helpers shared by the four transcript scanners (Claude, Codex, Copilot
- * VS Code, Copilot CLI). Plain, effect-free functions only — the scanners
- * themselves own the mutable state and any effectful I/O.
+ * VS Code, Copilot CLI). Plain functions — plus the one Clock-backed stats
+ * accessor — while the scanners themselves own the mutable state and any
+ * filesystem I/O.
  */
+
+/**
+ * Snapshot a scanner's stats at the current Clock time. Every scanner exposes
+ * this as its `stats` getter; routing through the Clock keeps `live`/`ago`
+ * testable with `TestClock` instead of wall-clock time.
+ */
+export function statsNow(scan: { statsAt: (now: number) => TranscriptStats }): Effect.Effect<TranscriptStats> {
+  return Clock.currentTimeMillis.pipe(
+    Effect.map(millis => scan.statsAt(millis / 1_000)),
+  )
+}
 
 /** Per-path bookkeeping for edited files, keyed by their short display path. */
 export interface MutableFileChange {
@@ -33,11 +45,7 @@ export function recordFileChange(
 export function compactText(value: unknown, limit = 240): string {
   if (typeof value === 'string') return value.trim().replace(/\s+/g, ' ').slice(0, limit)
   if (!Predicate.isObject(value)) return ''
-  try {
-    return JSON.stringify(value).replace(/\s+/g, ' ').slice(0, limit)
-  } catch {
-    return ''
-  }
+  return safeStringify(value).replace(/\s+/g, ' ').slice(0, limit)
 }
 
 /** Compact a known string into a single-line preview. */

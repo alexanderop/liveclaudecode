@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { RunNode, RunResponse } from '#shared/types/run'
 import { flattenRunTree } from '~/utils/execution-analysis'
+import { splitPath } from '~/utils/file-changes'
 
 const props = defineProps<{ run: RunResponse | null, root?: RunNode | null, selectedKey?: string | null }>()
 const scope = ref<'session' | 'agent'>('session')
@@ -67,8 +68,8 @@ const scopeLabel = computed(() => scope.value === 'session' ? 'Whole session' : 
             <div v-for="[path, operations] in files" :key="path" class="artifact-row">
               <span class="artifact-icon changed"><UIcon name="i-lucide-file-pen-line" /></span>
               <span class="artifact-copy">
-                <strong :title="path">{{ path.split('/').at(-1) }}</strong>
-                <small :title="path">{{ path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : 'Repository root' }}</small>
+                <strong :title="path">{{ splitPath(path).name }}</strong>
+                <small :title="path">{{ splitPath(path).directory }}</small>
               </span>
               <span class="operation-count">{{ operations }} {{ operations === 1 ? 'edit' : 'edits' }}</span>
             </div>

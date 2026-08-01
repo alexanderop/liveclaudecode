@@ -2,11 +2,12 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import axe from 'axe-core'
 import type { RunOptions } from 'axe-core'
 import { flushPromises } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import RunChanges from '~/components/RunChanges.vue'
 import RunOverview from '~/components/RunOverview.vue'
-import { runNode, runResponse } from '../fixtures/runs'
+import { mockLiveApi } from '../fixtures/live-api'
+import { runNode, runResponse, treeResponse } from '../fixtures/runs'
 
 const axeOptions: RunOptions = {
   resultTypes: ['violations'],
@@ -27,17 +28,13 @@ async function expectNoViolations(element: Element, disabledRules: string[] = []
 
 afterEach(() => {
   document.body.innerHTML = ''
-  vi.unstubAllGlobals()
 })
 
 describe('accessibility', () => {
   it('has no detectable semantic violations in the empty dashboard state', async () => {
-    vi.stubGlobal('$fetch', vi.fn().mockResolvedValue({
-      projects: [],
-      sources: [],
-      now: 0,
-      hours: 168,
-    }))
+    mockLiveApi(runNode(), {
+      tree: () => ({ ...treeResponse([]), projects: [] }),
+    })
     const component = await mountSuspended(IndexPage, {
       attachTo: document.body,
       global: {
@@ -49,6 +46,8 @@ describe('accessibility', () => {
     })
 
     try {
+      await flushPromises()
+      expect(component.get('[data-workspace-heading]').text()).toBe('No local sessions found')
       await expectNoViolations(component.element)
     } finally {
       component.unmount()
@@ -58,38 +57,7 @@ describe('accessibility', () => {
   it('has no detectable violations across the populated dashboard panels', async () => {
     const root = runNode()
     const run = runResponse()
-    vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
-      if (url === '/api/tree') {
-        return {
-          projects: [{ id: '/repo', name: 'repo', roots: [root] }],
-          sources: [],
-          now: 0,
-          hours: 168,
-        }
-      }
-      if (url.startsWith('/api/run')) return run
-      if (url.startsWith('/api/events')) {
-        return {
-          key: root.key,
-          events: [],
-          next: 0,
-          revision: 1,
-          reset: false,
-          node: run.node,
-        }
-      }
-      if (url.startsWith('/api/chat')) {
-        return {
-          events: [],
-          next: 0,
-          revision: 0,
-          reset: false,
-          status: 'idle',
-          agent: null,
-        }
-      }
-      throw new Error(`Unexpected URL: ${url}`)
-    }))
+    mockLiveApi(root, { run: () => run })
     const component = await mountSuspended(IndexPage, {
       attachTo: document.body,
       global: {

@@ -5,20 +5,28 @@ import * as FileSystem from 'effect/FileSystem'
 import { parseClaudeSubagentMetaJson, type ClaudeSubagentMeta } from '#shared/schemas/claude'
 import { InvalidRunKey, PromptCache, ScanCache } from './services'
 import type {
-  AgentDiagnosticSummary,
-  DiagnosticIncident,
   Milestone,
   PublicRunNode,
   RunDiagnostics,
   RunNode,
   SessionEnvironment,
   TimelineLane,
-  Usage,
 } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { FILE_CONCURRENCY, FileDiscoveryLimiter, ignoreNotFound } from './filesystem-concurrency'
+import { FILE_CONCURRENCY, FileDiscoveryLimiter, ignoreNotFound, isFreshFile } from './filesystem-concurrency'
 import { claudeCostSample, estimateCosts, type ClaudeCostSample } from './cost'
-import { addFields, byTimestamp, bySubLastDesc, freshnessCutoff, isFreshMtime, visitNodes } from './run-shared'
+import {
+  addUsage,
+  byTimestamp,
+  bySubLastDesc,
+  countUnreadable,
+  emptyRunDiagnostics,
+  emptyUsage,
+  finishRunDiagnostics,
+  freshnessCutoff,
+  mergeScanDiagnostics,
+  visitNodes,
+} from './run-shared'
 
 interface CollectedItem {
   key: string
@@ -69,16 +77,11 @@ export const collect = Effect.fn('collect')(function*(
     ignoreNotFound(() => Effect.succeed([] as Array<string>)),
   )).sort((a, b) => a.localeCompare(b))
 
-  const freshFile = Effect.fn('freshFile')(function*(path: string) {
-    const info = yield* limiter.withPermit(fs.stat(path))
-    return info.type === 'File' && isFreshMtime(info.mtime, cutoff)
-  })
-
   const [sessionFailures, sessions] = yield* Effect.partition(
     names.filter(name => name.endsWith('.jsonl')),
     name => Effect.gen(function*() {
       const path = join(projectDirectory, name)
-      if (!(yield* freshFile(path))) return Option.none<CollectedItem>()
+      if (!(yield* isFreshFile(path, cutoff))) return Option.none<CollectedItem>()
       const sid = name.slice(0, -'.jsonl'.length)
       return Option.some({
         key: sid,
@@ -111,7 +114,7 @@ export const collect = Effect.fn('collect')(function*(
         subagentNames.filter(name => name.endsWith('.jsonl')).sort((a, b) => a.localeCompare(b)),
         name => Effect.gen(function*() {
           const path = join(subagentsDirectory, name)
-          if (!(yield* freshFile(path))) return Option.none<CollectedItem>()
+          if (!(yield* isFreshFile(path, cutoff))) return Option.none<CollectedItem>()
           const agent = name.slice(0, -'.jsonl'.length)
           const meta = yield* limiter.withPermit(
             readSubagentMeta(join(subagentsDirectory, `${agent}.meta.json`)),
@@ -128,7 +131,7 @@ export const collect = Effect.fn('collect')(function*(
       )
       return {
         items: Arr.getSomes(subagents),
-        unreadable: subagentFailures.length,
+        unreadable: yield* countUnreadable(`collect subagents(${subagentsDirectory})`, subagentFailures),
       } satisfies CollectedItems
     }),
     { concurrency: FILE_CONCURRENCY },
@@ -139,8 +142,8 @@ export const collect = Effect.fn('collect')(function*(
       ...Arr.getSomes(sessions),
       ...subagentDirs.flatMap(result => result.items),
     ],
-    unreadable: sessionFailures.length
-      + subagentDirFailures.length
+    unreadable: (yield* countUnreadable(`collect sessions(${projectDirectory})`, sessionFailures))
+      + (yield* countUnreadable(`collect subagent directories(${projectDirectory})`, subagentDirFailures))
       + subagentDirs.reduce((total, result) => total + result.unreadable, 0),
   } satisfies CollectedItems
 })
@@ -225,7 +228,8 @@ export const buildTree = Effect.fn('buildTree')(function*(
     byKey,
     cwd: scans.find(scan => scan.cwd)?.cwd || '',
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
-    unreadable: discovery.unreadable + unreadableScans.length,
+    unreadable: discovery.unreadable
+      + (yield* countUnreadable(`buildTree scans(${projectDirectory})`, unreadableScans)),
     costSamples,
   }
 })
@@ -344,35 +348,23 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
     if (node.toolUseId) childByToolId.set(node.toolUseId, node)
   }
 
-  const incidents: DiagnosticIncident[] = []
-  const turns: RunDiagnostics['turns'] = []
-  const compactions: RunDiagnostics['compactions'] = []
-  const outcomes: RunDiagnostics['outcomes'] = []
-  const changes: RunDiagnostics['changes'] = []
-  const git: RunDiagnostics['git'] = []
-  const agents: AgentDiagnosticSummary[] = []
-  const usage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
+  const aggregate = emptyRunDiagnostics()
   const costSamples: ClaudeCostSample[] = []
-  const causal = { records: 0, recordsWithUuid: 0, branchPoints: 0, sidechainRecords: 0, interruptions: 0 }
-  let environment: SessionEnvironment = { cwd: '', gitBranch: '', version: '', entrypoint: '', permissionMode: '' }
 
   for (const [index, node] of nodes.entries()) {
     const diagnostic = scans[index]!.diagnostics()
     costSamples.push(...diagnostic.context.map(sample => claudeCostSample(sample)))
     const who = node.kind === 'session' ? 'Main session' : node.label
-    if (node.kind === 'session') environment = diagnostic.environment
+    if (node.kind === 'session') aggregate.environment = diagnostic.environment
     else {
-      for (const key of Object.keys(environment) as Array<keyof SessionEnvironment>) {
-        environment[key] ||= diagnostic.environment[key]
+      for (const key of Object.keys(aggregate.environment) as Array<keyof SessionEnvironment>) {
+        aggregate.environment[key] ||= diagnostic.environment[key]
       }
     }
 
-    for (const sample of diagnostic.context) addFields(usage, sample.usage)
-    addFields(causal, diagnostic.causal)
-
-    incidents.push(...diagnostic.incidents.map(incident => ({ ...incident, who, key: node.key })))
+    mergeScanDiagnostics(aggregate, diagnostic, who, node.key)
     if (node.stoppedByUser) {
-      incidents.push({
+      aggregate.incidents.push({
         id: `${node.key}:stopped`,
         severity: 'warning',
         category: 'agent',
@@ -384,11 +376,7 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
         key: node.key,
       })
     }
-    turns.push(...diagnostic.turns.map(turn => ({ ...turn, who, key: node.key })))
-    compactions.push(...diagnostic.compactions.map(compaction => ({ ...compaction, who, key: node.key })))
-    changes.push(...diagnostic.changes.map(change => ({ ...change, who, key: node.key })))
-    git.push(...diagnostic.git.map(event => ({ ...event, who, key: node.key })))
-    outcomes.push(...diagnostic.outcomes.map((outcome) => {
+    aggregate.outcomes.push(...diagnostic.outcomes.map((outcome) => {
       const child = childByToolId.get(outcome.toolUseId)
       return {
         ...outcome,
@@ -396,9 +384,9 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
       }
     }))
 
-    const agentUsage: Usage = { in: 0, out: 0, cr: 0, cw: 0 }
-    for (const sample of diagnostic.context) addFields(agentUsage, sample.usage)
-    agents.push({
+    const agentUsage = emptyUsage()
+    for (const sample of diagnostic.context) addUsage(agentUsage, sample.usage)
+    aggregate.agents.push({
       key: node.key,
       label: who,
       agentType: node.agentType || 'Main session',
@@ -414,16 +402,7 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
   }
 
   return {
-    incidents: incidents.sort(byTimestamp).slice(-200),
-    turns: turns.sort(byTimestamp).slice(-200),
-    compactions: compactions.sort(byTimestamp).slice(-100),
-    outcomes: outcomes.sort(byTimestamp).slice(-100),
-    changes: changes.sort(byTimestamp).slice(-300),
-    git: git.sort(byTimestamp).slice(-100),
-    agents,
-    environment,
-    causal,
-    usage,
+    ...finishRunDiagnostics(aggregate),
     cost: estimateCosts(costSamples),
   } satisfies RunDiagnostics
 })

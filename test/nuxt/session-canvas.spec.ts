@@ -1,99 +1,93 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
+import type { VueWrapper } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
-import type { RunNode, RunResponse } from '#shared/types/run'
+import { mockLiveApi, urlParam } from '../fixtures/live-api'
+import { eventsResponse, runNode, runResponse, timelineLane } from '../fixtures/runs'
+
+let component: VueWrapper | null = null
 
 afterEach(() => {
+  component?.unmount()
+  component = null
   window.localStorage.clear()
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
-  vi.unstubAllGlobals()
 })
 
-const root = {
-  key: 'root',
-  label: 'Canvas session',
-  agentType: '',
-  source: 'claude',
-  sourceDetail: 'Claude Code',
-  kind: 'session',
-  children: [],
-  records: 4,
-  subLive: false,
-  subErrors: 0,
-  live: false,
-  mtime: 1,
-  subLast: '2026-07-28T10:02:00.000Z',
-} as unknown as RunNode
+function canvasFixtures() {
+  const child = runNode({
+    key: 'review',
+    label: 'Review agent',
+    agentType: 'reviewer',
+    kind: 'subagent',
+    spawnDepth: 1,
+    errors: 0,
+    subErrors: 0,
+    mtime: 1,
+    subLast: '2026-07-28T10:02:00.000Z',
+  })
+  const root = runNode({
+    key: 'root',
+    label: 'Canvas session',
+    records: 4,
+    errors: 0,
+    subErrors: 0,
+    mtime: 1,
+    subLast: '2026-07-28T10:02:00.000Z',
+    children: [child],
+  })
+  const run = runResponse({
+    key: root.key,
+    lanes: [
+      timelineLane({
+        key: root.key,
+        label: root.label,
+        kind: 'session',
+        depth: 0,
+        firstTs: null,
+        lastTs: null,
+        errors: 0,
+        tools: 1,
+        spawnState: '',
+        files: 0,
+      }),
+      timelineLane({
+        key: child.key,
+        label: child.label,
+        agentType: child.agentType,
+        kind: 'subagent',
+        depth: 1,
+        firstTs: null,
+        lastTs: null,
+        errors: 0,
+        tools: 2,
+        files: 0,
+      }),
+    ],
+    files: [],
+    phases: [],
+    node: root,
+    root,
+  })
+  return { root, child, run }
+}
 
-const child = {
-  ...root,
-  key: 'review',
-  label: 'Review agent',
-  agentType: 'reviewer',
-  kind: 'subagent',
-  children: [],
-  spawnDepth: 1,
-} as RunNode
-
-root.children = [child]
-
-const run = {
-  key: root.key,
-  lanes: [
-    {
-      key: root.key,
-      label: root.label,
-      agentType: '',
-      kind: 'session',
-      depth: 0,
-      firstTs: null,
-      lastTs: null,
-      live: false,
-      errors: 0,
-      tools: 1,
-      spawnState: '',
-      files: 0,
-    },
-    {
-      key: child.key,
-      label: child.label,
-      agentType: child.agentType,
-      kind: 'subagent',
-      depth: 1,
-      firstTs: null,
-      lastTs: null,
-      live: false,
-      errors: 0,
-      tools: 2,
-      spawnState: 'returned',
-      files: 0,
-    },
-  ],
-  files: [],
-  phases: [],
-  node: root,
-  root,
-  diagnostics: {
-    incidents: [],
-    turns: [],
-    compactions: [],
-    outcomes: [],
-    changes: [],
-    git: [],
-    agents: [],
-    environment: {},
-    causal: {},
-    usage: {},
-  },
-} as unknown as RunResponse
+function mockCanvasApi({ root, child, run }: ReturnType<typeof canvasFixtures>) {
+  return mockLiveApi(root, {
+    run: () => run,
+    events: url => urlParam(url, 'key') === child.key
+      ? eventsResponse(child.key, ['Reviewing the requested flow.'], { node: child })
+      : eventsResponse(root.key, [], { node: root }),
+  })
+}
 
 const CanvasStub = defineComponent({
   props: ['run', 'selectedKey'],
   emits: ['select', 'deselect'],
   template: `
-    <div class="canvas-stub" :data-selected="selectedKey || ''">
+    <div class="canvas-stub">
       <slot name="actions" />
       <button class="canvas-node" type="button" @click="$emit('select', 'review')">Review</button>
       <button class="canvas-empty" type="button" @click="$emit('deselect')">Empty space</button>
@@ -105,82 +99,44 @@ const InspectorStub = defineComponent({
   props: ['selected', 'selectedKey', 'events', 'eventsLoading'],
   emits: ['select', 'close'],
   template: `
-    <aside
-      class="inspector-stub"
-      :data-selected="selectedKey"
-      :data-event-count="events.length"
-      :data-events-loading="String(eventsLoading)"
-    >
+    <aside class="inspector-stub">
       {{ selected?.label }}
       <button class="close-inspector" type="button" @click="$emit('close')">Close</button>
     </aside>
   `,
 })
 
-function sessionFetch(): ReturnType<typeof vi.fn> {
-  return vi.fn(async (url: string) => {
-    if (url === '/api/tree') {
-      return {
-        projects: [{ id: '/workspace', name: 'workspace', roots: [root] }],
-        sources: [],
-        now: 0,
-        hours: 168,
-      }
-    }
-    if (url.startsWith('/api/run')) return run
-    if (url.startsWith('/api/session-events')) return { key: root.key, events: [], total: 0, truncated: false }
-    if (url.includes('key=review')) {
-      return {
-        key: child.key,
-        events: [{
-          role: 'assistant',
-          kind: 'text',
-          ts: '2026-07-28T10:01:00.000Z',
-          line: 1,
-          body: 'Reviewing the requested flow.',
-        }],
-        next: 1,
-        revision: 1,
-        reset: false,
-        node: child,
-      }
-    }
-    return {
-      key: root.key,
-      events: [],
-      next: 0,
-      revision: 1,
-      reset: false,
-      node: root,
-    }
+async function mountCanvasPage() {
+  const wrapper = await mountSuspended(IndexPage, {
+    global: {
+      stubs: {
+        EventFeed: true,
+        RunCanvas: CanvasStub,
+        RunChanges: true,
+        RunDiagnostics: true,
+        RunHero: true,
+        RunInspector: InspectorStub,
+        RunOverview: true,
+        RunSidebar: true,
+      },
+    },
   })
+  component = wrapper
+  return wrapper
 }
 
-async function openMap(component: Awaited<ReturnType<typeof mountSuspended>>): Promise<void> {
-  await vi.waitFor(() => expect(component.get('[data-destination="map"]').attributes('disabled')).toBeUndefined())
-  await component.get('[data-destination="map"]').trigger('click')
+async function openMap(wrapper: VueWrapper): Promise<void> {
+  await vi.waitFor(() => expect(wrapper.get('[data-destination="map"]').attributes('disabled')).toBeUndefined())
+  await wrapper.get('[data-destination="map"]').trigger('click')
 }
 
 describe('persistent session canvas', () => {
   it('resizes and remembers both docked sidebars', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
-    vi.stubGlobal('$fetch', sessionFetch())
-    const component = await mountSuspended(IndexPage, {
-      global: {
-        stubs: {
-          EventFeed: true,
-          RunCanvas: CanvasStub,
-          RunChanges: true,
-          RunDiagnostics: true,
-          RunHero: true,
-          RunInspector: InspectorStub,
-          RunOverview: true,
-          RunSidebar: true,
-        },
-      },
-    })
+    mockCanvasApi(canvasFixtures())
+    const wrapper = await mountCanvasPage()
 
-    const sidebarHandle = component.get('button[aria-label="Resize session browser"]')
+    const sidebarHandle = wrapper.get('button[aria-label="Resize session browser"]')
     expect(sidebarHandle.attributes('aria-valuenow')).toBe('272')
 
     await sidebarHandle.trigger('pointerdown', { button: 0, clientX: 272 })
@@ -192,9 +148,9 @@ describe('persistent session canvas', () => {
     expect(window.localStorage.getItem('liveclaudecode:sidebar-width')).toBe('332')
 
     await sidebarHandle.trigger('dblclick')
-    await openMap(component)
-    await component.get('.canvas-node').trigger('click')
-    const panelHandle = component.get('button[aria-label="Resize context panel"]')
+    await openMap(wrapper)
+    await wrapper.get('.canvas-node').trigger('click')
+    const panelHandle = wrapper.get('button[aria-label="Resize context panel"]')
     expect(panelHandle.attributes('aria-valuenow')).toBe('380')
 
     await panelHandle.trigger('keydown', { key: 'ArrowLeft' })
@@ -207,72 +163,47 @@ describe('persistent session canvas', () => {
 
   it('keeps the canvas mounted while node details open and empty space closes them', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
-    const fetch = sessionFetch()
-    vi.stubGlobal('$fetch', fetch)
-
-    const component = await mountSuspended(IndexPage, {
-      global: {
-        stubs: {
-          EventFeed: true,
-          RunCanvas: CanvasStub,
-          RunChanges: true,
-          RunDiagnostics: true,
-          RunHero: true,
-          RunInspector: InspectorStub,
-          RunOverview: true,
-          RunSidebar: true,
-        },
-      },
-    })
+    const fixtures = canvasFixtures()
+    const fetch = mockCanvasApi(fixtures)
+    const wrapper = await mountCanvasPage()
     await flushPromises()
-    await openMap(component)
+    await openMap(wrapper)
 
-    const originalCanvas = component.get('.canvas-stub').element
-    await component.get('.canvas-node').trigger('click')
+    const originalCanvas = wrapper.get('.canvas-stub').element
+    await wrapper.get('.canvas-node').trigger('click')
+    await flushPromises()
 
-    expect(component.get('.inspector-stub').attributes('data-selected')).toBe('review')
-    expect(component.get('.inspector-stub').text()).toContain('Review agent')
-    expect(component.get('.inspector-stub').attributes('data-event-count')).toBe('1')
-    expect(component.get('.inspector-stub').attributes('data-events-loading')).toBe('false')
+    const inspector = wrapper.getComponent(InspectorStub)
+    expect(inspector.props('selectedKey')).toBe('review')
+    expect(inspector.props('selected')).toMatchObject({ label: 'Review agent' })
+    expect(inspector.props('events')).toHaveLength(1)
+    expect(inspector.props('eventsLoading')).toBe(false)
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining('key=review'),
       { signal: expect.any(AbortSignal) },
     )
-    expect(component.get('.canvas-stub').element).toBe(originalCanvas)
+    expect(wrapper.get('.canvas-stub').element).toBe(originalCanvas)
 
-    await component.get('.canvas-empty').trigger('click')
+    await wrapper.get('.canvas-empty').trigger('click')
 
-    expect(component.find('.inspector-stub').exists()).toBe(false)
-    expect(component.get('.canvas-stub').element).toBe(originalCanvas)
-    expect(component.get('.canvas-stub').attributes('data-selected')).toBe('')
+    expect(wrapper.findComponent(InspectorStub).exists()).toBe(false)
+    expect(wrapper.get('.canvas-stub').element).toBe(originalCanvas)
+    expect(wrapper.getComponent(CanvasStub).props('selectedKey')).toBeFalsy()
   })
 
   it('shows one primary workspace and restores the same canvas after an Activity round trip', async () => {
-    vi.stubGlobal('$fetch', sessionFetch())
-    const component = await mountSuspended(IndexPage, {
-      global: {
-        stubs: {
-          EventFeed: true,
-          RunCanvas: CanvasStub,
-          RunChanges: true,
-          RunDiagnostics: true,
-          RunHero: true,
-          RunInspector: InspectorStub,
-          RunOverview: true,
-          RunSidebar: true,
-        },
-      },
-    })
-    await openMap(component)
-    const originalCanvas = component.get('.canvas-stub').element
+    mockCanvasApi(canvasFixtures())
+    const wrapper = await mountCanvasPage()
+    await openMap(wrapper)
+    const originalCanvas = wrapper.get('.canvas-stub').element
 
-    await component.get('[data-destination="activity"]').trigger('click')
+    await wrapper.get('[data-destination="activity"]').trigger('click')
 
-    expect(component.get('[data-workspace-heading]').text()).toBe('Activity')
-    expect(component.find('.canvas-stub').exists()).toBe(false)
+    expect(wrapper.get('[data-workspace-heading]').text()).toBe('Activity')
+    expect(wrapper.find('.canvas-stub').exists()).toBe(false)
 
-    await component.get('[data-destination="map"]').trigger('click')
+    await wrapper.get('[data-destination="map"]').trigger('click')
 
-    expect(component.get('.canvas-stub').element).toBe(originalCanvas)
+    expect(wrapper.get('.canvas-stub').element).toBe(originalCanvas)
   })
 })

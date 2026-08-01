@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Handle, Position } from '@vue-flow/core'
-import {
-  type ExecutionNodeData,
+import type {
+  ExecutionNodeData,
 } from '~/utils/execution-graph'
 import { agentDisplayStateLabel } from '~/utils/session-state'
 import { useExecutionCanvas } from '~/composables/useExecutionCanvas'
@@ -42,6 +42,7 @@ function handleKeydown(event: KeyboardEvent): void {
     :aria-pressed="selected"
     :aria-current="selected ? 'true' : undefined"
     :aria-label="`${data.label}, ${agentDisplayStateLabel(data.displayState)}. Open details.`"
+    @click="selectNode(id)"
     @keydown="handleKeydown"
   >
     <Handle

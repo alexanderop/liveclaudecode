@@ -8,6 +8,7 @@ import {
   browserTextEvent,
   browserTree,
 } from '../fixtures/browser-api'
+import { deferred } from '../fixtures/deferred'
 import { mockDashboardApi } from './api-mocks'
 
 test('shows an empty dashboard and degraded source details', async ({ page }) => {
@@ -42,14 +43,11 @@ test('shows loading states while a slow tree request is pending', async ({ page 
     sid: 'recovered-session',
     label: 'Recovered API session',
   })
-  let releaseTree!: () => void
-  const treeRelease = new Promise<void>((resolve) => {
-    releaseTree = resolve
-  })
+  const treeGate = deferred<void>()
 
   await mockDashboardApi(page, {
     tree: async () => {
-      await treeRelease
+      await treeGate.promise
       return { json: browserTree([root]) }
     },
     run: () => ({ json: browserRun(root) }),
@@ -61,7 +59,7 @@ test('shows loading states while a slow tree request is pending', async ({ page 
 
   await expect(page.getByLabel('Loading local sessions…')).toBeVisible()
   await expect(page.getByLabel('Loading selected session')).toBeVisible()
-  releaseTree()
+  treeGate.resolve(undefined)
   await expect(page.getByRole('heading', { name: root.label, exact: true })).toBeVisible()
   await expect(page.getByLabel('Loading local sessions…')).toHaveCount(0)
 })
@@ -141,10 +139,7 @@ test('keeps the newer session when an older run response finishes late', async (
   })
   let firstRunRequested = false
   let firstRunFinished = false
-  let releaseFirstRun!: () => void
-  const firstRunRelease = new Promise<void>((resolve) => {
-    releaseFirstRun = resolve
-  })
+  const firstRunGate = deferred<void>()
 
   await mockDashboardApi(page, {
     tree: () => ({ json: browserTree([first, second]) }),
@@ -152,7 +147,7 @@ test('keeps the newer session when an older run response finishes late', async (
       const key = url.searchParams.get('key')
       if (key === first.key) {
         firstRunRequested = true
-        await firstRunRelease
+        await firstRunGate.promise
         firstRunFinished = true
         return { json: browserRun(first) }
       }
@@ -174,7 +169,7 @@ test('keeps the newer session when an older run response finishes late', async (
   await expect(page.getByRole('heading', { name: second.label, exact: true })).toBeVisible()
   expect(new URL(page.url()).searchParams.get('project')).toBe(browserProject)
 
-  releaseFirstRun()
+  firstRunGate.resolve(undefined)
   await expect.poll(() => firstRunFinished).toBe(true)
   await expect(page.getByRole('heading', { name: second.label, exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: first.label, exact: true })).toHaveCount(0)

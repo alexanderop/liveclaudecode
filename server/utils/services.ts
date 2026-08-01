@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { Cache, Clock, Context, Duration, Effect, Exit, Layer, Option, Schema, Semaphore } from 'effect'
-import * as FileSystem from 'effect/FileSystem'
+import type * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import { parseClaudeRecord } from '#shared/schemas/claude'
 import { normalizeSessionLabel } from '#shared/utils/session-label'

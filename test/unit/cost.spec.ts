@@ -154,7 +154,7 @@ describe('Claude cost estimates', () => {
       { ts: '2026-07-31T01:00:03.000Z', model: 'claude-opus-5', usd: 0.02 },
     ]
 
-    assert.deepStrictEqual(dedupeCostSamples(samples), [samples[3], samples[1], samples[2]])
+    assert.deepStrictEqual(dedupeCostSamples(samples), [samples[3]!, samples[1]!, samples[2]!])
     assert.deepStrictEqual(estimateCosts(samples), {
       usd: 0.05,
       pricedRequests: 2,

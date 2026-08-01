@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { agentState, canonicalIssueCount } from '../../app/utils/session-state'
+import {
+  agentState,
+  agentStateIcon,
+  canonicalIssueCount,
+  sessionDisplayState,
+} from '../../app/utils/session-state'
 import { runNode } from '../fixtures/runs'
 
 describe('agent display state', () => {
@@ -24,5 +29,38 @@ describe('agent display state', () => {
       { id: '3', severity: 'error', category: 'tool', title: 'Failed', detail: '', ts: null, line: 3 },
       { id: '4', severity: 'error', category: 'tool', title: 'Failed', detail: '', ts: null, line: 4 },
     ])).toBe(4)
+  })
+
+  it('maps every display state to an icon', () => {
+    expect(agentStateIcon('running')).toBe('i-lucide-hammer')
+    expect(agentStateIcon('waiting')).toBe('i-lucide-clock-3')
+    expect(agentStateIcon('failed')).toBe('i-lucide-circle-x')
+    expect(agentStateIcon('completed')).toBe('i-lucide-circle-check')
+  })
+})
+
+describe('session display state', () => {
+  it('walks the running, stopped, failed, warning, completed ladder in order', () => {
+    expect(sessionDisplayState(null).kind).toBe('inactive')
+    expect(sessionDisplayState(runNode({ subLive: true, subErrors: 3 })).kind).toBe('running')
+    expect(sessionDisplayState(runNode({ stoppedByUser: true, subErrors: 1 })).kind).toBe('stopped')
+    expect(sessionDisplayState(runNode({ subErrors: 1, finalText: '' })))
+      .toEqual({ kind: 'failed', icon: 'i-lucide-circle-x' })
+    expect(sessionDisplayState(runNode({ subErrors: 1 })).kind).toBe('warning')
+    expect(sessionDisplayState(runNode({ subErrors: 0 })).kind).toBe('completed')
+  })
+
+  it('folds diagnostic incident counts into the failed and warning checks', () => {
+    expect(sessionDisplayState(runNode({ subErrors: 0, finalText: '' }), { errorCount: 1 }).kind)
+      .toBe('failed')
+    expect(sessionDisplayState(runNode({ subErrors: 0 }), { attentionCount: 2 }).kind)
+      .toBe('warning')
+  })
+
+  it('reports a root without any recorded outcome using the configured empty kind', () => {
+    const empty = runNode({ subErrors: 0, finalText: '', lastTs: null })
+
+    expect(sessionDisplayState(empty).kind).toBe('inactive')
+    expect(sessionDisplayState(empty, { emptyKind: 'completed' }).kind).toBe('completed')
   })
 })

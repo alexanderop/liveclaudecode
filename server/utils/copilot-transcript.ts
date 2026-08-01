@@ -1,4 +1,4 @@
-import { Clock, DateTime, Effect, Option, Predicate } from 'effect'
+import { DateTime, Effect, Option, Predicate } from 'effect'
 import {
   COPILOT_SPAWN_TOOLS,
   parseCopilotLogRecord,
@@ -29,9 +29,10 @@ import {
   TranscriptFile,
 } from './copilot-transcript-state'
 import { clip, shortPath } from './transcript-content'
-import { compact, completeJsonlLines, parseJsonlValues } from './transcript-scan-core'
+import { compact, completeJsonlLines, parseJsonlValues, statsNow } from './transcript-scan-core'
+import { emptyCausal, emptyEnvironment, emptyUsage } from './run-shared'
 
-type JsonContainer = Record<PropertyKey, unknown>
+type JsonContainer = Record<PropertyKey, unknown> | Array<unknown>
 
 const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor'])
 const MAX_ARRAY_LENGTH = 0xffff_ffff
@@ -43,14 +44,6 @@ interface DerivedCopilotState {
   model: string
   mode: string
   subAgents: number
-}
-
-const EMPTY_ENVIRONMENT: SessionEnvironment = {
-  cwd: '',
-  gitBranch: '',
-  version: '',
-  entrypoint: '',
-  permissionMode: '',
 }
 
 function iso(milliseconds: number | undefined): Timestamp {
@@ -73,7 +66,28 @@ function uriPath(uri: { readonly fsPath?: string, readonly path?: string, readon
 }
 
 function pathContainer(value: unknown): JsonContainer | null {
-  return Array.isArray(value) || Predicate.isObject(value) ? value as unknown as JsonContainer : null
+  return Predicate.isObjectOrArray(value) ? value : null
+}
+
+/**
+ * Read or write one child slot of a container. Arrays are addressed with the
+ * raw segment exactly as direct indexing would be — replay records may spell
+ * an array index as either `3` or `"3"`, and JavaScript property access
+ * coerces both the same way — so the branch only narrows the static type, it
+ * never changes behavior.
+ */
+function childValue(parent: JsonContainer, segment: string | number): unknown {
+  return Array.isArray(parent) ? parent[segment as number] : parent[segment]
+}
+
+function setChildValue(parent: JsonContainer, segment: string | number, value: unknown): void {
+  if (Array.isArray(parent)) parent[segment as number] = value
+  else parent[segment] = value
+}
+
+function deleteChildValue(parent: JsonContainer, segment: string | number): void {
+  // Same semantics as `delete parent[segment]` for both containers.
+  Reflect.deleteProperty(parent, segment)
 }
 
 function safePath(path: ReadonlyArray<string | number>): boolean {
@@ -84,7 +98,7 @@ function safePath(path: ReadonlyArray<string | number>): boolean {
 
 function childContainer(parent: JsonContainer, segment: string | number): JsonContainer | null {
   if (!Object.hasOwn(parent, segment)) return null
-  return pathContainer(parent[segment])
+  return pathContainer(childValue(parent, segment))
 }
 
 function setAtPath(root: unknown, path: ReadonlyArray<string | number>, value: unknown): boolean {
@@ -95,7 +109,7 @@ function setAtPath(root: unknown, path: ReadonlyArray<string | number>, value: u
     parent = childContainer(parent, segment)
   }
   if (!parent) return false
-  parent[path.at(-1)!] = value
+  setChildValue(parent, path.at(-1)!, value)
   return true
 }
 
@@ -113,7 +127,7 @@ function pushAtPath(
   }
   if (!parent) return false
   const key = path.at(-1)!
-  const existing = Object.hasOwn(parent, key) ? parent[key] : undefined
+  const existing = Object.hasOwn(parent, key) ? childValue(parent, key) : undefined
   if (existing !== undefined && !Array.isArray(existing)) return false
   const current = Array.isArray(existing) ? existing as unknown[] : []
   if (index !== undefined) {
@@ -124,7 +138,7 @@ function pushAtPath(
   if (values?.length) {
     for (const value of values) current.push(value)
   }
-  parent[key] = current
+  setChildValue(parent, key, current)
   return true
 }
 
@@ -136,7 +150,7 @@ function deleteAtPath(root: unknown, path: ReadonlyArray<string | number>): bool
     parent = childContainer(parent, segment)
   }
   if (!parent) return false
-  delete parent[path.at(-1)!]
+  deleteChildValue(parent, path.at(-1)!)
   return true
 }
 
@@ -209,14 +223,8 @@ function diagnosticBase(
     outcomes: [],
     git: [],
     environment,
-    causal: {
-      records: snapshot.requests.length,
-      recordsWithUuid: 0,
-      branchPoints: 0,
-      sidechainRecords: 0,
-      interruptions: 0,
-    },
-    usage: { in: 0, out: 0, cr: 0, cw: 0 },
+    causal: { ...emptyCausal(), records: snapshot.requests.length },
+    usage: emptyUsage(),
   }
 }
 
@@ -508,7 +516,7 @@ export class CopilotTranscriptScan {
     const firstTs = iso(snapshot.creationDate)
     const lastTs = latestTimestamp(snapshot, this.file.mtime)
     const environment: SessionEnvironment = {
-      ...EMPTY_ENVIRONMENT,
+      ...emptyEnvironment(),
       cwd: workspace,
       version: `VS Code chat schema ${snapshot.version}`,
       entrypoint: this.application,
@@ -600,10 +608,10 @@ export class CopilotTranscriptScan {
   }
 
   diagnostics(): RunDiagnostics {
-    return this.derived?.diagnostics || emptyTranscriptDiagnostics(EMPTY_ENVIRONMENT)
+    return this.derived?.diagnostics || emptyTranscriptDiagnostics(emptyEnvironment())
   }
 
   get stats(): Effect.Effect<TranscriptStats> {
-    return Clock.currentTimeMillis.pipe(Effect.map(millis => this.statsAt(millis / 1_000)))
+    return statsNow(this)
   }
 }

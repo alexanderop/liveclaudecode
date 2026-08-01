@@ -1,4 +1,5 @@
 import type { RunNode, RunResponse } from '#shared/types/run'
+import { parseTimestamp } from './format'
 
 export type CoordinationFindingKind =
   | 'file-collision'
@@ -40,16 +41,40 @@ export function flattenRunTree(root: RunNode | null): RunNode[] {
   return output
 }
 
-function timestamp(value: string | null): number | null {
-  if (!value) return null
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
+/** Maps every descendant's key to its parent node. */
+export function buildParentIndex(root: RunNode | null): ReadonlyMap<string, RunNode> {
+  const parents = new Map<string, RunNode>()
+  for (const node of flattenRunTree(root)) {
+    for (const child of node.children) parents.set(child.key, node)
+  }
+  return parents
+}
+
+/** Depth-first search for the node with `key`, including the root itself. */
+export function findNode(root: RunNode | null, key: string | null): RunNode | null {
+  if (!root || !key) return null
+  if (root.key === key) return root
+  for (const child of root.children) {
+    const found = findNode(child, key)
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * Follows the most recently spawned live branch down to the agent that is
+ * actually doing work right now; returns the node itself when nothing
+ * beneath it is live.
+ */
+export function deepestLiveNode(node: RunNode): RunNode {
+  const liveChildren = node.children.filter(child => child.subLive)
+  return liveChildren.length ? deepestLiveNode(liveChildren.at(-1)!) : node
 }
 
 export function runNodeDuration(node: RunNode, now = Date.now()): number {
-  const start = timestamp(node.firstTs)
+  const start = parseTimestamp(node.firstTs)
   if (start === null) return 0
-  const end = timestamp(node.lastTs) ?? (node.live ? now : start)
+  const end = parseTimestamp(node.lastTs) ?? (node.live ? now : start)
   return Math.max(0, end - start)
 }
 
@@ -166,7 +191,7 @@ export function analyzeCoordination(
       })
     }
     for (const child of node.children) {
-      const returnedAt = timestamp(child.lastTs)
+      const returnedAt = parseTimestamp(child.lastTs)
       if (child.spawnState === 'returned' && child.finalText && node.live
         && returnedAt !== null && now - returnedAt >= 30_000) {
         findings.push({

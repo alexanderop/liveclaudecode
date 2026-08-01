@@ -26,6 +26,7 @@ import {
   CodexScanCache,
   CopilotScanCache,
   type CopilotSessionLocation,
+  type CopilotSessionScan,
   ScanCache,
   UnknownRun,
 } from './services'
@@ -129,7 +130,9 @@ function sessionEventLocation(locator: SessionLocator): SessionEventLocation | u
 }
 
 const SESSION_LOCATOR_CAPACITY = 8
-const UNASSIGNED_PROJECT = '__unassigned__'
+
+/** Project id under which runs without a resolvable working directory are grouped. */
+export const UNASSIGNED_PROJECT = '__unassigned__'
 
 function locatorKey(project: string, key: string): string {
   return `${project}\0${key}`
@@ -363,13 +366,20 @@ const buildSessionCatalog = Effect.fn('buildSessionCatalog')(function*(
     }
     for (const root of tree.roots) {
       const project = addProject(projects, tree.cwdByKey.get(root.key) || '', [root])
-      visitNodes(root, node => locators.set(locatorKey(project.id, node.key), {
-        source: 'copilot',
-        projectId: project.id,
-        tree,
-        node,
-        location: tree.locationByKey.get(node.key)!,
-      }))
+      visitNodes(root, (node) => {
+        // Every Copilot node the tree builder emits has a location; if one is
+        // ever missing, skip the node (mirroring how a Codex node without a
+        // transcript path is skipped) rather than fabricating a locator.
+        const location = tree.locationByKey.get(node.key)
+        if (!location) return
+        locators.set(locatorKey(project.id, node.key), {
+          source: 'copilot',
+          projectId: project.id,
+          tree,
+          node,
+          location,
+        })
+      })
     }
     if (tree.rootsPresent === 0) {
       statuses.push(sourceStatus(
@@ -531,11 +541,19 @@ export const getSessionRun = Effect.fn('getSessionRun')(function*(
   const root = rootOf(locator.tree.roots, key)
   if (!root) return yield* new UnknownRun({ key })
 
+  const copilotDiagnostics = Effect.fn('copilotDiagnostics')(function*(
+    scan: CopilotSessionScan | undefined,
+  ) {
+    // The catalog build registers a scan for every Copilot locator; a missing
+    // one means the run is no longer known rather than a server defect.
+    if (!scan) return yield* new UnknownRun({ key })
+    return copilotRunDiagnostics(scan)
+  })
   const diagnostics = locator.source === 'claude'
     ? yield* runDiagnostics(locator.projectDirectory, root)
     : locator.source === 'codex'
       ? codexRunDiagnostics(root, locator.tree.scanByKey)
-      : copilotRunDiagnostics(locator.tree.scanByKey.get(locator.node.key)!)
+      : yield* copilotDiagnostics(locator.tree.scanByKey.get(locator.node.key))
   const transcriptPath = locator.source === 'claude'
     ? yield* pathFor(locator.projectDirectory, locator.node.key)
     : locator.tree.pathByKey.get(locator.node.key) || ''

@@ -1,4 +1,4 @@
-import { Clock, DateTime, Effect, Option } from 'effect'
+import { DateTime, Effect, Option } from 'effect'
 import {
   parseCopilotCliArguments,
   parseCopilotCliEvent,
@@ -25,15 +25,17 @@ import {
   reconcileTranscriptEvents,
   TranscriptFile,
 } from './copilot-transcript-state'
-import { clip, shortPath } from './transcript-content'
+import { clip, safeStringify, shortPath } from './transcript-content'
 import {
   compact,
   completeJsonlLines,
   type MutableFileChange,
   parseJsonlValues,
   recordFileChange,
+  statsNow,
   toolStatsFromCounts,
 } from './transcript-scan-core'
+import { emptyCausal, emptyEnvironment } from './run-shared'
 
 interface ToolRecord {
   name: string
@@ -55,21 +57,9 @@ interface DerivedState {
 
 const READ_TOOLS = new Set(['view', 'glob', 'rg', 'web_fetch', 'read_bash', 'read_agent'])
 
-const EMPTY_ENVIRONMENT: SessionEnvironment = {
-  cwd: '',
-  gitBranch: '',
-  version: '',
-  entrypoint: '',
-  permissionMode: '',
-}
-
 function encoded(value: unknown): string {
   if (typeof value === 'string') return value.slice(0, 8_000)
-  try {
-    return JSON.stringify(value).slice(0, 8_000)
-  } catch {
-    return ''
-  }
+  return safeStringify(value).slice(0, 8_000)
 }
 
 function toolSummary(name: string, value: unknown, intention = ''): string {
@@ -196,7 +186,7 @@ export class CopilotCliTranscriptScan {
     this.sessionId = session.data.sessionId
     const workspace = session.data.context?.cwd || this.workspace
     const environment: SessionEnvironment = {
-      ...EMPTY_ENVIRONMENT,
+      ...emptyEnvironment(),
       cwd: workspace,
       gitBranch: session.data.context?.branch || '',
       version: session.data.copilotVersion || `Copilot event schema ${session.data.version}`,
@@ -468,10 +458,8 @@ export class CopilotCliTranscriptScan {
         }],
         environment,
         causal: {
+          ...emptyCausal(),
           records: this.line,
-          recordsWithUuid: 0,
-          branchPoints: 0,
-          sidechainRecords: 0,
           interruptions: incidents.filter(incident => incident.category === 'interruption').length,
         },
         usage,
@@ -485,7 +473,7 @@ export class CopilotCliTranscriptScan {
   }
 
   get stats(): Effect.Effect<TranscriptStats> {
-    return Clock.currentTimeMillis.pipe(Effect.map(millis => this.statsAt(millis / 1_000)))
+    return statsNow(this)
   }
 
   get title(): string {
@@ -509,6 +497,6 @@ export class CopilotCliTranscriptScan {
   }
 
   diagnostics(): RunDiagnostics {
-    return this.derived?.diagnostics || emptyTranscriptDiagnostics(EMPTY_ENVIRONMENT)
+    return this.derived?.diagnostics || emptyTranscriptDiagnostics(emptyEnvironment())
   }
 }

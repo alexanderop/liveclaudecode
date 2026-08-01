@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>liveclaudecode — Meta-harness UI prototype</title>
+  <!--
+    PROTOTYPE — throw this file away after choosing a direction.
+    Question: three variants for controlling multiple coding-agent harnesses, with Variant A
+    combining T3 Code's thread workspace with liveclaudecode's deep observability, switchable
+    with ?variant=A|B|C.
+  -->
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0c0e;
+      --sidebar: #0e1013;
+      --surface: #111316;
+      --surface-raised: #171a1f;
+      --surface-hover: #1c2026;
+      --surface-selected: #222730;
+      --line: #2d333c;
+      --line-soft: #20252c;
+      --fg: #f4f6f8;
+      --fg-soft: #dfe3e8;
+      --dim: #a6adb7;
+      --faint: #8b939e;
+      --accent: #aa9cff;
+      --accent-soft: #2c2840;
+      --live: #62c48d;
+      --live-soft: #17271f;
+      --warning: #d8ad66;
+      --warning-soft: #2a241a;
+      --error: #ef8888;
+      --error-soft: #2b1b1d;
+      --codex: #9ed4c3;
+      --claude: #d9a078;
+      --copilot: #9bbcff;
+      --opencode: #d3d6dc;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; min-width: 320px; height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+      font: 14px/1.45 var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, textarea, select { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+    .prototype-root { width: 100%; height: 100%; }
+    .variant { display: none; width: 100%; height: 100%; }
+    .variant.active { display: flex; }
+    .mono { font-family: var(--mono); }
+    .muted { color: var(--faint); }
+    .dim { color: var(--dim); }
+    .spacer { flex: 1; }
+    .divider { width: 1px; height: 18px; background: var(--line); }
+    .hairline { border-color: var(--line-soft); }
+    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .dot.live { box-shadow: 0 0 0 4px rgb(98 196 141 / 10%); color: var(--live); }
+    .dot.waiting { color: var(--warning); }
+    .dot.idle { color: #68717d; }
+    .pill {
+      display: inline-flex;
+      min-height: 24px;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface-raised);
+      color: var(--dim);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .pill.live { border-color: #28533c; background: var(--live-soft); color: #9ddcb9; }
+    .pill.warn { border-color: #584926; background: var(--warning-soft); color: #e3bd7b; }
+    .pill.accent { border-color: #484064; background: var(--accent-soft); color: #cabfff; }
+    .provider-mark {
+      display: grid;
+      flex: 0 0 auto;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      border: 1px solid currentColor;
+      border-radius: 8px;
+      background: rgb(255 255 255 / 3%);
+      font: 700 11px/1 var(--mono);
+    }
+    .provider-mark.codex { color: var(--codex); }
+    .provider-mark.claude { color: var(--claude); }
+    .provider-mark.copilot { color: var(--copilot); }
+    .provider-mark.opencode { color: var(--opencode); }
+    .provider-mark.all { color: var(--accent); }
+    .icon-button, .quiet-button, .primary-button, .danger-button {
+      display: inline-flex;
+      min-height: 30px;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-raised);
+      cursor: pointer;
+    }
+    .icon-button { width: 30px; padding: 0; }
+    .quiet-button:hover, .icon-button:hover { background: var(--surface-hover); }
+    .primary-button { border-color: #665aa3; background: #5e52a0; color: white; }
+    .primary-button:hover { background: #6b5db2; }
+    .danger-button { border-color: #63383b; background: var(--error-soft); color: var(--error); }
+    .section-label {
+      color: var(--faint);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .app-brand { display: flex; align-items: center; gap: 10px; font-weight: 650; }
+    .brand-mark {
+      display: grid;
+      width: 29px;
+      height: 29px;
+      place-items: center;
+      border: 1px solid #38333f;
+      border-radius: 8px;
+      background: linear-gradient(145deg, #342e48, #1c1a24);
+      color: #cabfff;
+      box-shadow: inset 0 1px rgb(255 255 255 / 7%);
+      font: 700 11px var(--mono);
+    }
+    .state-strip {
+      display: flex;
+      min-height: 35px;
+      align-items: center;
+      gap: 12px;
+      padding: 0 13px;
+      border-top: 1px solid var(--line-soft);
+      background: #0c0e11;
+      color: var(--faint);
+      font: 11px var(--mono);
+    }
+    .state-strip b { color: var(--dim); font-weight: 500; }
+    .state-strip .command { color: #bcb1ef; }
+
+    /* Variant A — operations cockpit */
+    .cockpit { flex-direction: column; }
+    .cockpit-shell { display: grid; min-height: 0; flex: 1; grid-template-columns: 268px minmax(520px, 1fr) 338px; }
+    .cockpit-sidebar {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      border-right: 1px solid var(--line-soft);
+      background: var(--sidebar);
+    }
+    .cockpit-sidebar .brand-row { display: flex; min-height: 55px; align-items: center; padding: 0 12px; border-bottom: 1px solid var(--line-soft); }
+    .sidebar-actions { display: grid; grid-template-columns: 1fr 34px; gap: 6px; padding: 10px; }
+    .launch-button {
+      display: flex;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid #4d456d;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: #d1c8ff;
+      cursor: pointer;
+      font-weight: 620;
+    }
+    .fleet-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 10px 12px; }
+    .fleet-summary div { padding: 7px 8px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface); }
+    .fleet-summary strong { display: block; color: var(--fg-soft); font: 600 14px var(--mono); }
+    .fleet-summary span { color: var(--faint); font-size: 10px; }
+    .session-list { min-height: 0; flex: 1; overflow: auto; padding: 0 7px 16px; }
+    .project-label { display: flex; align-items: center; gap: 6px; padding: 13px 7px 6px; color: var(--dim); font-size: 11px; font-weight: 650; }
+    .session-row {
+      display: grid;
+      width: 100%;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      padding: 8px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .session-row:hover { background: var(--surface-hover); }
+    .session-row.selected { background: var(--surface-selected); box-shadow: inset 2px 0 var(--accent); }
+    .session-copy { min-width: 0; }
+    .session-copy strong, .session-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-copy strong { color: var(--fg-soft); font-size: 12.5px; font-weight: 560; }
+    .session-copy span { color: var(--faint); font-size: 10.5px; }
+    .session-time { color: #747c87; font: 10px var(--mono); }
+    .cockpit-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--bg); }
+    .cockpit-header { display: flex; min-height: 55px; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line-soft); }
+    .cockpit-title { min-width: 0; }
+    .cockpit-title strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cockpit-title span { color: var(--faint); font: 10px var(--mono); }
+    .view-tabs { display: flex; gap: 2px; padding: 9px 14px 0; border-bottom: 1px solid var(--line-soft); }
+    .view-tab { padding: 7px 10px 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--faint); cursor: pointer; }
+    .view-tab.active { border-color: var(--accent); color: var(--fg); }
+    .run-canvas { position: relative; min-height: 0; flex: 1; overflow: auto; padding: 24px; }
+    .canvas-grid {
+      position: absolute;
+      inset: 0;
+      opacity: .28;
+      background-image: linear-gradient(var(--line-soft) 1px, transparent 1px), linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+      background-size: 28px 28px;
+      pointer-events: none;
+    }
+    .agent-flow { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(220px, .8fr) 50px minmax(250px, 1fr); gap: 12px; align-items: center; max-width: 850px; margin: 26px auto; }
+    .agent-card { padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: rgb(17 19 22 / 92%); box-shadow: 0 12px 40px rgb(0 0 0 / 20%); }
+    .agent-card.primary { border-color: #574e78; }
+    .agent-card header { display: flex; align-items: center; gap: 9px; }
+    .agent-card h3 { margin: 0; font-size: 13px; }
+    .agent-card p { margin: 10px 0 0; color: var(--dim); font-size: 12px; }
+    .agent-card footer { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+    .flow-line { height: 1px; background: linear-gradient(90deg, var(--accent), var(--line)); }
+    .child-stack { display: grid; gap: 10px; }
+    .mini-progress { height: 3px; margin-top: 10px; overflow: hidden; border-radius: 99px; background: var(--line-soft); }
+    .mini-progress span { display: block; width: var(--progress, 50%); height: 100%; border-radius: inherit; background: var(--accent); }
+    .control-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; border-left: 1px solid var(--line-soft); background: var(--surface); }
+    .control-panel > header { display: flex; min-height: 55px; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line-soft); }
+    .control-panel-content { min-height: 0; flex: 1; overflow: auto; padding: 14px; }
+    .control-section { margin-bottom: 18px; }
+    .control-section h3 { margin: 0 0 9px; color: var(--faint); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+    .runtime-card { padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); }
+    .runtime-card header { display: flex; align-items: center; gap: 9px; }
+    .runtime-card strong { font-size: 12.5px; }
+    .runtime-card small { display: block; color: var(--faint); }
+    .capabilities { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+    .capability { padding: 3px 6px; border-radius: 5px; background: #20242a; color: var(--dim); font: 9.5px var(--mono); }
+    .action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .timeline-item { position: relative; padding: 0 0 14px 21px; color: var(--dim); font-size: 11.5px; }
+    .timeline-item::before { position: absolute; top: 5px; left: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); content: ""; }
+    .timeline-item::after { position: absolute; top: 13px; bottom: 0; left: 6.5px; width: 1px; background: var(--line); content: ""; }
+    .timeline-item:last-child::after { display: none; }
+    .timeline-item b { display: block; color: var(--fg-soft); font-weight: 550; }
+
+    /* Variant A refinement — T3-style shell + liveclaudecode observatory */
+    .cockpit-shell { grid-template-columns: 272px minmax(650px, 1fr) 322px; }
+    .cockpit-sidebar .brand-row { min-height: 58px; }
+    .cockpit-sidebar-search { padding: 10px 10px 6px; }
+    .cockpit-sidebar-search button {
+      display: flex;
+      width: 100%;
+      height: 32px;
+      align-items: center;
+      gap: 8px;
+      padding: 0 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--faint);
+      cursor: pointer;
+      text-align: left;
+    }
+    .cockpit-sidebar-search kbd { margin-left: auto; color: #747c87; font: 10px var(--mono); }
+    .cockpit-header { min-height: 58px; }
+    .header-action-group { display: flex; align-items: center; gap: 6px; }
+    .header-action-group .quiet-button { min-height: 32px; background: var(--surface); }
+    .run-metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(90px, 1fr));
+      border-bottom: 1px solid var(--line-soft);
+      background: #0d0f12;
+    }
+    .run-metric { min-width: 0; padding: 10px 13px; border-right: 1px solid var(--line-soft); }
+    .run-metric:last-child { border-right: 0; }
+    .run-metric span { display: block; color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .run-metric strong { display: block; margin-top: 2px; overflow: hidden; color: var(--fg-soft); font: 600 13px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .run-metric strong.cost { color: #c8baff; }
+    .run-metric strong.good { color: var(--live); }
+    .observatory-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+    .map-toolbar { display: flex; min-height: 38px; align-items: center; gap: 8px; padding: 0 13px; border-bottom: 1px solid var(--line-soft); color: var(--faint); font-size: 10.5px; }
+    .map-toolbar .quiet-button { min-height: 26px; padding: 0 7px; font-size: 10.5px; }
+    .agent-map-stage { position: relative; min-height: 0; flex: 1; overflow: auto; padding: 24px 18px 30px; }
+    .agent-map-stage .canvas-grid { position: fixed; top: 134px; right: 322px; bottom: 127px; left: 272px; }
+    .map-tree { position: relative; z-index: 1; min-width: 690px; max-width: 980px; margin: 0 auto; }
+    .map-root { display: flex; justify-content: center; }
+    .map-root .agent-card { width: 310px; }
+    .branch-stem { width: 1px; height: 26px; margin: 0 auto; background: #4d456d; }
+    .map-children { position: relative; display: grid; grid-template-columns: repeat(3, minmax(205px, 1fr)); gap: 11px; }
+    .map-children::before { position: absolute; top: -1px; right: 16.66%; left: 16.66%; height: 1px; background: #4d456d; content: ""; }
+    .map-child { position: relative; padding-top: 18px; }
+    .map-child::before { position: absolute; top: 0; left: 50%; width: 1px; height: 18px; background: #4d456d; content: ""; }
+    .agent-card { padding: 12px; border-radius: 9px; }
+    .agent-card.selected { border-color: var(--claude); box-shadow: 0 0 0 1px rgb(217 160 120 / 14%), 0 12px 40px rgb(0 0 0 / 20%); }
+    .agent-card .agent-task { min-height: 34px; margin: 9px 0 0; color: var(--dim); font-size: 10.5px; line-height: 1.45; }
+    .agent-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 10px; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--line-soft); }
+    .agent-metrics div { min-width: 0; padding: 6px; background: #15181c; }
+    .agent-metrics span { display: block; color: #747c87; font-size: 7.5px; letter-spacing: .07em; text-transform: uppercase; }
+    .agent-metrics b { display: block; margin-top: 1px; overflow: hidden; color: var(--fg-soft); font: 550 9.5px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .agent-current { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--faint); font: 9.5px var(--mono); }
+    .agent-current b { color: var(--live); font-weight: 500; }
+    .cockpit-composer-wrap { padding: 8px 18px 11px; border-top: 1px solid var(--line-soft); background: linear-gradient(180deg, rgb(11 12 14 / 72%), var(--bg) 28%); }
+    .cockpit-composer { max-width: 860px; margin: auto; padding: 9px 10px; border: 1px solid #363c45; border-radius: 12px; background: #15181c; box-shadow: 0 14px 42px rgb(0 0 0 / 28%); }
+    .cockpit-composer textarea { width: 100%; height: 31px; resize: none; border: 0; outline: 0; background: transparent; color: var(--fg); font-size: 12px; }
+    .cockpit-composer .composer-controls { gap: 5px; }
+    .cockpit-composer .quiet-button, .cockpit-composer .provider-select { min-height: 25px; border-color: transparent; background: transparent; padding: 0 6px; font-size: 10.5px; }
+    .cockpit-composer .primary-button { min-height: 27px; padding: 0 9px; }
+    .inspector-agent-title { display: flex; align-items: center; gap: 9px; }
+    .inspector-agent-title strong, .inspector-agent-title small { display: block; }
+    .inspector-agent-title small { color: var(--faint); font: 9px var(--mono); }
+    .inspector-summary { margin-bottom: 14px; padding: 11px; border: 1px solid #4b3b32; border-radius: 8px; background: #1c1816; }
+    .inspector-summary p { margin: 8px 0 0; color: var(--dim); font-size: 10.5px; }
+    .inspector-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .inspector-grid div { padding: 8px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface-raised); }
+    .inspector-grid span { display: block; color: var(--faint); font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
+    .inspector-grid strong { display: block; margin-top: 2px; color: var(--fg-soft); font: 600 11px var(--mono); }
+    .cost-breakdown { display: grid; gap: 8px; }
+    .cost-row { display: grid; grid-template-columns: 62px minmax(0, 1fr) 44px; gap: 7px; align-items: center; color: var(--dim); font-size: 9.5px; }
+    .cost-row .bar { height: 4px; overflow: hidden; border-radius: 99px; background: var(--line-soft); }
+    .cost-row .bar span { display: block; width: var(--cost-width); height: 100%; background: var(--cost-color, var(--accent)); }
+    .cost-row b { color: var(--fg-soft); font: 9px var(--mono); text-align: right; }
+
+    /* Variant B — thread-first */
+    .thread-first { flex-direction: column; }
+    .thread-topbar { display: flex; min-height: 54px; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
+    .thread-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 58px 242px minmax(500px, 1fr) 296px; }
+    .provider-rail { display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 12px 0; border-right: 1px solid var(--line-soft); background: #0c0e11; }
+    .provider-rail button { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; }
+    .provider-rail button:hover, .provider-rail button.selected { border-color: var(--line); background: var(--surface-hover); }
+    .thread-list { display: flex; min-width: 0; min-height: 0; flex-direction: column; border-right: 1px solid var(--line-soft); background: var(--sidebar); }
+    .thread-list header { padding: 14px 13px 9px; }
+    .thread-list h2 { margin: 0; font-size: 14px; }
+    .thread-list input { width: 100%; height: 31px; margin-top: 10px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--fg); }
+    .thread-scroll { min-height: 0; flex: 1; overflow: auto; padding: 3px 7px 20px; }
+    .thread-item { width: 100%; padding: 10px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; }
+    .thread-item:hover { background: var(--surface-hover); }
+    .thread-item.selected { background: var(--surface-selected); }
+    .thread-item strong { display: block; overflow: hidden; color: var(--fg-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .thread-item span { display: flex; align-items: center; gap: 5px; margin-top: 4px; color: var(--faint); font-size: 10.5px; }
+    .conversation { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--bg); }
+    .conversation-header { display: flex; min-height: 58px; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid var(--line-soft); }
+    .conversation-header h1 { margin: 0; font-size: 15px; }
+    .conversation-header p { margin: 2px 0 0; color: var(--faint); font: 10px var(--mono); }
+    .messages { min-height: 0; flex: 1; overflow: auto; padding: 26px max(24px, calc((100% - 760px)/2)) 160px; }
+    .message { max-width: 760px; margin: 0 auto 24px; }
+    .message-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--faint); font-size: 11px; }
+    .avatar { display: grid; width: 23px; height: 23px; place-items: center; border-radius: 7px; background: var(--surface-raised); color: var(--accent); font: 700 10px var(--mono); }
+    .message-body { color: var(--fg-soft); font-size: 13.5px; line-height: 1.65; }
+    .message.user .message-body { padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); }
+    .tool-call { display: flex; align-items: center; gap: 9px; margin: 11px 0; padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); color: var(--dim); font: 11px var(--mono); }
+    .tool-call b { color: var(--live); }
+    .composer-wrap { position: absolute; right: 296px; bottom: 35px; left: 300px; z-index: 5; display: flex; justify-content: center; padding: 0 24px; pointer-events: none; }
+    .composer { width: min(760px, 100%); padding: 11px; border: 1px solid #3a404a; border-radius: 14px; background: #15181c; box-shadow: 0 18px 50px rgb(0 0 0 / 45%); pointer-events: auto; }
+    .composer textarea { width: 100%; height: 54px; resize: none; border: 0; outline: 0; background: transparent; color: var(--fg); }
+    .composer-controls { display: flex; align-items: center; gap: 7px; }
+    .provider-select { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); cursor: pointer; }
+    .provider-select .provider-mark { width: 20px; height: 20px; border-radius: 6px; font-size: 8px; }
+    .activity-drawer { min-width: 0; overflow: auto; border-left: 1px solid var(--line-soft); background: var(--surface); }
+    .activity-drawer > header { padding: 16px 14px 12px; border-bottom: 1px solid var(--line-soft); }
+    .activity-drawer h2 { margin: 0; font-size: 13px; }
+    .activity-drawer section { padding: 14px; border-bottom: 1px solid var(--line-soft); }
+    .activity-drawer h3 { margin: 0 0 10px; color: var(--faint); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+    .file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 5px 0; color: var(--dim); font: 10.5px var(--mono); }
+    .file-row span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .diff-plus { color: var(--live); }
+    .diff-minus { color: var(--error); }
+
+    /* Variant C — dispatch board */
+    .dispatch { flex-direction: column; background: #0b0d10; }
+    .dispatch-header { display: flex; min-height: 60px; align-items: center; gap: 16px; padding: 0 18px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
+    .dispatch-header nav { display: flex; gap: 2px; }
+    .dispatch-header nav button { padding: 6px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--faint); cursor: pointer; }
+    .dispatch-header nav button.active { background: var(--surface-selected); color: var(--fg); }
+    .dispatch-body { display: grid; min-height: 0; flex: 1; grid-template-columns: minmax(680px, 1fr) 320px; }
+    .board-area { min-width: 0; overflow: auto; padding: 18px 18px 60px; }
+    .board-heading { display: flex; align-items: end; gap: 10px; margin-bottom: 16px; }
+    .board-heading h1 { margin: 0; font-size: 18px; }
+    .board-heading p { margin: 3px 0 0; color: var(--faint); font-size: 11px; }
+    .kanban { display: grid; min-width: 850px; grid-template-columns: repeat(3, minmax(240px, 1fr)); gap: 12px; }
+    .kanban-column { min-height: 520px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 12px; background: rgb(17 19 22 / 48%); }
+    .column-header { display: flex; align-items: center; gap: 8px; padding: 2px 2px 11px; color: var(--dim); font-size: 11px; font-weight: 650; }
+    .column-header .count { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 5px; background: var(--surface-hover); color: var(--faint); font: 10px var(--mono); }
+    .task-card { margin-bottom: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 20px rgb(0 0 0 / 12%); }
+    .task-card:hover { border-color: #444b55; }
+    .task-card header { display: flex; align-items: center; gap: 8px; }
+    .task-card h3 { margin: 10px 0 6px; color: var(--fg-soft); font-size: 12.5px; }
+    .task-card p { margin: 0; color: var(--faint); font-size: 11px; }
+    .task-card footer { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+    .task-card .provider-mark { width: 23px; height: 23px; border-radius: 6px; font-size: 8px; }
+    .task-card .progress { height: 3px; margin: 11px 0 0; overflow: hidden; border-radius: 99px; background: var(--line-soft); }
+    .task-card .progress span { display: block; width: var(--progress); height: 100%; background: var(--live); }
+    .new-task-card { display: grid; width: 100%; min-height: 72px; place-items: center; border: 1px dashed #3a414b; border-radius: 9px; background: transparent; color: var(--faint); cursor: pointer; }
+    .new-task-card:hover { border-color: var(--accent); color: var(--accent); }
+    .fleet-panel { min-width: 0; overflow: auto; border-left: 1px solid var(--line-soft); background: var(--sidebar); }
+    .fleet-panel > header { padding: 17px 15px; border-bottom: 1px solid var(--line-soft); }
+    .fleet-panel h2 { margin: 0; font-size: 13px; }
+    .fleet-panel header p { margin: 3px 0 0; color: var(--faint); font-size: 10.5px; }
+    .fleet-panel section { padding: 14px 12px; border-bottom: 1px solid var(--line-soft); }
+    .harness-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 9px 5px; }
+    .harness-row strong, .harness-row span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .harness-row strong { color: var(--fg-soft); font-size: 12px; }
+    .harness-row span { color: var(--faint); font-size: 9.5px; }
+    .capacity-bar { height: 4px; margin-top: 7px; overflow: hidden; border-radius: 99px; background: var(--line-soft); }
+    .capacity-bar span { display: block; width: var(--capacity); height: 100%; background: var(--accent); }
+    .dispatch-log { padding: 8px 0 0; }
+    .dispatch-log div { padding: 7px 4px; border-bottom: 1px solid var(--line-soft); color: var(--dim); font-size: 10.5px; }
+    .dispatch-log time { display: inline-block; width: 42px; color: #717985; font: 9px var(--mono); }
+
+    /* Shared prototype switcher */
+    .prototype-switcher {
+      position: fixed;
+      z-index: 100;
+      bottom: 14px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px;
+      border: 1px solid #494f59;
+      border-radius: 999px;
+      background: #f4f6f8;
+      color: #121418;
+      box-shadow: 0 14px 40px rgb(0 0 0 / 55%);
+      transform: translateX(-50%);
+    }
+    .prototype-switcher button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #181b20; cursor: pointer; }
+    .prototype-switcher button:hover { background: #dfe3e8; }
+    .prototype-label { min-width: 215px; text-align: center; font-size: 12px; font-weight: 700; }
+    .prototype-label small { margin-left: 6px; color: #606873; font-weight: 500; }
+    .toast {
+      position: fixed;
+      z-index: 120;
+      top: 18px;
+      left: 50%;
+      padding: 9px 12px;
+      border: 1px solid #51476f;
+      border-radius: 8px;
+      background: #272238;
+      color: #ddd6ff;
+      box-shadow: 0 12px 30px rgb(0 0 0 / 35%);
+      font-size: 12px;
+      opacity: 0;
+      transform: translate(-50%, -10px);
+      transition: .16s ease;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 1050px) {
+      .cockpit-shell { grid-template-columns: 228px minmax(560px, 1fr); }
+      .control-panel { display: none; }
+      .agent-map-stage .canvas-grid { right: 0; left: 228px; }
+      .thread-layout { grid-template-columns: 58px 220px minmax(480px, 1fr); }
+      .activity-drawer { display: none; }
+      .composer-wrap { right: 0; left: 278px; }
+      .dispatch-body { grid-template-columns: 1fr; }
+      .fleet-panel { display: none; }
+    }
+    @media (max-width: 740px) {
+      .cockpit-shell { display: flex; }
+      .cockpit-sidebar { display: none; }
+      .cockpit-main { flex: 1; }
+      .run-metrics { grid-template-columns: repeat(3, minmax(90px, 1fr)); }
+      .run-metric:nth-child(3) { border-right: 0; }
+      .run-metric:nth-child(-n+3) { border-bottom: 1px solid var(--line-soft); }
+      .map-tree { min-width: 620px; }
+      .agent-map-stage .canvas-grid { left: 0; }
+      .thread-layout { grid-template-columns: 50px 1fr; }
+      .thread-list { display: none; }
+      .composer-wrap { left: 50px; padding: 0 10px; }
+      .dispatch-header nav { display: none; }
+      .state-strip { overflow: hidden; }
+      .state-strip span:nth-of-type(n+3) { display: none; }
+      .prototype-label { min-width: 170px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="prototype-root">
+    <!-- A: T3-style workspace with liveclaudecode's map, diagnostics, and cost depth -->
+    <section class="variant cockpit" data-variant="A" aria-label="Variant A, T3 observatory">
+      <div class="cockpit-shell">
+        <aside class="cockpit-sidebar">
+          <div class="brand-row">
+            <div class="app-brand"><span class="brand-mark">LC</span><span>liveclaudecode</span></div>
+          </div>
+          <div class="cockpit-sidebar-search">
+            <button aria-label="Search sessions">⌕ <span>Search</span><kbd>⌘K</kbd></button>
+          </div>
+          <div class="sidebar-actions" style="padding-top:4px">
+            <button class="launch-button" data-action="launch">＋ New thread</button>
+            <button class="icon-button" aria-label="Add project">＋</button>
+          </div>
+          <div class="session-list">
+            <div class="section-label" style="padding: 8px 8px 2px">Projects</div>
+            <div class="project-label">⌄ liveclaudecode <span class="spacer"></span><span class="pill live">3 live</span></div>
+            <button class="session-row selected">
+              <span class="provider-mark codex">CX</span>
+              <span class="session-copy"><strong>Meta-harness control plane</strong><span><span class="dot live"></span> Working · 3 subagents</span></span>
+              <span class="session-time">now</span>
+            </button>
+            <button class="session-row">
+              <span class="provider-mark claude">CL</span>
+              <span class="session-copy"><strong>Review Effect services</strong><span>Needs input · Claude</span></span>
+              <span class="session-time">2m</span>
+            </button>
+            <button class="session-row">
+              <span class="provider-mark copilot">CP</span>
+              <span class="session-copy"><strong>Fix browser smoke test</strong><span>Working · Copilot</span></span>
+              <span class="session-time">8m</span>
+            </button>
+            <div class="project-label">⌄ t3code <span class="spacer"></span><span class="muted">1</span></div>
+            <button class="session-row">
+              <span class="provider-mark opencode">OC</span>
+              <span class="session-copy"><strong>Inspect provider registry</strong><span>OpenCode · completed</span></span>
+              <span class="session-time">1h</span>
+            </button>
+            <div class="project-label">› effect <span class="spacer"></span><span class="muted">4</span></div>
+            <div class="project-label">› experiments <span class="spacer"></span><span class="muted">2</span></div>
+          </div>
+          <div style="padding:9px;border-top:1px solid var(--line-soft);display:flex;gap:6px"><button class="quiet-button" style="flex:1;justify-content:flex-start">⚙ Settings</button><button class="icon-button" aria-label="Costs">$</button></div>
+        </aside>
+
+        <section class="cockpit-main">
+          <header class="cockpit-header">
+            <div class="cockpit-title"><strong>Meta-harness control plane</strong><span>liveclaudecode · main · codex/default</span></div>
+            <span class="spacer"></span>
+            <div class="header-action-group"><button class="quiet-button">＋ Add action</button><button class="quiet-button">◇ Open⌄</button><button class="quiet-button">⌁ Commit &amp; push⌄</button><button class="icon-button" aria-label="Terminal">▣</button><button class="icon-button" aria-label="More">•••</button></div>
+          </header>
+          <nav class="view-tabs" aria-label="Session views">
+            <button class="view-tab">Conversation</button>
+            <button class="view-tab active">Agent map</button>
+            <button class="view-tab">Activity</button>
+            <button class="view-tab">Changes <span class="mono">6</span></button>
+            <button class="view-tab">Diagnostics <span class="mono">1</span></button>
+          </nav>
+          <div class="run-metrics" aria-label="Run totals">
+            <div class="run-metric"><span>Status</span><strong class="good">● Running</strong></div>
+            <div class="run-metric"><span>Agents</span><strong>4 · 3 live</strong></div>
+            <div class="run-metric"><span>Estimated cost</span><strong class="cost">$1.84</strong></div>
+            <div class="run-metric"><span>Tokens</span><strong>118.0k</strong></div>
+            <div class="run-metric"><span>Duration</span><strong>12m 42s</strong></div>
+            <div class="run-metric"><span>Changed work</span><strong>6 files · +184</strong></div>
+          </div>
+          <div class="observatory-workspace">
+            <div class="map-toolbar"><span><b style="color:var(--fg-soft)">4 agents</b> across 3 harnesses</span><span class="spacer"></span><button class="quiet-button">Fit</button><button class="quiet-button">Live only</button><button class="quiet-button">Cost overlay⌄</button></div>
+            <div class="agent-map-stage">
+              <div class="canvas-grid"></div>
+              <div class="map-tree">
+                <div class="map-root">
+                  <article class="agent-card primary">
+                    <header><span class="provider-mark codex">CX</span><div><h3>Primary agent</h3><span class="muted mono">codex/default · gpt-5.6</span></div><span class="spacer"></span><span class="pill live">running</span></header>
+                    <p class="agent-task">Design the provider-neutral control plane and coordinate three specialist workstreams.</p>
+                    <div class="agent-metrics"><div><span>Tokens</span><b>62.4k</b></div><div><span>Cost</span><b>$0.92</b></div><div><span>Duration</span><b>12m42</b></div><div><span>Children</span><b>3</b></div></div>
+                    <div class="agent-current"><span class="dot live"></span><b>thinking</b><span>merging architecture findings</span></div>
+                  </article>
+                </div>
+                <div class="branch-stem"></div>
+                <div class="map-children">
+                  <div class="map-child">
+                    <article class="agent-card selected">
+                      <header><span class="provider-mark claude">CL</span><div><h3>Architecture review</h3><span class="muted mono">claude/work · sonnet</span></div><span class="spacer"></span><span class="dot waiting"></span></header>
+                      <p class="agent-task">Compare provider adapter capabilities and session ownership.</p>
+                      <div class="agent-metrics"><div><span>Tokens</span><b>31.8k</b></div><div><span>Cost</span><b>$0.51</b></div><div><span>Duration</span><b>6m10</b></div><div><span>Files</span><b>0</b></div></div>
+                      <div class="agent-current"><span class="dot waiting"></span><b style="color:var(--warning)">approval</b><span>read private fixture</span></div>
+                    </article>
+                  </div>
+                  <div class="map-child">
+                    <article class="agent-card">
+                      <header><span class="provider-mark copilot">CP</span><div><h3>Test scout</h3><span class="muted mono">copilot/default</span></div><span class="spacer"></span><span class="dot live"></span></header>
+                      <p class="agent-task">Find ACP and browser integration coverage, then flag gaps.</p>
+                      <div class="agent-metrics"><div><span>Tokens</span><b>9.6k</b></div><div><span>Cost</span><b>$0.12</b></div><div><span>Duration</span><b>3m42</b></div><div><span>Files</span><b>2</b></div></div>
+                      <div class="agent-current"><span class="dot live"></span><b>terminal</b><span>pnpm test:nuxt</span></div>
+                    </article>
+                  </div>
+                  <div class="map-child">
+                    <article class="agent-card">
+                      <header><span class="provider-mark codex">CX</span><div><h3>Contract draft</h3><span class="muted mono">codex/reviewer · gpt-5.6</span></div><span class="spacer"></span><span class="dot live"></span></header>
+                      <p class="agent-task">Draft canonical command and event schemas for all harnesses.</p>
+                      <div class="agent-metrics"><div><span>Tokens</span><b>14.2k</b></div><div><span>Cost</span><b>$0.29</b></div><div><span>Duration</span><b>5m02</b></div><div><span>Files</span><b>4</b></div></div>
+                      <div class="agent-current"><span class="dot live"></span><b>write</b><span>shared/schemas/runtime.ts</span></div>
+                    </article>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="cockpit-composer-wrap">
+              <div class="cockpit-composer">
+                <textarea aria-label="Follow-up prompt" placeholder="Ask for follow-up changes or attach files…"></textarea>
+                <div class="composer-controls"><button class="provider-select"><span class="provider-mark codex">CX</span>Codex / default⌄</button><button class="quiet-button">gpt-5.6⌄</button><button class="quiet-button">High⌄</button><button class="quiet-button">Build⌄</button><button class="quiet-button">Full access⌄</button><span class="spacer"></span><span class="muted mono">64%</span><button class="primary-button" data-action="send">↑</button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="control-panel">
+          <header><div class="inspector-agent-title"><span class="provider-mark claude">CL</span><div><strong>Architecture review</strong><small>claude/work · selected agent</small></div></div><span class="spacer"></span><button class="icon-button" aria-label="Close panel">×</button></header>
+          <div class="control-panel-content">
+            <div class="inspector-summary"><span class="pill warn">Waiting for approval</span><p>Wants to inspect a private fixture while comparing adapter boundaries. The other agents keep running.</p></div>
+            <section class="control-section">
+              <h3>Agent data</h3>
+              <div class="inspector-grid"><div><span>Estimated cost</span><strong>$0.51</strong></div><div><span>Tokens</span><strong>31,842</strong></div><div><span>Tool calls</span><strong>18</strong></div><div><span>Context</span><strong>41%</strong></div><div><span>Duration</span><strong>6m 10s</strong></div><div><span>Errors</span><strong style="color:var(--warning)">1 warning</strong></div></div>
+            </section>
+            <section class="control-section">
+              <h3>Cost by agent</h3>
+              <div class="cost-breakdown"><div class="cost-row"><span>Primary</span><span class="bar"><span style="--cost-width:100%"></span></span><b>$0.92</b></div><div class="cost-row"><span>Architect</span><span class="bar"><span style="--cost-width:55%;--cost-color:var(--claude)"></span></span><b>$0.51</b></div><div class="cost-row"><span>Contracts</span><span class="bar"><span style="--cost-width:32%;--cost-color:var(--codex)"></span></span><b>$0.29</b></div><div class="cost-row"><span>Tests</span><span class="bar"><span style="--cost-width:13%;--cost-color:var(--copilot)"></span></span><b>$0.12</b></div></div>
+            </section>
+            <section class="control-section">
+              <h3>Selected agent activity</h3>
+              <div class="timeline-item"><b>Approval requested</b><span class="mono">read · test/fixtures/private.jsonl</span></div>
+              <div class="timeline-item"><b>Compared contracts</b><span>Found 5 shared operations and 2 capability gaps.</span></div>
+              <div class="timeline-item"><b>Read provider docs</b><span class="mono">docs/internals/providers.md</span></div>
+            </section>
+            <section class="control-section"><h3>Actions</h3><div class="action-grid"><button class="primary-button" data-action="followup">Allow once</button><button class="quiet-button">Deny</button><button class="quiet-button" data-action="fork">⑂ Fork agent</button><button class="danger-button" data-action="interrupt">■ Stop agent</button></div></section>
+          </div>
+        </aside>
+      </div>
+      <div class="state-strip"><b>Visible state</b><span>thread=<b>mh_01</b></span><span>view=<b>agent-map</b></span><span>selectedAgent=<b>architecture-review</b></span><span>cost=<b>$1.84</b></span><span>lastCommand=<b class="command" data-last-command>thread.turn.start</b></span><span class="spacer"></span><span>managed · 3 harnesses</span></div>
+    </section>
+
+    <!-- B: T3-like conversation surface with provider selection at dispatch time -->
+    <section class="variant thread-first" data-variant="B" aria-label="Variant B, thread-first workspace">
+      <header class="thread-topbar">
+        <div class="app-brand"><span class="brand-mark">LC</span><span>liveclaudecode</span></div>
+        <span class="divider"></span>
+        <span class="dim">One conversation surface, explicit harness binding</span>
+        <span class="spacer"></span>
+        <button class="quiet-button">⌕ Search</button><button class="primary-button" data-action="launch">＋ New thread</button>
+      </header>
+      <div class="thread-layout">
+        <nav class="provider-rail" aria-label="Harness filter">
+          <button class="selected" data-provider="all" aria-label="All harnesses"><span class="provider-mark all">ALL</span></button>
+          <button data-provider="codex" aria-label="Codex"><span class="provider-mark codex">CX</span></button>
+          <button data-provider="claude" aria-label="Claude"><span class="provider-mark claude">CL</span></button>
+          <button data-provider="copilot" aria-label="Copilot"><span class="provider-mark copilot">CP</span></button>
+          <button data-provider="opencode" aria-label="OpenCode"><span class="provider-mark opencode">OC</span></button>
+          <span class="spacer"></span><button aria-label="Settings">⚙</button>
+        </nav>
+        <aside class="thread-list">
+          <header><h2>Threads</h2><input aria-label="Filter threads" placeholder="Filter threads…"></header>
+          <div class="thread-scroll">
+            <div class="section-label" style="padding: 8px 10px">Running</div>
+            <button class="thread-item selected"><strong>Meta-harness control plane</strong><span><span class="dot live"></span> Codex · now</span></button>
+            <button class="thread-item"><strong>Review Effect services</strong><span><span class="dot waiting"></span> Claude · approval</span></button>
+            <button class="thread-item"><strong>Fix browser smoke test</strong><span><span class="dot live"></span> Copilot · 8m</span></button>
+            <div class="section-label" style="padding: 16px 10px 8px">Recent</div>
+            <button class="thread-item"><strong>Inspect provider registry</strong><span><span class="dot idle"></span> OpenCode · 1h</span></button>
+            <button class="thread-item"><strong>Refactor transcript scanner</strong><span><span class="dot idle"></span> Claude · yesterday</span></button>
+          </div>
+        </aside>
+        <section class="conversation">
+          <header class="conversation-header">
+            <div><h1>Meta-harness control plane</h1><p>liveclaudecode · main · managed by codex/default</p></div>
+            <span class="spacer"></span><span class="pill live">running</span><button class="icon-button" data-action="interrupt" aria-label="Interrupt">■</button><button class="icon-button" aria-label="More">•••</button>
+          </header>
+          <div class="messages">
+            <article class="message user"><div class="message-header"><span class="avatar">YOU</span><b>You</b><span>10:31</span></div><div class="message-body">Make liveclaudecode one UI that can observe and control different agent harnesses, without losing the agent map and diagnostics.</div></article>
+            <article class="message"><div class="message-header"><span class="provider-mark codex">CX</span><b>Codex</b><span>10:31</span><span class="pill accent">gpt-5.6</span></div><div class="message-body">I’ll keep the UI provider-neutral and bind each managed thread to an exact harness instance. “Switch harness” should create a fork with a portable context packet; it should not pretend two provider-native sessions are one session.</div><div class="tool-call"><b>✓</b><span>Read</span><span class="muted">server/utils/chat.ts</span><span class="spacer"></span><span>4.2s</span></div><div class="tool-call"><b>●</b><span>Designing</span><span class="muted">HarnessDriver + canonical events</span><span class="spacer"></span><span>now</span></div></article>
+          </div>
+        </section>
+        <aside class="activity-drawer">
+          <header><h2>Thread context</h2></header>
+          <section><h3>Harness</h3><div class="runtime-card"><header><span class="provider-mark codex">CX</span><div><strong>Codex — default</strong><small>full access · local</small></div></header><div class="capabilities"><span class="capability">resume</span><span class="capability">diff</span><span class="capability">subagents</span></div></div></section>
+          <section><h3>Changes</h3><div class="file-row"><span>server/utils/harness.ts</span><span><b class="diff-plus">+84</b></span></div><div class="file-row"><span>shared/schemas/runtime.ts</span><span><b class="diff-plus">+61</b> <b class="diff-minus">−4</b></span></div><div class="file-row"><span>app/components/RunControl.vue</span><span><b class="diff-plus">+39</b></span></div></section>
+          <section><h3>Portable context</h3><p class="dim" style="font-size:11px">Prompt summary, referenced files, current diff, plan, and explicit user instructions can be copied into a new harness fork.</p><button class="quiet-button" style="width:100%" data-action="fork">⑂ Fork with context…</button></section>
+        </aside>
+      </div>
+      <div class="composer-wrap">
+        <div class="composer">
+          <textarea aria-label="Follow-up prompt" placeholder="Ask for a change, approval, or follow-up…"></textarea>
+          <div class="composer-controls">
+            <button class="provider-select" data-action="cycle-provider"><span class="provider-mark codex" data-composer-provider-mark>CX</span><span data-composer-provider>Codex / default</span><span>⌄</span></button>
+            <button class="quiet-button">gpt-5.6 ⌄</button><button class="quiet-button">Full access ⌄</button><span class="spacer"></span><span class="muted mono">⌘↵</span><button class="primary-button" data-action="send">↑ Send</button>
+          </div>
+        </div>
+      </div>
+      <div class="state-strip"><b>Visible state</b><span>draftTarget=<b data-draft-target>codex_default</b></span><span>threadOwner=<b>codex_default</b></span><span>switchBehavior=<b>fork</b></span><span>lastCommand=<b class="command" data-last-command>idle</b></span><span class="spacer"></span><span>provider chosen when thread starts</span></div>
+    </section>
+
+    <!-- C: multi-project dispatch/orchestration board -->
+    <section class="variant dispatch" data-variant="C" aria-label="Variant C, dispatch board">
+      <header class="dispatch-header">
+        <div class="app-brand"><span class="brand-mark">LC</span><span>liveclaudecode</span></div><span class="divider"></span>
+        <nav><button class="active">Dispatch</button><button>Sessions</button><button>Agents</button><button>Changes</button><button>Costs</button></nav>
+        <span class="spacer"></span><span class="pill live"><span class="dot live"></span> Local runtime</span><button class="quiet-button">⚙ Harnesses</button><button class="primary-button" data-action="launch">＋ Dispatch task</button>
+      </header>
+      <div class="dispatch-body">
+        <section class="board-area">
+          <header class="board-heading"><div><h1>Work dispatch</h1><p>Tasks are the stable product object; harness sessions are replaceable workers.</p></div><span class="spacer"></span><button class="quiet-button">All projects ⌄</button><button class="quiet-button">All harnesses ⌄</button></header>
+          <div class="kanban">
+            <section class="kanban-column">
+              <header class="column-header"><span class="dot idle"></span> Queued <span class="count">2</span><span class="spacer"></span>•••</header>
+              <article class="task-card"><header><span class="pill">liveclaudecode</span><span class="spacer"></span><span class="mono muted">#104</span></header><h3>Add canonical runtime schemas</h3><p>Ready for any adapter with schema + contract capability.</p><footer><span class="provider-mark all">?</span><span class="muted">auto-select fastest ready</span></footer></article>
+              <article class="task-card"><header><span class="pill">docs</span><span class="spacer"></span><span class="mono muted">#105</span></header><h3>Document session ownership</h3><p>Observer, attached, and managed modes.</p><footer><span class="provider-mark claude">CL</span><span class="muted">preferred</span></footer></article>
+              <button class="new-task-card" data-action="launch">＋ Add task</button>
+            </section>
+            <section class="kanban-column">
+              <header class="column-header"><span class="dot live"></span> Running <span class="count">3</span><span class="spacer"></span>•••</header>
+              <article class="task-card"><header><span class="pill accent">architecture</span><span class="spacer"></span><span class="pill live">running</span></header><h3>Meta-harness control plane</h3><p>Driver registry, commands, events, and capability negotiation.</p><div class="progress"><span style="--progress:68%"></span></div><footer><span class="provider-mark codex">CX</span><span class="muted">Codex / default</span><span class="spacer"></span><button class="icon-button" data-action="interrupt" aria-label="Stop">■</button></footer></article>
+              <article class="task-card"><header><span class="pill warn">needs input</span><span class="spacer"></span><span class="mono muted">2m</span></header><h3>Review Effect service boundaries</h3><p>Waiting for permission to inspect a private fixture.</p><div class="progress"><span style="--progress:42%"></span></div><footer><span class="provider-mark claude">CL</span><span class="muted">Claude / work</span><span class="spacer"></span><button class="quiet-button">Review</button></footer></article>
+              <article class="task-card"><header><span class="pill">tests</span><span class="spacer"></span><span class="pill live">running</span></header><h3>Browser smoke coverage</h3><p>Verifying provider filtering and interrupt controls.</p><div class="progress"><span style="--progress:24%"></span></div><footer><span class="provider-mark copilot">CP</span><span class="muted">Copilot / default</span></footer></article>
+            </section>
+            <section class="kanban-column">
+              <header class="column-header"><span class="dot idle"></span> Done <span class="count">2</span><span class="spacer"></span>•••</header>
+              <article class="task-card"><header><span class="pill live">completed</span><span class="spacer"></span><span class="mono muted">34m</span></header><h3>Inspect t3code provider registry</h3><p>Found driver SPI, exact instance routing, and canonical event stream.</p><footer><span class="provider-mark opencode">OC</span><span class="muted">OpenCode / local</span><span class="spacer"></span><span class="diff-plus mono">+ notes</span></footer></article>
+              <article class="task-card"><header><span class="pill live">completed</span><span class="spacer"></span><span class="mono muted">1h</span></header><h3>Inventory existing ACP support</h3><p>Claude, Codex, and Copilot launchers already exist in Ask.</p><footer><span class="provider-mark codex">CX</span><span class="muted">Codex / default</span></footer></article>
+            </section>
+          </div>
+        </section>
+        <aside class="fleet-panel">
+          <header><h2>Harness fleet</h2><p>Configured instances, readiness, and capacity</p></header>
+          <section>
+            <div class="harness-row"><span class="provider-mark codex">CX</span><div><strong>Codex — default</strong><span>2 running · full capability</span><div class="capacity-bar"><span style="--capacity:66%"></span></div></div><span class="dot live"></span></div>
+            <div class="harness-row"><span class="provider-mark claude">CL</span><div><strong>Claude — work</strong><span>1 waiting · ACP adapter</span><div class="capacity-bar"><span style="--capacity:35%"></span></div></div><span class="dot waiting"></span></div>
+            <div class="harness-row"><span class="provider-mark copilot">CP</span><div><strong>Copilot — default</strong><span>1 running · ACP native</span><div class="capacity-bar"><span style="--capacity:28%"></span></div></div><span class="dot live"></span></div>
+            <div class="harness-row"><span class="provider-mark opencode">OC</span><div><strong>OpenCode — local</strong><span>ready · no active task</span><div class="capacity-bar"><span style="--capacity:4%"></span></div></div><span class="dot live"></span></div>
+          </section>
+          <section><div class="section-label">Dispatch policy</div><p class="dim" style="font-size:11px">Respect explicit choice. Otherwise select a ready instance that supports every required capability; never silently downgrade permissions.</p><button class="quiet-button" style="width:100%">Edit policy</button></section>
+          <section><div class="section-label">Recent control events</div><div class="dispatch-log"><div><time>10:42</time> <b>turn.start</b> → codex_default</div><div><time>10:40</time> <b>approval.opened</b> ← claude_work</div><div><time>10:38</time> <b>session.started</b> ← copilot_default</div><div><time>10:31</time> <b>instance.ready</b> ← opencode_local</div></div></section>
+        </aside>
+      </div>
+      <div class="state-strip"><b>Visible state</b><span>task=<b>mh_01</b></span><span>route=<b>codex_default</b></span><span>policy=<b>explicit-or-capable</b></span><span>lastCommand=<b class="command" data-last-command>task.dispatched</b></span><span class="spacer"></span><span>task survives harness fork</span></div>
+    </section>
+  </main>
+
+  <div class="toast" role="status" aria-live="polite"></div>
+  <nav class="prototype-switcher" aria-label="Prototype variants">
+    <button type="button" data-switch="previous" aria-label="Previous variant">←</button>
+    <div class="prototype-label"><span data-variant-label>A — T3 observatory</span><small>← →</small></div>
+    <button type="button" data-switch="next" aria-label="Next variant">→</button>
+  </nav>
+
+  <script>
+    const variants = [
+      { key: 'A', name: 'T3 observatory' },
+      { key: 'B', name: 'Thread-first workspace' },
+      { key: 'C', name: 'Dispatch board' },
+    ];
+    let current = 'A';
+    let toastTimer;
+    const providerCycle = [
+      { id: 'codex_default', label: 'Codex / default', mark: 'CX', className: 'codex' },
+      { id: 'claude_work', label: 'Claude / work', mark: 'CL', className: 'claude' },
+      { id: 'copilot_default', label: 'Copilot / default', mark: 'CP', className: 'copilot' },
+      { id: 'opencode_local', label: 'OpenCode / local', mark: 'OC', className: 'opencode' },
+    ];
+    let providerIndex = 0;
+
+    function variantFromUrl() {
+      const requested = new URLSearchParams(location.search).get('variant');
+      return variants.some((variant) => variant.key === requested) ? requested : 'A';
+    }
+
+    function renderVariant(key, updateUrl = true) {
+      current = key;
+      document.querySelectorAll('[data-variant]').forEach((section) => {
+        section.classList.toggle('active', section.dataset.variant === key);
+      });
+      const info = variants.find((variant) => variant.key === key);
+      document.querySelector('[data-variant-label]').textContent = `${info.key} — ${info.name}`;
+      document.title = `liveclaudecode prototype — ${info.name}`;
+      if (updateUrl) {
+        const url = new URL(location.href);
+        url.searchParams.set('variant', key);
+        history.replaceState({}, '', url);
+      }
+    }
+
+    function cycleVariant(direction) {
+      const index = variants.findIndex((variant) => variant.key === current);
+      const next = (index + direction + variants.length) % variants.length;
+      renderVariant(variants[next].key);
+    }
+
+    function showToast(message) {
+      const toast = document.querySelector('.toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1600);
+    }
+
+    function setLastCommand(command) {
+      const active = document.querySelector(`[data-variant="${current}"]`);
+      active?.querySelectorAll('[data-last-command]').forEach((node) => { node.textContent = command; });
+    }
+
+    document.querySelector('[data-switch="previous"]').addEventListener('click', () => cycleVariant(-1));
+    document.querySelector('[data-switch="next"]').addEventListener('click', () => cycleVariant(1));
+    document.addEventListener('keydown', (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable)) return;
+      if (event.key === 'ArrowLeft') cycleVariant(-1);
+      if (event.key === 'ArrowRight') cycleVariant(1);
+    });
+
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
+      const commands = {
+        launch: 'thread.create',
+        interrupt: 'thread.turn.interrupt',
+        followup: 'thread.turn.start',
+        fork: 'thread.fork.create',
+        send: 'thread.turn.start',
+      };
+      if (action === 'cycle-provider') {
+        providerIndex = (providerIndex + 1) % providerCycle.length;
+        const provider = providerCycle[providerIndex];
+        const label = document.querySelector('[data-composer-provider]');
+        const mark = document.querySelector('[data-composer-provider-mark]');
+        const target = document.querySelector('[data-draft-target]');
+        label.textContent = provider.label;
+        mark.textContent = provider.mark;
+        mark.className = `provider-mark ${provider.className}`;
+        target.textContent = provider.id;
+        setLastCommand('draft.target.changed');
+        showToast(`New threads will use ${provider.label}`);
+        return;
+      }
+      const command = commands[action] || action;
+      setLastCommand(command);
+      showToast(`${command} — prototype only, no process started`);
+    });
+
+    document.querySelectorAll('[data-provider]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-provider]').forEach((item) => item.classList.remove('selected'));
+        button.classList.add('selected');
+        showToast(`Thread list filtered by ${button.dataset.provider}`);
+      });
+    });
+
+    renderVariant(variantFromUrl(), false);
+  </script>
+</body>
+</html>

@@ -199,6 +199,9 @@ test/
   e2e/              built server/API integration tests with synthetic JSONL
   browser/          production hydration, accessibility, and keyboard smoke tests
   fixtures/         synthetic Claude, Codex, and Copilot transcript builders
+bin/                CLI launcher
+docs/               design and discovery notes
+repos/              vendored read-only reference sources (Effect)
 ```
 
 The provider transcript scans cache each parsed file and ingest only
@@ -224,15 +227,17 @@ transcripts. Static, edge, or remote deployments cannot read them.
 ## Development and testing
 
 ```bash
-pnpm dev          # Nuxt development server
-pnpm test         # all Vitest projects
-pnpm test:unit    # schemas, parsers, hierarchy, catalog, filters, CLI
-pnpm test:nuxt    # Nuxt-mounted component behavior
-pnpm test:e2e     # real Nitro endpoints with synthetic JSONL fixtures
-pnpm test:browser # production Chromium smoke test with synthetic JSONL
-pnpm test:types   # strict Nuxt/Vue TypeScript checks
-pnpm build        # production Node server build
-pnpm check        # tests, typecheck, production build, and browser smoke test
+pnpm dev                   # Nuxt development server
+pnpm lint                  # ESLint (lint:fix to autofix)
+pnpm test                  # all Vitest projects
+pnpm test:unit             # schemas, parsers, hierarchy, catalog, filters, CLI
+pnpm test:nuxt             # Nuxt-mounted component behavior
+pnpm test:e2e              # real Nitro endpoints with synthetic JSONL fixtures
+pnpm test:browser          # production Chromium smoke test with synthetic JSONL
+pnpm test:browser:prebuilt # browser smoke test against an existing build
+pnpm test:types            # strict Nuxt/Vue TypeScript checks, incl. test sources
+pnpm build                 # production Node server build
+pnpm check                 # lint, tests, typecheck, build, and browser smoke test
 ```
 
 Automated tests never depend on private real sessions. They construct synthetic

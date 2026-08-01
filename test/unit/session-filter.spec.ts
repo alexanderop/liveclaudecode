@@ -1,5 +1,5 @@
 import { assert, describe, it } from '@effect/vitest'
-import { filterSessionProjects } from '~/utils/session-filter'
+import { compareRoots, filterSessionProjects } from '~/utils/session-filter'
 import type { ProjectRuns, RunNode, SessionSource } from '#shared/types/run'
 
 function run(
@@ -171,5 +171,21 @@ describe('combined session filters', () => {
       ['five', 5],
       ['three', 3],
     ])
+  })
+})
+
+describe('compareRoots', () => {
+  const older = run('older', 'claude', 'Older', { last: '2026-07-26T08:00:00.000Z' })
+  const newer = run('newer', 'claude', 'Newer', { last: '2026-07-28T08:00:00.000Z' })
+  const busy = run('busy', 'claude', 'Busy', { subagents: 4, last: '2026-07-25T08:00:00.000Z' })
+
+  it('orders by recency for the updated sort', () => {
+    assert.deepStrictEqual([older, busy, newer].sort((a, b) => compareRoots(a, b, 'updated'))
+      .map(root => root.key), ['newer', 'older', 'busy'])
+  })
+
+  it('orders by subagent count first for the subagents sort, then recency', () => {
+    assert.deepStrictEqual([older, busy, newer].sort((a, b) => compareRoots(a, b, 'subagents'))
+      .map(root => root.key), ['busy', 'newer', 'older'])
   })
 })

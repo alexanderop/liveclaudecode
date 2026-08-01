@@ -2,11 +2,12 @@
 
 ## Purpose
 
-`liveclaudecode` is a local, read-only Nuxt dashboard for observing a running
-Claude Code session and its subagents. It reads Claude Code JSONL transcripts
-from disk and presents the run hierarchy, timeline, activity, diagnostics, and
-changed files. It must remain useful without telemetry or runtime network
-access. See `README.md` for the product behavior and transcript model.
+`liveclaudecode` is a local, read-only Nuxt dashboard for observing running
+Claude Code, OpenAI Codex, GitHub Copilot CLI, and VS Code Copilot Chat
+sessions and their subagents. It reads session transcripts from disk and
+presents the run hierarchy, timeline, activity, diagnostics, and changed
+files. It must remain useful without telemetry or runtime network access. See
+`README.md` for the product behavior and transcript model.
 
 ## Repository map
 
@@ -30,9 +31,13 @@ Generated directories such as `.nuxt/` and `.output/` are not source code.
 - Inspect the nearest implementation and tests before changing behavior.
 - Keep the server read-only with respect to Claude transcript data.
 - Run the narrowest relevant test while iterating. Before handing off a change,
-  run `pnpm check` when practical; it runs tests, typechecking, and the build.
-- Useful narrower commands are `pnpm test:unit`, `pnpm test:nuxt`,
+  run `pnpm check` when practical; it runs linting, tests, typechecking, and
+  the build.
+- Useful narrower commands are `pnpm lint`, `pnpm test:unit`, `pnpm test:nuxt`,
   `pnpm test:e2e`, `pnpm test:types`, and `pnpm build`.
+- `pnpm test:types` checks the Nuxt projects and, via `tsconfig.test.json`,
+  the plain-node test sources (`test/unit`, `test/e2e`, `test/fixtures`,
+  `test/browser`, Playwright config). Keep test code typecheck-clean too.
 
 ## Architecture boundaries
 
@@ -51,6 +56,39 @@ Generated directories such as `.nuxt/` and `.output/` are not source code.
 - Domain failures belong in the typed error channel as
   `Schema.TaggedErrorClass` values. `server/utils/runtime.ts` is the sole place
   that translates those failures to h3 errors; keep its mapping exhaustive.
+
+## Composables (`app/composables/**`)
+
+Follow VueUse conventions:
+
+- Keep composables single-purpose and composed from smaller pieces; pure logic
+  (request gating, cursors, tree walks, caches) lives in `app/utils/**` where
+  it gets plain unit tests without mounting.
+- Use `shallowRef` by default. Reach for a deep `ref` only when deep
+  reactivity is intentional, and treat arrays/objects held in `shallowRef` as
+  immutable — replace, never mutate in place.
+- Export `UseXOptions` and `UseXReturn` interfaces with JSDoc on every option
+  (including `@default`) and every returned field. Options objects are the
+  last parameter, defaulted to `{}`, and destructured once at the top.
+- Expose outputs via `shallowReadonly`; only intentional inputs (filters,
+  toggles, ranges) stay writable. Long-running work should expose
+  `pause`/`resume` controls.
+- Register side effects with scope disposal (`tryOnScopeDispose`) inside the
+  composable that created them; no manual teardown lists in consumers.
+- Provide/inject pairs live together in one composable file
+  (`provideX` + `useX`), never a bare key wired up by hand in a component.
+
+## Composable and component tests
+
+- Assert on the composable's returned refs directly; do not serialize state
+  into DOM attributes.
+- Stub the dashboard API with `mockLiveApi()` from `test/fixtures/live-api.ts`
+  and build data with the `test/fixtures/runs.ts` builders; use `deferred()`
+  from `test/fixtures/deferred.ts` for stale-response races instead of inline
+  promise wiring.
+- Unmount in `afterEach` (never as the last line of a test), pair
+  `vi.useFakeTimers` with cleanup, and prefer `vi.advanceTimersByTimeAsync`
+  so reactivity settles.
 
 ## Effect v4
 
