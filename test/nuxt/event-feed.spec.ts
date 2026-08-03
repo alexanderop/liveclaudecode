@@ -29,6 +29,66 @@ describe('EventFeed', () => {
     expect(wrapper.findAll('.markdown-body li').map(item => item.text())).toEqual(['One', 'Two'])
   })
 
+  it('syntax highlights fenced code in assistant Markdown', async () => {
+    const wrapper = component = await mountSuspended(EventFeed, {
+      props: {
+        events: [transcriptEvent('Here is the fix:\n\n```ts\nconst answer = 42\n```\n')],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+    await vi.waitFor(() => expect(wrapper.find('.markdown-body .code-block-body').exists()).toBe(true))
+
+    const shiki = wrapper.get('.markdown-body .code-block-body pre')
+    expect(shiki.classes()).toContain('shiki')
+    expect(shiki.text()).toBe('const answer = 42')
+    expect(shiki.findAll('span[style]').length).toBeGreaterThan(1)
+  })
+
+  it('renders a fence with no language as plain text', async () => {
+    const wrapper = component = await mountSuspended(EventFeed, {
+      props: {
+        events: [transcriptEvent('```\njust some output\n```\n')],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+    await vi.waitFor(() => expect(wrapper.find('.markdown-body .code-block-body').exists()).toBe(true))
+
+    expect(wrapper.get('.markdown-body .code-block-body').text()).toBe('just some output')
+  })
+
+  it('renders an edit tool call as a diff of the edited file', async () => {
+    const wrapper = component = await mountSuspended(EventFeed, {
+      props: {
+        events: [transcriptEvent('', {
+          kind: 'tool_use',
+          tool: 'Edit',
+          summary: 'app/utils/format.ts',
+          input: JSON.stringify(
+            { file_path: 'app/utils/format.ts', old_string: 'const a = 1', new_string: 'const a = 2' },
+            null,
+            2,
+          ),
+        })],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+    await flushPromises()
+
+    const details = wrapper.get('details').element as HTMLDetailsElement
+    details.open = true
+    await wrapper.get('details').trigger('toggle')
+    await vi.waitFor(() => expect(wrapper.find('.code-block-body').exists()).toBe(true))
+
+    expect(wrapper.get('.line-remove').text()).toBe('const a = 1')
+    expect(wrapper.get('.line-add').text()).toBe('const a = 2')
+  })
+
   it('keeps dangerous Markdown links inert', async () => {
     const wrapper = component = await mountSuspended(EventFeed, {
       props: {

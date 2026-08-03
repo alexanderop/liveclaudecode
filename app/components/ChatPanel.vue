@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import security from '@comark/nuxt/plugins/security'
 import type { ChatAgentId } from '#shared/types/chat'
+import CodeBlock from '~/components/CodeBlock.vue'
 import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
 
 const props = defineProps<{
@@ -21,7 +22,7 @@ const markdownPlugins = [
     allowedProtocols: ['http', 'https', 'mailto'],
   }),
 ]
-const markdownComponents = { a: TranscriptMarkdownLink }
+const markdownComponents = { a: TranscriptMarkdownLink, pre: CodeBlock }
 const agents: ReadonlyArray<{ id: ChatAgentId, label: string }> = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex' },

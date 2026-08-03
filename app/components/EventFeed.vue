@@ -2,6 +2,7 @@
 import security from '@comark/nuxt/plugins/security'
 import type { TranscriptEvent } from '#shared/types/run'
 import type { FeedDensity } from '~/composables/useLiveRuns'
+import CodeBlock from '~/components/CodeBlock.vue'
 import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
 import { parseTimestamp } from '~/utils/format'
 import { toolUseIcon, toolUseLabel } from '~/utils/tool-display'
@@ -12,7 +13,7 @@ const markdownPlugins = [
     allowedProtocols: ['http', 'https', 'mailto'],
   }),
 ]
-const markdownComponents = { a: TranscriptMarkdownLink }
+const markdownComponents = { a: TranscriptMarkdownLink, pre: CodeBlock }
 
 const props = defineProps<{
   events: TranscriptEvent[]
@@ -259,10 +260,7 @@ onMounted(() => {
           </header>
           <template v-if="event.kind === 'tool_use'">
             <div class="call-line">{{ (event.summary || '').slice(0, 500) }}</div>
-            <details class="event-details">
-              <summary>Show tool input</summary>
-              <pre>{{ event.input || '' }}</pre>
-            </details>
+            <ToolInputBlock :tool="event.tool" :input="event.input" />
             <button v-if="event.childKey" class="jump" type="button" @click="emit('select', event.childKey)">
               <UIcon name="i-lucide-bot" /> Open subagent
               <UIcon name="i-lucide-arrow-right" />
