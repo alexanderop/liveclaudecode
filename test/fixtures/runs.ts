@@ -29,6 +29,9 @@ export function runNode(overrides: Partial<RunNode> = {}): RunNode {
     kind: 'session',
     sid: 'session',
     label: 'Ship the dashboard',
+    title: '',
+    openingPrompt: 'Ship the dashboard',
+    lastPrompt: '',
     agentType: '',
     toolUseId: null,
     model: 'claude-sonnet-5',
@@ -92,6 +95,26 @@ export function runDiagnostics(overrides: Partial<RunDiagnostics> = {}): RunDiag
   return {
     incidents: [],
     turns: [],
+    context: [
+      {
+        ts: T0,
+        model: 'claude-sonnet-5',
+        effort: 'medium',
+        usage: { in: 100, out: 40, cr: 10, cw: 200 },
+        stopReason: 'tool_use',
+        who: 'main',
+        key: 'session',
+      },
+      {
+        ts: '2026-07-25T18:01:00.000Z',
+        model: 'claude-sonnet-5',
+        effort: 'medium',
+        usage: { in: 200, out: 80, cr: 40, cw: 0 },
+        stopReason: 'end_turn',
+        who: 'main',
+        key: 'session',
+      },
+    ],
     compactions: [],
     outcomes: [],
     changes: [{
@@ -122,6 +145,7 @@ export function runDiagnostics(overrides: Partial<RunDiagnostics> = {}): RunDiag
       version: '2.1.0',
       entrypoint: 'cli',
       permissionMode: 'default',
+      mode: 'normal',
     },
     causal: {
       records: 8,

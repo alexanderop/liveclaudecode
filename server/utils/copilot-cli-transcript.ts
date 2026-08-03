@@ -56,6 +56,7 @@ interface DerivedState {
   stats: TranscriptStats
   diagnostics: RunDiagnostics
   title: string
+  openingPrompt: string
   model: string
   workingDirectory: string
   sourceDetail: string
@@ -431,7 +432,8 @@ export class CopilotCliTranscriptScan {
     const current = currentTool
       ? { tool: currentTool.name, summary: currentTool.summary.slice(0, 160), ts: currentTool.ts }
       : activeTurns.size > 0 ? { tool: 'Copilot CLI', summary: 'Generating response', ts: lastTs } : null
-    const title = normalizeSessionLabel(firstPrompt, this.sessionId.slice(0, 8))
+    const openingPrompt = normalizeSessionLabel(firstPrompt, '')
+    const title = openingPrompt || this.sessionId.slice(0, 8)
     const live = activeTurns.size > 0 || openTools.size > 0
     const { tools, reads } = toolStatsFromCounts(counts, READ_TOOLS)
     const stats: TranscriptStats = {
@@ -461,6 +463,7 @@ export class CopilotCliTranscriptScan {
     this.derived = {
       stats,
       title,
+      openingPrompt,
       model,
       workingDirectory: workspace,
       sourceDetail,
@@ -469,6 +472,9 @@ export class CopilotCliTranscriptScan {
         parse: this.parseIssues.summary,
         incidents,
         turns,
+        // Copilot CLI records no per-request token usage, so there is no
+        // context-pressure series to chart for it.
+        context: [],
         compactions: [],
         outcomes: [],
         changes,
@@ -508,6 +514,15 @@ export class CopilotCliTranscriptScan {
 
   get title(): string {
     return this.derived?.title || this.sessionId.slice(0, 8)
+  }
+
+  /** Copilot CLI has no user-set title, so its label always comes from the prompt. */
+  get customTitle(): string {
+    return ''
+  }
+
+  get openingPrompt(): string {
+    return this.derived?.openingPrompt || ''
   }
 
   get model(): string {

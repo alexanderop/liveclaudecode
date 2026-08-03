@@ -113,7 +113,7 @@ export function emptyCausal(): CausalSummary {
 
 /** An all-blank session environment, one instance per call so callers may mutate it. */
 export function emptyEnvironment(): SessionEnvironment {
-  return { cwd: '', gitBranch: '', version: '', entrypoint: '', permissionMode: '' }
+  return { cwd: '', gitBranch: '', version: '', entrypoint: '', permissionMode: '', mode: '' }
 }
 
 /** Add `source`'s token counts into `target`, in place. */
@@ -137,6 +137,7 @@ export function addCausal(target: CausalSummary, source: CausalSummary): void {
 export interface RunDiagnosticsAccumulator {
   incidents: RunDiagnostics['incidents']
   turns: RunDiagnostics['turns']
+  context: RunDiagnostics['context']
   compactions: RunDiagnostics['compactions']
   outcomes: RunDiagnostics['outcomes']
   changes: RunDiagnostics['changes']
@@ -152,6 +153,7 @@ export function emptyRunDiagnostics(): RunDiagnosticsAccumulator {
   return {
     incidents: [],
     turns: [],
+    context: [],
     compactions: [],
     outcomes: [],
     changes: [],
@@ -176,6 +178,7 @@ export function mergeScanDiagnostics(
   key: string,
 ): void {
   for (const sample of diagnostic.context) addUsage(target.usage, sample.usage)
+  target.context.push(...diagnostic.context.map(sample => ({ ...sample, who, key })))
   addCausal(target.causal, diagnostic.causal)
   target.incidents.push(...diagnostic.incidents.map(incident => ({ ...incident, who, key })))
   target.turns.push(...diagnostic.turns.map(turn => ({ ...turn, who, key })))
@@ -185,14 +188,52 @@ export function mergeScanDiagnostics(
 }
 
 /**
+ * Keep a bounded tail, dividing the budget evenly between agents instead of
+ * taking it from the merged tail.
+ *
+ * Context samples are charted one agent at a time, so a single merged tail
+ * silently drops whole agents from a busy session — a run with eleven agents
+ * kept only the five that happened to be recent. Fair-share keeps every agent
+ * plottable at the same payload cost: each agent claims an equal slice, and an
+ * agent with fewer samples than its slice releases the remainder to the rest.
+ */
+export function boundedPerKey<T extends { key?: string, ts: string | null }>(
+  samples: ReadonlyArray<T>,
+  limit: number,
+): T[] {
+  const byKey = new Map<string, T[]>()
+  for (const sample of samples) {
+    const group = byKey.get(sample.key ?? '')
+    if (group) group.push(sample)
+    else byKey.set(sample.key ?? '', [sample])
+  }
+  if (byKey.size <= 1) return [...samples].sort(byTimestamp).slice(-limit)
+
+  // Smallest group first, so every release grows the share of what follows.
+  const groups = [...byKey.values()].sort((a, b) => a.length - b.length)
+  const kept: T[] = []
+  let remaining = limit
+  for (const [index, group] of groups.entries()) {
+    const share = Math.floor(remaining / (groups.length - index))
+    const take = Math.min(group.length, share)
+    kept.push(...group.slice(-take))
+    remaining -= take
+  }
+  return kept.sort(byTimestamp)
+}
+
+/**
  * Sort every aggregate by timestamp and keep the bounded tail the UI shows.
- * The tail limits (200/200/100/100/300/100) are centralized here so the
- * Claude and Codex builders cannot drift apart.
+ * The tail limits (200/200/500/100/100/300/100) are centralized here so the
+ * Claude and Codex builders cannot drift apart. Context samples get the
+ * largest budget because they are points on a chart rather than rows in a
+ * list, and a short series would misreport the shape of the session.
  */
 export function finishRunDiagnostics(target: RunDiagnosticsAccumulator): RunDiagnostics {
   return {
     incidents: target.incidents.sort(byTimestamp).slice(-200),
     turns: target.turns.sort(byTimestamp).slice(-200),
+    context: boundedPerKey(target.context, 500),
     compactions: target.compactions.sort(byTimestamp).slice(-100),
     outcomes: target.outcomes.sort(byTimestamp).slice(-100),
     changes: target.changes.sort(byTimestamp).slice(-300),

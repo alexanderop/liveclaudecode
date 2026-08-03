@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import type { DiagnosticIncident, RunResponse, TurnTiming } from '#shared/types/run'
+import ChartArea from '~/components/charts/AreaChart.vue'
+import {
+  compactionMarkers,
+  contextPoints,
+  contextSummary,
+  MIN_CHART_POINTS,
+} from '~/utils/context-pressure'
 
 const props = defineProps<{
   run: RunResponse | null
@@ -7,6 +14,32 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ select: [key: string] }>()
+
+/**
+ * Every agent has its own context window, so a merged line would read as the
+ * context repeatedly collapsing when it is really just a subagent's smaller
+ * prompt. The chart follows one agent at a time — the main session until a row
+ * in the agent table selects another.
+ */
+const contextAgentKey = computed(() => props.selectedKey || props.run?.root.key || '')
+const contextAgentLabel = computed(() => props.run?.diagnostics.agents
+  .find(agent => agent.key === contextAgentKey.value)?.label || 'Main session')
+const contextSamples = computed(() => (props.run?.diagnostics.context || [])
+  .filter(sample => sample.key === contextAgentKey.value))
+const contextChart = computed(() => contextPoints(contextSamples.value))
+const contextMarkers = computed(() => compactionMarkers(
+  contextSamples.value,
+  (props.run?.diagnostics.compactions || [])
+    .filter(compaction => compaction.key === contextAgentKey.value),
+))
+const pressure = computed(() => contextSummary(contextSamples.value))
+const showContextChart = computed(() => contextChart.value.length >= MIN_CHART_POINTS)
+const contextCategories = {
+  context: { name: 'Prompt tokens', color: '#d9915b' },
+  cacheRead: { name: 'Cache read', color: '#65b89a' },
+  cacheWrite: { name: 'Cache written', color: '#6f9de8' },
+}
+const cacheHitLabel = computed(() => `${Math.round(pressure.value.cacheHitRate * 100)}%`)
 
 const incidents = computed(() => [...(props.run?.diagnostics.incidents || [])].reverse())
 const errorCount = computed(() => incidents.value.filter(incident => incident.severity === 'error').length)
@@ -147,6 +180,52 @@ function turnWidth(turn: TurnTiming): string {
         </section>
       </div>
 
+      <section v-if="showContextChart" class="content-section pressure-section">
+        <div class="section-heading">
+          <div>
+            <h3>Context pressure</h3>
+            <p>Prompt size and cache behavior per model request for {{ contextAgentLabel }}, with compaction boundaries marked</p>
+          </div>
+          <span class="section-count">{{ pressure.requests }} requests</span>
+        </div>
+        <ChartArea
+          :data="contextChart"
+          :categories="contextCategories"
+          :markers="contextMarkers"
+          :height="230"
+          aria-label="Prompt tokens, cache reads, and cache writes per model request"
+          :y-formatter="value => String(formatCount(Math.round(value)))"
+          :x-formatter="point => formatTime(point.ts || null, false)"
+          :tooltip-title-formatter="(point, index) => `Request ${index + 1} · ${formatTime(point.ts || null, false)}`"
+        />
+        <div class="pressure-stats">
+          <div>
+            <strong>{{ formatCount(pressure.peakContext) }}</strong>
+            <small>Peak prompt tokens</small>
+          </div>
+          <div>
+            <strong>{{ cacheHitLabel }}</strong>
+            <small>Prompt served from cache</small>
+          </div>
+          <div v-if="pressure.cacheWrite5m || pressure.cacheWrite1h">
+            <strong>{{ formatCount(pressure.cacheWrite5m) }} / {{ formatCount(pressure.cacheWrite1h) }}</strong>
+            <small>Cache written, 5m / 1h</small>
+          </div>
+          <div v-if="pressure.webSearchRequests">
+            <strong>{{ formatCount(pressure.webSearchRequests) }}</strong>
+            <small>Web searches</small>
+          </div>
+          <div v-if="pressure.tiers.length">
+            <strong>{{ pressure.tiers.join(', ') }}</strong>
+            <small>Service tier{{ pressure.speeds.length ? ` · ${pressure.speeds.join(', ')}` : '' }}</small>
+          </div>
+          <div v-for="stop in pressure.abnormalStops" :key="stop.reason" class="warning">
+            <strong>{{ stop.count }}</strong>
+            <small>Stopped on {{ stop.reason.replace(/_/g, ' ') }}</small>
+          </div>
+        </div>
+      </section>
+
       <section class="content-section context-section">
         <div class="section-heading">
           <div>
@@ -212,6 +291,7 @@ function turnWidth(turn: TurnTiming): string {
           <div class="environment-list">
             <div><span>Version</span><strong>{{ run.diagnostics.environment.version || 'Unknown' }}</strong></div>
             <div><span>Entrypoint</span><strong>{{ run.diagnostics.environment.entrypoint || 'Unknown' }}</strong></div>
+            <div><span>Mode</span><strong>{{ run.diagnostics.environment.mode || 'Unknown' }}</strong></div>
             <div><span>Permission mode</span><strong>{{ run.diagnostics.environment.permissionMode || 'Unknown' }}</strong></div>
             <div><span>Git branch</span><strong :title="run.diagnostics.environment.gitBranch">{{ run.diagnostics.environment.gitBranch || 'Unknown' }}</strong></div>
             <div><span>Working directory</span><strong :title="run.diagnostics.environment.cwd">{{ run.diagnostics.environment.cwd || 'Unknown' }}</strong></div>

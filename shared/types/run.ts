@@ -149,6 +149,8 @@ export interface ContextUsageSample {
   serviceTier?: string
   inferenceGeo?: string
   speed?: string
+  who?: string
+  key?: string
 }
 
 export interface CompactionEvent {
@@ -169,6 +171,8 @@ export interface SessionEnvironment {
   version: string
   entrypoint: string
   permissionMode: string
+  /** The harness interaction mode — Claude's `normal`/`plan`, Copilot's chat mode. */
+  mode: string
 }
 
 export interface ToolStats {
@@ -312,6 +316,8 @@ export interface ParseHealthResponse {
 export interface RunDiagnostics {
   incidents: DiagnosticIncident[]
   turns: TurnTiming[]
+  /** One entry per model request, in timestamp order; the context-pressure series. */
+  context: ContextUsageSample[]
   compactions: CompactionEvent[]
   outcomes: AgentOutcome[]
   changes: ChangeDetail[]
@@ -391,7 +397,14 @@ export interface RunNode extends TranscriptStats {
   key: string
   kind: 'session' | 'subagent'
   sid: string
+  /** The name to display: `title` when the harness recorded one, else `openingPrompt`. */
   label: string
+  /** A harness-recorded session title (user-set, or one the model generated); '' when none. */
+  title: string
+  /** The prompt that started the session, kept even when `title` supersedes it as the label. */
+  openingPrompt: string
+  /** The most recent human instruction, which for a live session is what it is working on. */
+  lastPrompt: string
   agentType: string
   toolUseId: string | null
   model: string

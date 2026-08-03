@@ -122,6 +122,11 @@ export const buildCodexTree = Effect.fn('buildCodexTree')(function*(hours: numbe
       kind: isSubagent ? 'subagent' : 'session',
       sid: item.id,
       label,
+      // Codex records no session title of its own, so the label is already the
+      // opening prompt and there is nothing for it to supersede.
+      title: '',
+      openingPrompt: isSubagent ? '' : normalizeSessionLabel(item.scan.firstPrompt, ''),
+      lastPrompt: '',
       agentType: isSubagent ? meta.agentRole || 'Codex agent' : '',
       toolUseId: null,
       model: item.scan.model,

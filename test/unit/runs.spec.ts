@@ -75,6 +75,34 @@ describe('run hierarchy', () => {
   it.effect('labels a session from the first user prompt', () =>
     withTree(({ roots }) => {
       assert.strictEqual(roots[0]?.label, '/ship @plan.md')
+      assert.strictEqual(roots[0]?.title, '')
+      assert.strictEqual(roots[0]?.openingPrompt, '/ship @plan.md')
+    }))
+
+  it.effect('prefers a recorded title over the opening prompt, and keeps both', () =>
+    Effect.gen(function*() {
+      const titled = fixture.transcript([
+        fixture.userText('/ship @plan.md'),
+        { type: 'ai-title', sessionId: 'titled', aiTitle: 'Ship the dashboard rewrite' },
+        { type: 'last-prompt', sessionId: 'titled', lastPrompt: 'now run the checks' },
+      ])
+      const built = yield* buildTree('/t', 99_999).pipe(Effect.provide(
+        Layer.mergeAll(ScanCache.layer, PromptCache.layer)
+          .pipe(Layer.provideMerge(testFileSystem({ '/t/titled.jsonl': titled }))),
+      ))
+      const root = built.roots[0]
+      assert.strictEqual(root?.label, 'Ship the dashboard rewrite')
+      assert.strictEqual(root?.title, 'Ship the dashboard rewrite')
+      assert.strictEqual(root?.openingPrompt, '/ship @plan.md')
+      assert.strictEqual(root?.lastPrompt, 'now run the checks')
+    }))
+
+  it.effect('keeps a subagent on its spawn description, not the parent session title', () =>
+    withTree(({ roots }) => {
+      const child = roots[0]?.children.find(node => node.label === 'slice A')
+      assert.strictEqual(child?.title, '')
+      assert.strictEqual(child?.openingPrompt, '')
+      assert.strictEqual(child?.lastPrompt, '')
     }))
 
   it.effect('falls back to the session id when no prompt fits the label scan window', () =>
@@ -374,6 +402,9 @@ describe('rollup', () => {
     kind: 'session',
     sid: 's',
     label: '',
+    title: '',
+    openingPrompt: '',
+    lastPrompt: '',
     agentType: '',
     toolUseId: null,
     model: '',

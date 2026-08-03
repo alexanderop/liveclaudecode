@@ -43,6 +43,8 @@ interface DerivedCopilotState {
   stats: TranscriptStats
   diagnostics: RunDiagnostics
   title: string
+  customTitle: string
+  openingPrompt: string
   model: string
   mode: string
   subAgents: number
@@ -541,17 +543,19 @@ export class CopilotTranscriptScan {
     }
     const firstTs = iso(snapshot.creationDate)
     const lastTs = latestTimestamp(snapshot, this.file.mtime)
+    const mode = modeOf(snapshot)
     const environment: SessionEnvironment = {
       ...emptyEnvironment(),
       cwd: workspace,
       version: `VS Code chat schema ${snapshot.version}`,
       entrypoint: this.application,
       permissionMode,
+      mode,
     }
-    const mode = modeOf(snapshot)
     const sourceDetail = `${this.application} · ${mode}`
-    const title = snapshot.customTitle
-      || compact(snapshot.requests[0]?.message.text || snapshot.sessionId.slice(0, 8), 100)
+    const customTitle = snapshot.customTitle || ''
+    const openingPrompt = compact(snapshot.requests[0]?.message.text || '', 100)
+    const title = customTitle || openingPrompt || snapshot.sessionId.slice(0, 8)
     const fileList = [...files.values()].map(file => ({ ...file, path: shortPath(file.path, workspace) }))
     const stats: TranscriptStats = {
       records: snapshot.requests.length + snapshot.requests.reduce((total, request) => total + request.response.length, 0),
@@ -579,6 +583,8 @@ export class CopilotTranscriptScan {
     this.derived = {
       stats,
       title,
+      customTitle,
+      openingPrompt,
       model,
       mode: sourceDetail,
       subAgents: spawnToolCallIds.size,
@@ -587,6 +593,9 @@ export class CopilotTranscriptScan {
         parse: this.parseIssues.summary,
         incidents,
         turns,
+        // VS Code records token totals per session rather than per request, so
+        // there are no samples to plot a context-pressure series from.
+        context: [],
         changes,
         agents: [{
           key: `copilot:${snapshot.sessionId}`,
@@ -616,6 +625,15 @@ export class CopilotTranscriptScan {
 
   get title(): string {
     return this.derived?.title || this.sessionId.slice(0, 8)
+  }
+
+  /** Only a title the user set, so a first-message fallback is not mistaken for one. */
+  get customTitle(): string {
+    return this.derived?.customTitle || ''
+  }
+
+  get openingPrompt(): string {
+    return this.derived?.openingPrompt || ''
   }
 
   get model(): string {

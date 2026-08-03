@@ -50,7 +50,15 @@ const counts = computed(() => agents.value.reduce<Record<AgentDisplayState, numb
 const activeCount = computed(() => counts.value.running + counts.value.thinking)
 const completedCount = computed(() => counts.value.completed + counts.value.warning)
 const issueCount = computed(() => agents.value.reduce((total, agent) => total + agent.status.issueCount, 0))
-
+/**
+ * The instruction the session is currently working from. It is only worth
+ * showing once it has moved on from the prompt the heading already reports.
+ */
+const currentInstruction = computed(() => {
+  const root = props.root
+  if (!root?.lastPrompt || root.lastPrompt === root.label) return ''
+  return normalizeSessionLabel(root.lastPrompt, '')
+})
 </script>
 
 <template>
@@ -68,6 +76,14 @@ const issueCount = computed(() => agents.value.reduce((total, agent) => total + 
         <span class="section-eyebrow">Session now</span>
         <h2>What is happening now</h2>
         <p>Agents are ordered by attention needed, then by their most recent activity.</p>
+      </section>
+
+      <section v-if="currentInstruction" class="now-instruction">
+        <UIcon name="i-lucide-quote" />
+        <span>
+          <small>{{ root.subLive ? 'Working from' : 'Last instruction' }}</small>
+          <strong :title="currentInstruction">{{ currentInstruction }}</strong>
+        </span>
       </section>
 
       <section class="now-health" :class="{ warning: issueCount, failed: counts.failed }">

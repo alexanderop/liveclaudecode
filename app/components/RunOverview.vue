@@ -81,6 +81,15 @@ const sessionTitle = computed(() => normalizeSessionLabel(
   overviewRoot.value?.label || '',
   'Untitled coding session',
 ))
+/**
+ * The opening prompt, but only when a recorded title has taken its place as the
+ * heading — otherwise the heading would be repeated back under itself.
+ */
+const openingPrompt = computed(() => {
+  const root = overviewRoot.value
+  if (!root?.title || !root.openingPrompt) return ''
+  return root.openingPrompt === root.label ? '' : root.openingPrompt
+})
 const finalExcerpt = computed(() => {
   const value = normalizeSessionSummary(overviewRoot.value?.finalText || '')
   if (value) return value
@@ -96,6 +105,21 @@ const sessionMetadata = computed(() => [
   branchLabel.value ? `Branch ${branchLabel.value}` : '',
   overviewRoot.value?.firstTs ? formatTime(overviewRoot.value.firstTs, false) : '',
 ].filter(Boolean))
+/**
+ * How the session was allowed to act. `bypassPermissions` in particular
+ * changes how much of the result was reviewed, so it belongs beside the title
+ * rather than buried in the diagnostics environment list.
+ */
+const modeChips = computed(() => {
+  const environment = props.run?.diagnostics.environment
+  if (!environment) return []
+  return [environment.mode, environment.permissionMode]
+    .filter(Boolean)
+    .map(value => ({
+      value,
+      risky: value === 'bypassPermissions' || value === 'acceptEdits',
+    }))
+})
 /**
  * Records skipped in *this* session's transcripts, not the provider-wide tally
  * the source status carries — a count from some other session cannot be acted
@@ -198,8 +222,17 @@ async function copyTranscriptPath(): Promise<void> {
           <div>
             <span class="section-eyebrow">Session overview</span>
             <h1 data-workspace-heading tabindex="-1">{{ sessionTitle }}</h1>
+            <p v-if="openingPrompt" class="overview-opening" :title="openingPrompt">
+              Started as “{{ openingPrompt }}”
+            </p>
             <p class="overview-metadata">
               <span v-for="item in sessionMetadata" :key="item">{{ item }}</span>
+              <span
+                v-for="chip in modeChips"
+                :key="chip.value"
+                class="overview-mode-chip"
+                :class="{ risky: chip.risky }"
+              >{{ chip.value }}</span>
             </p>
           </div>
         </div>

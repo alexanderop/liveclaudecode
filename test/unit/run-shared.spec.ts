@@ -15,6 +15,7 @@ import {
   emptyEnvironment,
   emptyRunDiagnostics,
   emptyUsage,
+  boundedPerKey,
   finishRunDiagnostics,
   freshnessCutoff,
   isFreshFileInfo,
@@ -23,7 +24,12 @@ import {
   selectLatestById,
   visitNodes,
 } from '../../server/utils/run-shared'
-import type { DiagnosticIncident, RunNode, ScanDiagnostics } from '../../shared/types/run'
+import type {
+  ContextUsageSample,
+  DiagnosticIncident,
+  RunNode,
+  ScanDiagnostics,
+} from '../../shared/types/run'
 
 function node(key: string, children: RunNode[] = []): RunNode {
   return {
@@ -52,6 +58,9 @@ function node(key: string, children: RunNode[] = []): RunNode {
     kind: 'session',
     sid: key,
     label: key,
+    title: '',
+    openingPrompt: '',
+    lastPrompt: '',
     agentType: '',
     toolUseId: null,
     model: '',
@@ -72,6 +81,18 @@ function node(key: string, children: RunNode[] = []): RunNode {
 
 function incident(id: string, ts: string | null): DiagnosticIncident {
   return { id, severity: 'error', category: 'tool', title: id, detail: '', ts, line: 0 }
+}
+
+/** A context sample whose timestamp and `in` count both encode its index. */
+function contextSample(index: number, key?: string): ContextUsageSample {
+  return {
+    ts: `2026-01-01T00:00:00.${String(index).padStart(6, '0')}Z`,
+    model: 'm',
+    effort: '',
+    usage: { in: index, out: 0, cr: 0, cw: 0 },
+    stopReason: null,
+    ...(key === undefined ? {} : { key }),
+  }
 }
 
 function scanDiagnostics(over: Partial<ScanDiagnostics> = {}): ScanDiagnostics {
@@ -164,6 +185,7 @@ describe('aggregate helpers', () => {
       version: '',
       entrypoint: '',
       permissionMode: '',
+      mode: '',
     })
   })
 
@@ -263,6 +285,60 @@ describe('run diagnostics aggregation', () => {
       aggregate.turns.map(entry => [entry.who, entry.key]),
       [['Main session', 'sess-1']],
     )
+    // Samples are kept individually, not just folded into the usage total, so
+    // the context-pressure chart can plot one point per request.
+    assert.deepStrictEqual(
+      aggregate.context.map(entry => [entry.usage.in, entry.who, entry.key]),
+      [[1, 'Main session', 'sess-1'], [1, 'Main session', 'sess-1']],
+    )
+  })
+
+  it('keeps a longer tail of context samples than of list entries', () => {
+    const aggregate = emptyRunDiagnostics()
+    for (let index = 549; index >= 0; index -= 1) {
+      aggregate.context.push(contextSample(index, 'only'))
+    }
+    const finished = finishRunDiagnostics(aggregate)
+    assert.strictEqual(finished.context.length, 500)
+    const timestamps = finished.context.map(entry => entry.ts ?? '')
+    assert.deepStrictEqual(timestamps, [...timestamps].sort())
+  })
+})
+
+describe('boundedPerKey', () => {
+  const of = (counts: Record<string, number>) =>
+    Object.entries(counts).flatMap(([key, count], group) =>
+      Array.from({ length: count }, (_, index) => contextSample(group * 1_000 + index, key)))
+
+  it('takes a plain tail when every sample belongs to one agent', () => {
+    const kept = boundedPerKey(of({ main: 10 }), 4)
+    assert.deepStrictEqual(kept.map(entry => entry.usage.in), [6, 7, 8, 9])
+  })
+
+  it('splits the budget evenly so no agent is dropped entirely', () => {
+    const kept = boundedPerKey(of({ main: 400, a: 300, b: 300 }), 300)
+    const perKey = new Map<string, number>()
+    for (const entry of kept) perKey.set(entry.key ?? '', (perKey.get(entry.key ?? '') ?? 0) + 1)
+    assert.strictEqual(kept.length, 300)
+    assert.deepStrictEqual([...perKey.entries()].sort(), [['a', 100], ['b', 100], ['main', 100]])
+  })
+
+  it('releases an under-budget agent\'s unused share to the others', () => {
+    // 'quiet' can only use 5 of its 100 share, leaving 295 for the other two.
+    const kept = boundedPerKey(of({ main: 400, busy: 400, quiet: 5 }), 300)
+    const perKey = new Map<string, number>()
+    for (const entry of kept) perKey.set(entry.key ?? '', (perKey.get(entry.key ?? '') ?? 0) + 1)
+    assert.strictEqual(kept.length, 300)
+    assert.deepStrictEqual(perKey.get('quiet'), 5)
+    assert.deepStrictEqual(perKey.get('main'), 147)
+    assert.deepStrictEqual(perKey.get('busy'), 148)
+  })
+
+  it('keeps everything and stays timestamp-ordered when under budget', () => {
+    const kept = boundedPerKey(of({ a: 3, b: 2 }), 500)
+    assert.strictEqual(kept.length, 5)
+    const timestamps = kept.map(entry => entry.ts ?? '')
+    assert.deepStrictEqual(timestamps, [...timestamps].sort())
   })
 
   it('sorts by timestamp and keeps only the bounded tail', () => {

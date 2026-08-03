@@ -1,8 +1,9 @@
 <script setup lang="ts" generic="T extends Record<string, string | number | undefined>">
 import type { CSSProperties } from 'vue'
-import type { AreaChartProps, ChartCategory } from './chart'
+import type { AreaChartProps, ChartCategory, ChartMarker } from './chart'
 
 const props = withDefaults(defineProps<AreaChartProps<T>>(), {
+  markers: () => [],
   height: 240,
   xKey: undefined,
   xTicks: 6,
@@ -33,6 +34,9 @@ const VIEW_HEIGHT = 240
 const hoveredIndex = ref<number | null>(null)
 const chartId = `chart-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const seriesKeys = computed(() => Object.keys(props.categories))
+/** Markers whose index still points at a plotted datum, so a stale one is dropped. */
+const visibleMarkers = computed<ChartMarker[]>(() => props.markers
+  .filter(marker => marker.index >= 0 && marker.index < props.data.length))
 const effectivePadding = computed(() => props.compact
   ? { top: 2, right: 2, bottom: 2, left: 2 }
   : props.padding)
@@ -179,6 +183,14 @@ const hoverStyle = computed<CSSProperties>(() => {
           <path v-for="value in yTickValues" :key="value" :d="`M ${effectivePadding.left} ${yFor(value)} L ${VIEW_WIDTH - effectivePadding.right} ${yFor(value)}`" />
         </g>
 
+        <g v-if="visibleMarkers.length" class="chart-markers">
+          <path
+            v-for="marker in visibleMarkers"
+            :key="`${marker.index}-${marker.label}`"
+            :d="`M ${xFor(marker.index)} ${effectivePadding.top} L ${xFor(marker.index)} ${VIEW_HEIGHT - effectivePadding.bottom}`"
+          ><title>{{ marker.label }}</title></path>
+        </g>
+
         <path
           v-for="key in hideArea ? [] : seriesKeys"
           :key="`${key}-area`"
@@ -239,6 +251,7 @@ const hoverStyle = computed<CSSProperties>(() => {
 .chart-stage { position: relative; width: 100%; min-width: 0; }
 .chart-stage svg { display: block; width: 100%; height: 100%; overflow: visible; touch-action: pan-y; }
 .chart-grid path { fill: none; stroke: var(--line-soft); stroke-width: 1; stroke-dasharray: 3 5; vector-effect: non-scaling-stroke; }
+.chart-markers path { fill: none; stroke: color-mix(in srgb, var(--text-tertiary) 70%, transparent); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
 .chart-y-labels,.chart-x-labels { position: absolute; inset: 0; pointer-events: none; }
 .chart-y-labels span,.chart-x-labels span { position: absolute; color: var(--chart-muted); font: 7px var(--mono); }
 .chart-y-labels span { left: 0; width: 36px; transform: translateY(-50%); text-align: right; }

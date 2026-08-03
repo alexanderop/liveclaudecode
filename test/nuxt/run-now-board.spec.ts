@@ -45,4 +45,33 @@ describe('RunNowBoard', () => {
     await wrapper.findAll('.now-agent')[0]!.trigger('click')
     expect(wrapper.emitted('select')).toEqual([['worker']])
   })
+
+  it('shows the instruction a live session is working from', async () => {
+    const root = runNode({ lastPrompt: 'now run the checks', subLive: true })
+    const wrapper = component = await mountSuspended(RunNowBoard, {
+      props: { root, run: runResponse() },
+    })
+
+    const instruction = wrapper.get('.now-instruction')
+    expect(instruction.text()).toContain('Working from')
+    expect(instruction.text()).toContain('now run the checks')
+  })
+
+  it('calls the instruction the last one once the session has stopped', async () => {
+    const root = runNode({ lastPrompt: 'now run the checks', subLive: false })
+    const wrapper = component = await mountSuspended(RunNowBoard, {
+      props: { root, run: runResponse() },
+    })
+
+    expect(wrapper.get('.now-instruction').text()).toContain('Last instruction')
+  })
+
+  it('stays silent when the session never moved past its opening prompt', async () => {
+    const root = runNode({ lastPrompt: 'Ship the dashboard' })
+    const wrapper = component = await mountSuspended(RunNowBoard, {
+      props: { root, run: runResponse() },
+    })
+
+    expect(wrapper.find('.now-instruction').exists()).toBe(false)
+  })
 })

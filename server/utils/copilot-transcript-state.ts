@@ -117,6 +117,7 @@ export function emptyTranscriptDiagnostics(environment: SessionEnvironment): Run
     parse: emptyParseSummary(),
     incidents: [],
     turns: [],
+    context: [],
     compactions: [],
     outcomes: [],
     changes: [],

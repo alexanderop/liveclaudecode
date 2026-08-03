@@ -34,7 +34,14 @@ interface CollectedItem {
   path: string
   kind: RunNode['kind']
   sid: string
+  /**
+   * The label discovery can derive without a scan: the opening prompt for a
+   * session, the spawn description for a subagent. `buildTree` upgrades it to
+   * a recorded title once the scan is available.
+   */
   label: string
+  /** The session's opening prompt, blank when it had none and for subagents. */
+  openingPrompt: string
   meta: ClaudeSubagentMeta | null
 }
 
@@ -84,16 +91,18 @@ export const collect = Effect.fn('collect')(function*(
       const path = join(projectDirectory, name)
       if (!(yield* isFreshFile(path, cutoff))) return Option.none<CollectedItem>()
       const sid = name.slice(0, -'.jsonl'.length)
+      const openingPrompt = normalizeSessionLabel(
+        yield* limiter.withPermit(firstPrompt(path)),
+        '',
+      )
       return Option.some({
         key: sid,
         path,
         kind: 'session',
         sid,
         meta: null,
-        label: normalizeSessionLabel(
-          yield* limiter.withPermit(firstPrompt(path)),
-          sid.slice(0, 8),
-        ),
+        openingPrompt,
+        label: openingPrompt || sid.slice(0, 8),
       } satisfies CollectedItem)
     }),
     { concurrency: FILE_CONCURRENCY },
@@ -126,6 +135,7 @@ export const collect = Effect.fn('collect')(function*(
             kind: 'subagent',
             sid: sessionName,
             meta,
+            openingPrompt: '',
             label: normalizeSessionLabel(meta?.description || '', agent),
           } satisfies CollectedItem)
         }),
@@ -170,6 +180,13 @@ export const buildTree = Effect.fn('buildTree')(function*(
   const byKey = new Map<string, RunNode>()
 
   for (const [index, item] of items.entries()) {
+    const scan = scans[index]!
+    // A subagent's transcript carries the parent session's title records, so
+    // only a session takes its title from the scan; a subagent keeps the
+    // description it was spawned with.
+    const title = item.kind === 'session'
+      ? normalizeSessionLabel(scan.title, '')
+      : ''
     const node: RunNode = {
       ...stats[index]!,
       source: 'claude',
@@ -177,7 +194,12 @@ export const buildTree = Effect.fn('buildTree')(function*(
       key: item.key,
       kind: item.kind,
       sid: item.sid,
-      label: item.label,
+      label: title || item.label,
+      title,
+      openingPrompt: item.openingPrompt,
+      lastPrompt: item.kind === 'session'
+        ? normalizeSessionLabel(scan.lastPrompt, '')
+        : '',
       agentType: item.kind === 'subagent' && item.meta
         ? item.meta.agentType
         : '',

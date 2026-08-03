@@ -71,4 +71,99 @@ describe('RunDiagnostics', () => {
     expect(wrapper.get('.turn-row').attributes('aria-current')).toBe('true')
     expect(wrapper.get('.context-row').attributes('aria-current')).toBe('true')
   })
+
+  it('charts context pressure from the per-request samples', async () => {
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
+      props: { run, selectedKey: null },
+    })
+
+    const section = wrapper.get('.pressure-section')
+    expect(section.text()).toContain('2 requests')
+    // The fixture's larger prompt is 100 in + 10 cr + 200 cw; of the 550
+    // prompt tokens across both requests, 50 came from cache.
+    const stats = section.get('.pressure-stats').text()
+    expect(stats).toContain('310')
+    expect(stats).toContain('9%')
+    expect(section.findAll('svg path[fill="none"]')).toHaveLength(3)
+  })
+
+  it('charts one agent at a time, since each has its own context window', async () => {
+    const scoped = runResponse({
+      diagnostics: runDiagnostics({
+        agents: [
+          {
+            key: 'session/worker',
+            label: 'worker',
+            agentType: 'Explore',
+            models: [],
+            efforts: [],
+            usage: { in: 0, out: 0, cr: 0, cw: 0 },
+            turns: 0,
+            turnDurationMs: 0,
+            compactions: 0,
+            branchPoints: 0,
+            sidechainRecords: 0,
+          },
+        ],
+        context: [
+          {
+            ts: '2026-07-25T18:00:00.000Z',
+            model: 'm',
+            effort: '',
+            usage: { in: 900, out: 0, cr: 0, cw: 0 },
+            stopReason: null,
+            who: 'Main session',
+            key: 'session',
+          },
+          {
+            ts: '2026-07-25T18:00:01.000Z',
+            model: 'm',
+            effort: '',
+            usage: { in: 5, out: 0, cr: 0, cw: 0 },
+            stopReason: null,
+            who: 'worker',
+            key: 'session/worker',
+          },
+          {
+            ts: '2026-07-25T18:00:02.000Z',
+            model: 'm',
+            effort: '',
+            usage: { in: 7, out: 0, cr: 0, cw: 0 },
+            stopReason: null,
+            who: 'worker',
+            key: 'session/worker',
+          },
+        ],
+      }),
+    })
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
+      props: { run: scoped, selectedKey: 'session/worker' },
+    })
+
+    const section = wrapper.get('.pressure-section')
+    expect(section.text()).toContain('for worker')
+    expect(section.text()).toContain('2 requests')
+    // The main session's far larger prompt must not raise the worker's peak.
+    expect(section.get('.pressure-stats').text()).toContain('7')
+    expect(section.get('.pressure-stats').text()).not.toContain('900')
+  })
+
+  it('omits the chart when a session has too few requests to show a trend', async () => {
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
+      props: {
+        run: runResponse({ diagnostics: runDiagnostics({ context: [] }) }),
+        selectedKey: null,
+      },
+    })
+
+    expect(wrapper.find('.pressure-section').exists()).toBe(false)
+  })
+
+  it('reports the session mode alongside the permission mode', async () => {
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
+      props: { run, selectedKey: null },
+    })
+
+    expect(wrapper.get('.environment-list').text()).toContain('normal')
+  })
 })

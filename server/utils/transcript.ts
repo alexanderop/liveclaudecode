@@ -142,6 +142,12 @@ export class TranscriptScan {
   tokensOut = 0
   finalText = ''
   cwd = ''
+  /** The title Claude Code generates for the session, rewritten as it evolves. */
+  aiTitle = ''
+  /** A title the user set explicitly, which outranks the generated one. */
+  customTitle = ''
+  /** The newest human instruction, from the `last-prompt` session-state record. */
+  lastPrompt = ''
   private turnComplete = false
   mtime = 0
   size = 0
@@ -700,10 +706,23 @@ export class TranscriptScan {
     }
   }
 
+  /**
+   * The session's display title. A title the user set wins over the one Claude
+   * Code generated, and both are rewritten in place as the session runs, so the
+   * last record of each kind is the current one.
+   */
+  get title(): string {
+    return this.customTitle || this.aiTitle
+  }
+
   private ingestSessionState(record: ClaudeSessionStateRecord, line: number, ts: Timestamp): void {
     if (record.type === 'permission-mode') {
       this.environment.permissionMode = record.permissionMode
     }
+    if (record.type === 'mode') this.environment.mode = record.mode
+    if (record.type === 'ai-title') this.aiTitle = record.aiTitle
+    if (record.type === 'custom-title') this.customTitle = record.customTitle
+    if (record.type === 'last-prompt' && record.lastPrompt) this.lastPrompt = record.lastPrompt
     if (record.type === 'pr-link') {
       this.gitEvents.push({
         toolUseId: `state-${line}`,

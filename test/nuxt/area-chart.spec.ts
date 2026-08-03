@@ -67,6 +67,34 @@ describe('AreaChart', () => {
     expect(wrapper.get('svg').attributes('aria-label')).toBe('Data chart')
   })
 
+  it('draws a labelled vertical rule at each marker index', async () => {
+    const wrapper = component = await mountSuspended(AreaChart, {
+      props: {
+        data,
+        categories,
+        xKey: 'day',
+        markers: [{ index: 1, label: 'Compaction · auto' }],
+      },
+    })
+
+    const marker = wrapper.get('.chart-markers path')
+    expect(marker.attributes('d')).toBe('M 415 12 L 415 212')
+    expect(marker.get('title').text()).toBe('Compaction · auto')
+  })
+
+  it('ignores a marker pointing past the plotted data', async () => {
+    const wrapper = component = await mountSuspended(AreaChart, {
+      props: {
+        data,
+        categories,
+        xKey: 'day',
+        markers: [{ index: 3, label: 'off the end' }, { index: -1, label: 'before the start' }],
+      },
+    })
+
+    expect(wrapper.find('.chart-markers').exists()).toBe(false)
+  })
+
   it('highlights the nearest point on pointer move and emits it on click', async () => {
     const wrapper = component = await mountSuspended(AreaChart, {
       props: { data, categories, xKey: 'day' },

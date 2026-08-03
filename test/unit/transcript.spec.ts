@@ -522,6 +522,51 @@ describe('TranscriptScan', () => {
         ['hook', 'truncation', 'interruption', 'permission'],
       )
     }))
+
+  it.effect('takes the newest generated title, since the record is rewritten in place', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        { type: 'ai-title', sessionId: 's', aiTitle: 'Explore Shiki integration' },
+        { type: 'ai-title', sessionId: 's', aiTitle: 'Highlight transcript code with Shiki' },
+      ])
+      assert.strictEqual(result.title, 'Highlight transcript code with Shiki')
+    }))
+
+  it.effect('prefers a title the user set over the generated one, whatever their order', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        { type: 'custom-title', sessionId: 's', customTitle: 'Shiki spike' },
+        { type: 'ai-title', sessionId: 's', aiTitle: 'Highlight transcript code with Shiki' },
+      ])
+      assert.strictEqual(result.title, 'Shiki spike')
+    }))
+
+  it.effect('has no title when the session recorded none', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([fixture.userText('hello')])
+      assert.strictEqual(result.title, '')
+    }))
+
+  it.effect('records the session mode and permission mode separately', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        { type: 'mode', sessionId: 's', mode: 'plan' },
+        { type: 'permission-mode', sessionId: 's', permissionMode: 'bypassPermissions' },
+      ])
+      const { environment } = result.diagnostics()
+      assert.strictEqual(environment.mode, 'plan')
+      assert.strictEqual(environment.permissionMode, 'bypassPermissions')
+    }))
+
+  it.effect('keeps the newest instruction and ignores a blank one', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        { type: 'last-prompt', sessionId: 's', lastPrompt: 'implement 1 and 2' },
+        { type: 'last-prompt', sessionId: 's', lastPrompt: 'now write the tests' },
+        { type: 'last-prompt', sessionId: 's', lastPrompt: '' },
+      ])
+      assert.strictEqual(result.lastPrompt, 'now write the tests')
+    }))
 })
 
 /**

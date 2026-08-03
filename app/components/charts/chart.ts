@@ -12,9 +12,17 @@ export type ChartPadding = {
   left: number
 }
 
+export type ChartMarker = {
+  /** Index into `data` the marker sits on. */
+  index: number
+  label: string
+}
+
 export type AreaChartProps<T extends ChartDatum> = {
   data: T[]
   categories: Record<string, ChartCategory>
+  /** Vertical annotations drawn over the plot, for boundaries between points. */
+  markers?: ChartMarker[]
   height?: number
   xKey?: keyof T & string
   xTicks?: number
