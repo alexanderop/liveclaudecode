@@ -123,7 +123,7 @@ function exportCsv(): void {
   <div class="cost-page">
     <header class="cost-appbar">
       <NuxtLink to="/" class="cost-brand"><span><UIcon name="i-lucide-terminal" /></span><strong>liveclaudecode</strong></NuxtLink>
-      <nav aria-label="Workspace"><NuxtLink to="/">Sessions</NuxtLink><NuxtLink to="/costs" class="active">Costs</NuxtLink></nav>
+      <nav aria-label="Workspace"><NuxtLink to="/">Sessions</NuxtLink><NuxtLink to="/costs" class="active">Costs</NuxtLink><NuxtLink to="/debug">Debug</NuxtLink></nav>
       <div><span class="local-state"><i />Local transcripts</span><UButton color="neutral" variant="ghost" icon="i-lucide-refresh-cw" aria-label="Refresh costs" :loading="loading" @click="refresh()" /></div>
     </header>
 

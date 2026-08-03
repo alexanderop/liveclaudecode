@@ -14,6 +14,7 @@ import type {
 } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { FILE_CONCURRENCY, FileDiscoveryLimiter, ignoreNotFound, isFreshFile } from './filesystem-concurrency'
+import { addParseIssueCounts } from './parse-issues'
 import { claudeCostSample, estimateCosts, type ClaudeCostSample } from './cost'
 import {
   addUsage,
@@ -226,6 +227,9 @@ export const buildTree = Effect.fn('buildTree')(function*(
   return {
     roots,
     byKey,
+    // Keyed like the other two sources' trees, so the catalog can attribute a
+    // skipped record to the session whose transcript it came from.
+    scanByKey: new Map(items.map((item, index) => [item.key, scans[index]!])),
     cwd: scans.find(scan => scan.cwd)?.cwd || '',
     malformed: scans.reduce((total, scan) => total + scan.malformed, 0),
     unreadable: discovery.unreadable
@@ -352,7 +356,10 @@ export const runDiagnostics = Effect.fn('runDiagnostics')(function*(
   const costSamples: ClaudeCostSample[] = []
 
   for (const [index, node] of nodes.entries()) {
-    const diagnostic = scans[index]!.diagnostics()
+    const scan = scans[index]!
+    addParseIssueCounts(aggregate.parse.counts, scan.parseIssues.counts)
+    aggregate.parse.skipped += scan.parseIssues.skipped
+    const diagnostic = scan.diagnostics()
     costSamples.push(...diagnostic.context.map(sample => claudeCostSample(sample)))
     const who = node.kind === 'session' ? 'Main session' : node.label
     if (node.kind === 'session') aggregate.environment = diagnostic.environment

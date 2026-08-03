@@ -54,6 +54,38 @@ describe('Claude on-disk schemas', () => {
     expect(parsed.record.data.message.usage?.server_tool_use?.web_search_requests).toBe(2)
   })
 
+  it('parses a synthetic assistant record with null usage descriptors', () => {
+    const parsed = parseClaudeRecord({
+      type: 'assistant',
+      timestamp: '2026-07-29T20:06:01.280Z',
+      message: {
+        id: 'msg-synthetic',
+        role: 'assistant',
+        model: '<synthetic>',
+        stop_reason: 'stop_sequence',
+        content: [{ type: 'text', text: 'API Error' }],
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
+          cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+          service_tier: null,
+          inference_geo: null,
+          iterations: null,
+          speed: null,
+        },
+      },
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success || parsed.record.kind !== 'assistant') return
+    expect(parsed.record.data.message.usage?.service_tier).toBe(null)
+    expect(parsed.record.data.message.usage?.inference_geo).toBe(null)
+    expect(parsed.record.data.message.usage?.speed).toBe(null)
+  })
+
   it('rejects a malformed record of a known type', () => {
     const parsed = parseClaudeRecord({ type: 'assistant', message: { content: 42 } })
     expect(parsed.success).toBe(false)

@@ -90,13 +90,15 @@ export function completeJsonlLines(raw: string): string[] {
 export interface MalformedJsonlLine {
   index: number
   line: string
+  /** The thrown `JSON.parse` failure, so callers can report *why* it failed. */
+  error: unknown
 }
 
 /**
  * Parse `lines[fromIndex..]` as JSON, skipping blank lines. Lines that fail to
- * parse are reported in `malformed` (with their raw text, for diagnosability)
- * instead of being silently dropped — the caller decides how to log and count
- * them, since only it runs inside an effectful context.
+ * parse are reported in `malformed` (with their raw text and the parse error,
+ * for diagnosability) instead of being silently dropped — the caller decides
+ * how to log and count them, since only it runs inside an effectful context.
  */
 export function parseJsonlValues(
   lines: ReadonlyArray<string>,
@@ -109,8 +111,8 @@ export function parseJsonlValues(
     if (!line?.trim()) continue
     try {
       values.push([index, JSON.parse(line) as unknown])
-    } catch {
-      malformed.push({ index, line })
+    } catch (error) {
+      malformed.push({ index, line, error })
     }
   }
   return { values, malformed }

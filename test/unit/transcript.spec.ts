@@ -117,6 +117,46 @@ describe('TranscriptScan', () => {
       assert.deepStrictEqual(result.events.map(event => event.body), ['fine'])
     }))
 
+  it.effect('records why each skipped record was skipped', () =>
+    Effect.gen(function*() {
+      // An unreadable line and a known record type with a bad field: the two
+      // causes have different fixes, so the scan must tell them apart.
+      const body = '{"type":"assistant""broken"}\n'
+        + '{"type":"assistant","message":{"role":"assistant","content":42}}\n'
+        + fixture.transcript([fixture.assistant([fixture.text('fine')])])
+      const scan = yield* new TranscriptScan(PATH).refresh()
+        .pipe(Effect.provide(testFileSystem({ [PATH]: body })))
+
+      assert.strictEqual(scan.malformed, 2)
+      assert.strictEqual(scan.parseIssues.skipped, scan.malformed)
+      assert.deepStrictEqual(scan.parseIssues.counts, {
+        invalidJson: 1,
+        schemaMismatch: 1,
+        unsupportedShape: 0,
+      })
+
+      const [unreadable, mismatch] = scan.parseIssues.samples
+      assert.strictEqual(unreadable?.reason, 'invalid-json')
+      assert.strictEqual(unreadable?.line, 0)
+      assert.strictEqual(mismatch?.reason, 'schema-mismatch')
+      assert.strictEqual(mismatch?.line, 1)
+      assert.strictEqual(mismatch?.recordType, 'assistant')
+      assert.ok(mismatch?.detail.includes('content'))
+    }))
+
+  it.effect('does not count an unrecognised record type as a parse issue', () =>
+    Effect.gen(function*() {
+      // Claude Code adds record kinds over time; those are surfaced as unknown
+      // records rather than reported as something the user should fix.
+      const body = '{"type":"some_future_kind","uuid":"u1"}\n'
+        + fixture.transcript([fixture.assistant([fixture.text('fine')])])
+      const scan = yield* new TranscriptScan(PATH).refresh()
+        .pipe(Effect.provide(testFileSystem({ [PATH]: body })))
+
+      assert.strictEqual(scan.malformed, 0)
+      assert.strictEqual(scan.parseIssues.skipped, 0)
+    }))
+
   it.effect('treats a missing transcript as empty rather than an error', () =>
     Effect.gen(function*() {
       const result = yield* new TranscriptScan('/p/absent.jsonl').refresh()

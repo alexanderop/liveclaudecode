@@ -251,6 +251,64 @@ export interface AgentDiagnosticSummary {
   sidechainRecords: number
 }
 
+/**
+ * Why a transcript record was skipped. The distinction matters to whoever has
+ * to act on it: `invalid-json` is a damaged or still-being-written file,
+ * whereas `schema-mismatch` and `unsupported-shape` mean a record the provider
+ * wrote in a shape liveclaudecode does not model — a gap on our side, not the
+ * user's. An unrecognised record `type` is *not* an issue; the schemas surface
+ * those as `unknown` records on purpose, since providers add kinds over time.
+ */
+export type ParseIssueReason = 'invalid-json' | 'schema-mismatch' | 'unsupported-shape'
+
+/** One skipped record, kept so a skip can be traced back to a file and line. */
+export interface ParseIssue {
+  reason: ParseIssueReason
+  /** Zero-based line index within the transcript, as the scanners count lines. */
+  line: number
+  /** The record's `type`/`kind` discriminator, or '' when it had none. */
+  recordType: string
+  /** Human-readable cause: the decode failure, or the JSON parse error. */
+  detail: string
+  /** Bounded excerpt of the offending record, for eyeballing the shape. */
+  excerpt: string
+}
+
+export interface ParseIssueCounts {
+  invalidJson: number
+  schemaMismatch: number
+  unsupportedShape: number
+}
+
+/** Per-session parse outcome; `skipped` is the sum of `counts`. */
+export interface SessionParseSummary {
+  skipped: number
+  counts: ParseIssueCounts
+}
+
+/** A session's parse health plus the sampled issues behind it, for `/debug`. */
+export interface SessionParseHealth extends SessionParseSummary {
+  source: SessionSource
+  sourceDetail: string
+  projectId: string
+  projectName: string
+  key: string
+  label: string
+  transcriptPath: string
+  lastTs: Timestamp
+  samples: ParseIssue[]
+}
+
+export interface ParseHealthResponse {
+  hours: number
+  sources: SessionSourceStatus[]
+  /** Sessions that skipped at least one record, worst first. */
+  sessions: SessionParseHealth[]
+  skipped: number
+  /** How many issues each session retains, so the UI can say "first N". */
+  sampleLimit: number
+}
+
 export interface RunDiagnostics {
   incidents: DiagnosticIncident[]
   turns: TurnTiming[]
@@ -263,6 +321,8 @@ export interface RunDiagnostics {
   causal: CausalSummary
   usage: Usage
   cost?: CostEstimate
+  /** Records skipped across this run's own transcripts, split by cause. */
+  parse: SessionParseSummary
 }
 
 export interface CurrentActivity {

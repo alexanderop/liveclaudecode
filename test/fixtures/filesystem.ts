@@ -119,6 +119,17 @@ export function testFileSystem(tree: FakeTree, options: {
       ))
     },
 
+    readFile: (path: string) => {
+      const denial = guard('readFile', path)
+      if (Option.isSome(denial)) return Effect.fail(denial.value)
+      const file = files.get(path)
+      if (!file) return Effect.fail(notFound('readFile', path))
+      return readOperation('readFile', path, beforeRead(path).pipe(
+        Effect.tap(() => Effect.sync(() => onRead(path))),
+        Effect.map(() => encoder.encode(file.content)),
+      ))
+    },
+
     stream: (path, streamOptions) => {
       const denial = guard('stream', path)
       if (Option.isSome(denial)) return Stream.fail(denial.value)

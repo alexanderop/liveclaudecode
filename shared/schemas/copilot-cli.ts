@@ -130,7 +130,7 @@ export type ParsedCopilotCliEvent =
 
 export type CopilotCliParseResult =
   | { success: true, event: ParsedCopilotCliEvent }
-  | { success: false, known: boolean }
+  | { success: false, known: boolean, error: Schema.SchemaError }
 
 /**
  * Envelope fields shared by every known event shape. Each per-type struct
@@ -161,14 +161,14 @@ const decodeEvent = Schema.decodeUnknownResult(CopilotCliEventSchema, PRESERVE)
 
 export function parseCopilotCliEvent(value: unknown): CopilotCliParseResult {
   const envelope = decodeEnvelope(value)
-  if (!Result.isSuccess(envelope)) return { success: false, known: false }
+  if (!Result.isSuccess(envelope)) return { success: false, known: false, error: envelope.failure }
   const { timestamp, type } = envelope.success
   if (!Object.hasOwn(CopilotCliEventSchema.cases, type)) {
     return { success: true, event: { kind: 'unknown', timestamp, type } }
   }
 
   const parsed = decodeEvent(value)
-  if (!Result.isSuccess(parsed)) return { success: false, known: true }
+  if (!Result.isSuccess(parsed)) return { success: false, known: true, error: parsed.failure }
   const { type: kind, data } = parsed.success
   return { success: true, event: { kind, timestamp, data } as ParsedCopilotCliEvent }
 }

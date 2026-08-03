@@ -1,5 +1,6 @@
 import { Effect, Predicate } from 'effect'
 import { consumeNewRecords } from './incremental-jsonl'
+import { ParseIssueLog } from './parse-issues'
 import {
   clip,
   commandOk,
@@ -101,6 +102,8 @@ export class TranscriptScan {
   readonly path: string
   line = 0
   malformed = 0
+  /** Why the `malformed` records were skipped; see `ParseIssueLog`. */
+  readonly parseIssues = new ParseIssueLog()
   readonly events: TranscriptEvent[] = []
   readonly toolUses = new Map<string, ToolRecord>()
   readonly openTools = new Map<string, ToolRecord>()
@@ -152,7 +155,7 @@ export class TranscriptScan {
 
   /** Parse the records appended since the last refresh; see consumeNewRecords. */
   readonly refresh = Effect.fn('TranscriptScan.refresh')(function*(this: TranscriptScan) {
-    const { records, next } = yield* consumeNewRecords(this.path, this)
+    const { records, malformed, next } = yield* consumeNewRecords(this.path, this)
     this.line = next.line
     this.malformed = next.malformed
     this.mtime = next.mtime
@@ -160,6 +163,10 @@ export class TranscriptScan {
     this.bytesConsumed = next.bytesConsumed
     this.lastLoadedMtime = next.lastLoadedMtime
     this.lastLoadedSize = next.lastLoadedSize
+
+    for (const entry of malformed) {
+      this.parseIssues.recordInvalidJson(entry.index, entry.line, entry.error)
+    }
 
     for (const [index, value] of records) {
       const parsed = parseClaudeRecord(value)
@@ -172,6 +179,7 @@ export class TranscriptScan {
           error: parsed.error,
         })
         this.malformed += 1
+        this.parseIssues.recordSchemaMismatch(index, value, parsed.error)
       }
     }
     return this

@@ -257,7 +257,7 @@ export type ParsedCodexRecord =
 
 export type CodexParseResult =
   | { success: true, record: ParsedCodexRecord }
-  | { success: false, known: boolean }
+  | { success: false, known: boolean, error: Schema.SchemaError }
 
 const decodeEnvelope = Schema.decodeUnknownResult(CodexRecordEnvelopeSchema, PRESERVE)
 const decodeSessionMeta = Schema.decodeUnknownResult(CodexSessionMetaPayloadSchema, PRESERVE)
@@ -269,7 +269,7 @@ const decodeEvent = Schema.decodeUnknownResult(CodexEventPayloadSchema, PRESERVE
 
 export function parseCodexRecord(value: unknown): CodexParseResult {
   const envelope = decodeEnvelope(value)
-  if (!Result.isSuccess(envelope)) return { success: false, known: false }
+  if (!Result.isSuccess(envelope)) return { success: false, known: false, error: envelope.failure }
   const { timestamp, type, payload } = envelope.success
   const withTimestamp = timestamp === undefined ? {} : { timestamp }
 
@@ -277,17 +277,17 @@ export function parseCodexRecord(value: unknown): CodexParseResult {
     const parsed = decodeSessionMeta(payload)
     return Result.isSuccess(parsed)
       ? { success: true, record: { kind: 'session_meta', ...withTimestamp, data: parsed.success } }
-      : { success: false, known: true }
+      : { success: false, known: true, error: parsed.failure }
   }
   if (type === 'turn_context') {
     const parsed = decodeTurnContext(payload)
     return Result.isSuccess(parsed)
       ? { success: true, record: { kind: 'turn_context', ...withTimestamp, data: parsed.success } }
-      : { success: false, known: true }
+      : { success: false, known: true, error: parsed.failure }
   }
   if (type === 'response_item') {
     const itemEnvelope = decodeResponseItemEnvelope(payload)
-    if (!Result.isSuccess(itemEnvelope)) return { success: false, known: true }
+    if (!Result.isSuccess(itemEnvelope)) return { success: false, known: true, error: itemEnvelope.failure }
     const known = Object.hasOwn(CodexResponseItemSchema.cases, itemEnvelope.success.type)
     if (!known) {
       return {
@@ -302,11 +302,11 @@ export function parseCodexRecord(value: unknown): CodexParseResult {
     const parsed = decodeResponseItem(payload)
     return Result.isSuccess(parsed)
       ? { success: true, record: { kind: 'response_item', ...withTimestamp, data: parsed.success } }
-      : { success: false, known: true }
+      : { success: false, known: true, error: parsed.failure }
   }
   if (type === 'event_msg') {
     const eventEnvelope = decodeEventEnvelope(payload)
-    if (!Result.isSuccess(eventEnvelope)) return { success: false, known: true }
+    if (!Result.isSuccess(eventEnvelope)) return { success: false, known: true, error: eventEnvelope.failure }
     const known = Object.hasOwn(CodexEventPayloadSchema.cases, eventEnvelope.success.type)
     if (!known) {
       return {
@@ -317,7 +317,7 @@ export function parseCodexRecord(value: unknown): CodexParseResult {
     const parsed = decodeEvent(payload)
     return Result.isSuccess(parsed)
       ? { success: true, record: { kind: 'event_msg', ...withTimestamp, data: parsed.success, known: true as const } }
-      : { success: false, known: true }
+      : { success: false, known: true, error: parsed.failure }
   }
   return { success: true, record: { kind: 'unknown', ...withTimestamp, type } }
 }

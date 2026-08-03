@@ -12,6 +12,7 @@ import type {
   CommandRun,
   DiagnosticIncident,
   FileChange,
+  ParseIssue,
   RunDiagnostics,
   SessionEnvironment,
   Timestamp,
@@ -25,6 +26,12 @@ import {
   reconcileTranscriptEvents,
   TranscriptFile,
 } from './copilot-transcript-state'
+import {
+  invalidJsonIssue,
+  ParseIssueLog,
+  schemaMismatchIssue,
+  unsupportedShapeIssue,
+} from './parse-issues'
 import { clip, safeStringify, shortPath } from './transcript-content'
 import {
   compact,
@@ -119,6 +126,11 @@ export class CopilotCliTranscriptScan {
   unknown = 0
   malformedParts = 0
   structuralMalformed = 0
+  /**
+   * Why the skipped records were skipped. Every refresh re-reads the whole
+   * file, so all of this scanner's issues are derived rather than accumulated.
+   */
+  readonly parseIssues = new ParseIssueLog()
   supported = false
   sessionId = ''
   readonly events: TranscriptEvent[] = []
@@ -139,8 +151,10 @@ export class CopilotCliTranscriptScan {
     const { raw } = changed.value
     const completeLines = completeJsonlLines(raw)
     const { values, malformed: malformedLines } = parseJsonlValues(completeLines)
+    const issues: ParseIssue[] = []
     for (const entry of malformedLines) {
       yield* Effect.logDebug('Skipping malformed Copilot CLI event line', { path: this.path, line: entry.index })
+      issues.push(invalidJsonIssue(entry.index, entry.line, entry.error))
     }
 
     const parsedEvents: Array<[number, ParsedCopilotCliEvent]> = []
@@ -152,6 +166,7 @@ export class CopilotCliTranscriptScan {
       if (!parsed.success) {
         yield* Effect.logDebug('Skipping malformed Copilot CLI event record', { path: this.path, line: index })
         malformed += 1
+        issues.push(schemaMismatchIssue(index, value, parsed.error))
         continue
       }
       if (parsed.event.kind === 'unknown') unknown += 1
@@ -161,11 +176,14 @@ export class CopilotCliTranscriptScan {
     this.line = completeLines.length
     this.malformed = malformed
     this.unknown = unknown
-    this.rebuild(parsedEvents)
+    this.rebuild(parsedEvents, issues)
     return this
   })
 
-  private rebuild(records: ReadonlyArray<readonly [number, ParsedCopilotCliEvent]>): void {
+  private rebuild(
+    records: ReadonlyArray<readonly [number, ParsedCopilotCliEvent]>,
+    lineIssues: ReadonlyArray<ParseIssue>,
+  ): void {
     const session = records.find(([, event]) => event.kind === 'session.start')?.[1]
     if (!session || session.kind !== 'session.start') {
       this.supported = false
@@ -173,6 +191,10 @@ export class CopilotCliTranscriptScan {
       this.malformedParts = 0
       this.sessionId = ''
       this.derived = null
+      this.parseIssues.replaceDerived([
+        ...lineIssues,
+        unsupportedShapeIssue(0, null, 'Transcript has no session.start event, so it cannot be read'),
+      ])
       if (reconcileTranscriptEvents(this.events, [])) this.eventRevision += 1
       return
     }
@@ -212,6 +234,7 @@ export class CopilotCliTranscriptScan {
     let reasoningEffort = ''
     let tokensOut = 0
     let malformedParts = 0
+    const derivedIssues: ParseIssue[] = [...lineIssues]
 
     const startTool = (
       id: string,
@@ -304,6 +327,11 @@ export class CopilotCliTranscriptScan {
           const request = parseCopilotCliToolRequest(value)
           if (!request) {
             malformedParts += 1
+            derivedIssues.push(unsupportedShapeIssue(
+              line,
+              value,
+              'Tool request did not match the expected Copilot CLI shape',
+            ))
             return
           }
           startTool(
@@ -396,6 +424,7 @@ export class CopilotCliTranscriptScan {
     }
 
     this.malformedParts = malformedParts
+    this.parseIssues.replaceDerived(derivedIssues)
     const toolList: FileChange[] = Array.from(files, ([path, value]) => ({ path, ...value }))
       .sort((a, b) => b.ops - a.ops)
     const currentTool = Array.from(openTools.values()).at(-1)
@@ -437,6 +466,7 @@ export class CopilotCliTranscriptScan {
       sourceDetail,
       subAgents: spawnToolCallIds.size,
       diagnostics: {
+        parse: this.parseIssues.summary,
         incidents,
         turns,
         compactions: [],

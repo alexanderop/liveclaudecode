@@ -15,6 +15,7 @@ import type {
   CommandRun,
   DiagnosticIncident,
   FileChange,
+  ParseIssue,
   RunDiagnostics,
   SessionEnvironment,
   Timestamp,
@@ -28,6 +29,7 @@ import {
   reconcileTranscriptEvents,
   TranscriptFile,
 } from './copilot-transcript-state'
+import { ParseIssueLog, unsupportedShapeIssue } from './parse-issues'
 import { clip, shortPath } from './transcript-content'
 import { compact, completeJsonlLines, parseJsonlValues, statsNow } from './transcript-scan-core'
 import { emptyCausal, emptyEnvironment, emptyUsage } from './run-shared'
@@ -237,6 +239,8 @@ export class CopilotTranscriptScan {
   unknown = 0
   malformedParts = 0
   structuralMalformed = 0
+  /** Why the skipped records were skipped; see `ParseIssueLog`. */
+  readonly parseIssues = new ParseIssueLog()
   supported = false
   sessionId = ''
   readonly events: TranscriptEvent[] = []
@@ -265,11 +269,13 @@ export class CopilotTranscriptScan {
       this.malformed = 0
       this.unknown = 0
       this.unknownLogRecords = 0
+      this.parseIssues.reset()
     }
 
     const { values, malformed: malformedLines } = parseJsonlValues(completeLines, this.line)
     for (const entry of malformedLines) {
       yield* Effect.logDebug('Skipping malformed Copilot log line', { path: this.path, line: entry.index })
+      this.parseIssues.recordInvalidJson(entry.index, entry.line, entry.error)
     }
     this.malformed += malformedLines.length
 
@@ -278,6 +284,7 @@ export class CopilotTranscriptScan {
       if (!parsed.success) {
         yield* Effect.logDebug('Skipping malformed Copilot log record', { path: this.path, line: index })
         this.malformed += 1
+        this.parseIssues.recordSchemaMismatch(index, value, parsed.error)
         continue
       }
       if (parsed.record.kind === 'unknown') {
@@ -288,6 +295,11 @@ export class CopilotTranscriptScan {
       if (!applied.applied) {
         yield* Effect.logDebug('Skipping unsafe Copilot log replay path', { path: this.path, line: index })
         this.malformed += 1
+        this.parseIssues.recordUnsupportedShape(
+          index,
+          value,
+          'Log record could not be replayed onto the session state',
+        )
         continue
       }
       this.state = applied.state
@@ -299,6 +311,13 @@ export class CopilotTranscriptScan {
       this.supported = false
       this.structuralMalformed = 1
       this.derived = null
+      // The replay produced something that is not a session; report it rather
+      // than returning early with the previous rebuild's derived issues.
+      this.parseIssues.replaceDerived([unsupportedShapeIssue(
+        0,
+        this.state,
+        'Replaying the log did not produce a readable Copilot session',
+      )])
       if (reconcileTranscriptEvents(this.events, [])) this.eventRevision += 1
       return this
     }
@@ -341,6 +360,7 @@ export class CopilotTranscriptScan {
     let permissionMode = ''
     let malformedParts = 0
     let unknownParts = 0
+    const derivedIssues: ParseIssue[] = []
     const nextEvents: TranscriptEvent[] = []
     const workspace = snapshot.workingDirectory || this.workspace
 
@@ -385,6 +405,11 @@ export class CopilotTranscriptScan {
         const line = requestIndex * 10_000 + partIndex + 1
         if (part.kind === 'malformed') {
           malformedParts += 1
+          derivedIssues.push(unsupportedShapeIssue(
+            line,
+            rawPart,
+            'Response part did not match any known Copilot part shape',
+          ))
           return
         }
         if (part.kind === 'unknown') {
@@ -506,6 +531,7 @@ export class CopilotTranscriptScan {
     })
 
     this.malformedParts = malformedParts
+    this.parseIssues.replaceDerived(derivedIssues)
     this.unknown = this.unknownLogRecords + unknownParts
     const live = activeRequest(snapshot)
     if (live && !current) current = {
@@ -558,6 +584,7 @@ export class CopilotTranscriptScan {
       subAgents: spawnToolCallIds.size,
       diagnostics: {
         ...base,
+        parse: this.parseIssues.summary,
         incidents,
         turns,
         changes,

@@ -44,13 +44,14 @@ describe('Copilot CLI event schemas', () => {
       success: true,
       event: { kind: 'unknown', timestamp: fixture.T0(), type: 'future.event' },
     })
-    assert.deepStrictEqual(parseCopilotCliEvent(fixture.event('user.message', { content: 42 })), {
-      success: false,
-      known: true,
-    })
-    assert.deepStrictEqual(parseCopilotCliEvent({ type: 'user.message', data: {} }), {
-      success: false,
-      known: false,
-    })
+    const knownButInvalid = parseCopilotCliEvent(fixture.event('user.message', { content: 42 }))
+    assert.strictEqual(knownButInvalid.success, false)
+    if (!knownButInvalid.success) {
+      assert.strictEqual(knownButInvalid.known, true)
+      assert.ok(knownButInvalid.error.message.length > 0)
+    }
+    const badEnvelope = parseCopilotCliEvent({ type: 'user.message', data: {} })
+    assert.strictEqual(badEnvelope.success, false)
+    if (!badEnvelope.success) assert.strictEqual(badEnvelope.known, false)
   })
 })

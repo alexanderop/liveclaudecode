@@ -7,6 +7,7 @@ import type {
   TranscriptStats,
 } from '#shared/types/run'
 import { detectFileChange } from './filesystem-concurrency'
+import { emptyParseSummary } from './parse-issues'
 import { emptyCausal, emptyUsage } from './run-shared'
 
 export interface ChangedTranscriptFile {
@@ -113,6 +114,7 @@ export function emptyTranscriptStats(mtime: number, size: number, now: number): 
 
 export function emptyTranscriptDiagnostics(environment: SessionEnvironment): RunDiagnostics {
   return {
+    parse: emptyParseSummary(),
     incidents: [],
     turns: [],
     compactions: [],

@@ -99,13 +99,16 @@ describe('RunSidebar', () => {
     expect(wrapper.get('.sidebar-cost-summary').text()).toContain(
       'Transcript-only estimate; excludes hidden helper calls and plan billing.',
     )
+    // The scope filters are toggles; the Costs and Debug links are not.
     expect(wrapper.findAll('.primary-nav-item').map(item => item.attributes('aria-pressed'))).toEqual([
       'true',
       'false',
       'false',
       undefined,
+      undefined,
     ])
     expect(wrapper.get('a[href="/costs"]').text()).toContain('Costs')
+    expect(wrapper.get('a[href="/debug"]').text()).toContain('Debug')
 
     await wrapper.get('button[aria-label="Hide sidebar"]').trigger('click')
     expect(wrapper.emitted('collapse')).toEqual([[]])

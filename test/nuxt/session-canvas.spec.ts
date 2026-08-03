@@ -1,4 +1,4 @@
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { mockComponent, mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
@@ -6,6 +6,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import { mockLiveApi, urlParam } from '../fixtures/live-api'
 import { eventsResponse, runNode, runResponse, timelineLane } from '../fixtures/runs'
+
+// The page mounts the canvas lazily, and a `stubs` entry cannot intercept an
+// async component by name — it has no name until its module resolves. Replacing
+// the module itself is what stands in for the real Vue Flow canvas here.
+mockComponent('RunCanvas', {
+  name: 'RunCanvasStub',
+  props: ['run', 'selectedKey'],
+  emits: ['select', 'deselect'],
+  template: `
+    <div class="canvas-stub">
+      <slot name="actions" />
+      <button class="canvas-node" type="button" @click="$emit('select', 'review')">Review</button>
+      <button class="canvas-empty" type="button" @click="$emit('deselect')">Empty space</button>
+    </div>
+  `,
+})
 
 let component: VueWrapper | null = null
 
@@ -83,18 +99,6 @@ function mockCanvasApi({ root, child, run }: ReturnType<typeof canvasFixtures>) 
   })
 }
 
-const CanvasStub = defineComponent({
-  props: ['run', 'selectedKey'],
-  emits: ['select', 'deselect'],
-  template: `
-    <div class="canvas-stub">
-      <slot name="actions" />
-      <button class="canvas-node" type="button" @click="$emit('select', 'review')">Review</button>
-      <button class="canvas-empty" type="button" @click="$emit('deselect')">Empty space</button>
-    </div>
-  `,
-})
-
 const InspectorStub = defineComponent({
   props: ['selected', 'selectedKey', 'events', 'eventsLoading'],
   emits: ['select', 'close'],
@@ -111,7 +115,6 @@ async function mountCanvasPage() {
     global: {
       stubs: {
         EventFeed: true,
-        RunCanvas: CanvasStub,
         RunChanges: true,
         RunDiagnostics: true,
         RunHero: true,
@@ -125,9 +128,12 @@ async function mountCanvasPage() {
   return wrapper
 }
 
+// The canvas is mounted lazily, so it resolves a tick after the click that
+// selects it.
 async function openMap(wrapper: VueWrapper): Promise<void> {
   await vi.waitFor(() => expect(wrapper.get('[data-destination="map"]').attributes('disabled')).toBeUndefined())
   await wrapper.get('[data-destination="map"]').trigger('click')
+  await vi.waitFor(() => expect(wrapper.find('.canvas-stub').exists()).toBe(true))
 }
 
 describe('persistent session canvas', () => {
@@ -188,7 +194,7 @@ describe('persistent session canvas', () => {
 
     expect(wrapper.findComponent(InspectorStub).exists()).toBe(false)
     expect(wrapper.get('.canvas-stub').element).toBe(originalCanvas)
-    expect(wrapper.getComponent(CanvasStub).props('selectedKey')).toBeFalsy()
+    expect(wrapper.getComponent({ name: 'RunCanvasStub' }).props('selectedKey')).toBeFalsy()
   })
 
   it('shows one primary workspace and restores the same canvas after an Activity round trip', async () => {

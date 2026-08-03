@@ -1,10 +1,12 @@
 import type {
   EventsResponse,
+  ParseHealthResponse,
   PublicRunNode,
   RunDiagnostics,
   RunNode,
   RunResponse,
   SessionEventsResponse,
+  SessionParseHealth,
   TimelineLane,
   TranscriptEvent,
   TreeResponse,
@@ -130,6 +132,7 @@ export function runDiagnostics(overrides: Partial<RunDiagnostics> = {}): RunDiag
     },
     usage: { in: 300, out: 120, cr: 50, cw: 0 },
     cost: { usd: 0.014, pricedRequests: 2, unpricedRequests: 0, estimated: true },
+    parse: { skipped: 0, counts: { invalidJson: 0, schemaMismatch: 0, unsupportedShape: 0 } },
     ...overrides,
   }
 }
@@ -209,6 +212,47 @@ export function treeResponse(
     sources: [],
     now: 0,
     hours,
+  }
+}
+
+export function sessionParseHealth(
+  overrides: Partial<SessionParseHealth> = {},
+): SessionParseHealth {
+  const counts = overrides.counts
+    || { invalidJson: 0, schemaMismatch: 2, unsupportedShape: 0 }
+  return {
+    source: 'claude',
+    sourceDetail: 'Claude Code',
+    projectId: PROJECT_ID,
+    projectName: 'repo',
+    key: 'session',
+    label: 'Ship the dashboard',
+    transcriptPath: '/claude/projects/repo/session.jsonl',
+    lastTs: T0,
+    skipped: counts.invalidJson + counts.schemaMismatch + counts.unsupportedShape,
+    samples: [{
+      reason: 'schema-mismatch',
+      line: 411,
+      recordType: 'assistant',
+      detail: 'Missing key at ["message"]["content"]',
+      excerpt: '{"type":"assistant","message":{"role":"assistant"}}',
+    }],
+    ...overrides,
+    counts,
+  }
+}
+
+export function parseHealthResponse(
+  sessions: SessionParseHealth[] = [sessionParseHealth()],
+  overrides: Partial<ParseHealthResponse> = {},
+): ParseHealthResponse {
+  return {
+    hours: DEFAULT_HOURS,
+    sources: [],
+    sessions,
+    skipped: sessions.reduce((total, session) => total + session.skipped, 0),
+    sampleLimit: 8,
+    ...overrides,
   }
 }
 

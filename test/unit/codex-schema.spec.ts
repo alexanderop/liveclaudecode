@@ -47,7 +47,12 @@ describe('Codex rollout schemas', () => {
       type: 'event_msg',
       payload: { type: 'agent_message', message: 42 },
     })
-    assert.deepStrictEqual(malformed, { success: false, known: true })
+    assert.strictEqual(malformed.success, false)
+    if (!malformed.success) {
+      assert.strictEqual(malformed.known, true)
+      // The decode error is what `/debug` shows, so it must name the field.
+      assert.ok(malformed.error.message.includes('message'))
+    }
   })
 
   it('accepts current task timestamps and nullable token usage', () => {
@@ -86,10 +91,13 @@ describe('Codex rollout schemas', () => {
       type: 'response_item',
       payload: { type: 'message', role: 'assistant', content: 'not-an-array' },
     })
-    assert.deepStrictEqual(malformed, { success: false, known: true })
+    assert.strictEqual(malformed.success, false)
+    if (!malformed.success) assert.strictEqual(malformed.known, true)
   })
 
   it('rejects records without a valid outer envelope', () => {
-    assert.deepStrictEqual(parseCodexRecord({ payload: {} }), { success: false, known: false })
+    const result = parseCodexRecord({ payload: {} })
+    assert.strictEqual(result.success, false)
+    if (!result.success) assert.strictEqual(result.known, false)
   })
 })

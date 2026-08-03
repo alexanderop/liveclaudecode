@@ -1,11 +1,17 @@
 import { assert, describe, it } from '@effect/vitest'
 import { Deferred, Effect, Fiber, Layer, Option } from 'effect'
 import { TestClock } from 'effect/testing'
-import { PromptCache, ScanCache } from '#server/utils/services'
+import { PromptCache, ScanCache, ScanCacheCapacity } from '#server/utils/services'
 import * as claude from '../fixtures/transcripts'
 import { testFileSystem } from '../fixtures/filesystem'
 
 const PATH = '/claude/projects/repo/session.jsonl'
+/**
+ * Eviction is exercised at a deliberately small capacity so a test needs a
+ * handful of transcripts rather than one per production cache slot.
+ */
+const CAPACITY = 64
+const capacity = Layer.succeed(ScanCacheCapacity)(CAPACITY)
 const cachePath = (index: number) => `/claude/projects/repo/session-${index}.jsonl`
 const transcriptTree = (count: number) => Object.fromEntries(
   Array.from({ length: count }, (_, index) => [
@@ -55,7 +61,7 @@ describe('transcript scan cache', () => {
     Effect.gen(function*() {
       yield* TestClock.setTime(0)
       const cache = yield* ScanCache
-      for (let index = 0; index < 64; index += 1) {
+      for (let index = 0; index < CAPACITY; index += 1) {
         yield* TestClock.setTime(index)
         yield* cache.get(cachePath(index))
       }
@@ -63,14 +69,15 @@ describe('transcript scan cache', () => {
       yield* TestClock.setTime(100)
       const promoted = yield* cache.get(cachePath(0))
       yield* TestClock.setTime(101)
-      yield* cache.get(cachePath(64))
+      yield* cache.get(cachePath(CAPACITY))
 
       assert.strictEqual(Option.getOrUndefined(yield* cache.peek(cachePath(0))), promoted)
       assert.isTrue(Option.isNone(yield* cache.peek(cachePath(1))))
-      assert.isTrue(Option.isSome(yield* cache.peek(cachePath(64))))
+      assert.isTrue(Option.isSome(yield* cache.peek(cachePath(CAPACITY))))
     }).pipe(Effect.provide(Layer.mergeAll(
       ScanCache.layer,
-      testFileSystem(transcriptTree(65)),
+      capacity,
+      testFileSystem(transcriptTree(CAPACITY + 1)),
     ))))
 
   it.effect('expires an idle scan after thirty minutes', () =>
@@ -107,7 +114,7 @@ describe('transcript scan cache', () => {
       const active = yield* Effect.forkChild(cache.get(cachePath(0)))
       yield* Deferred.await(readStarted)
 
-      for (let index = 1; index <= 64; index += 1) {
+      for (let index = 1; index <= CAPACITY; index += 1) {
         yield* cache.get(cachePath(index))
       }
       assert.isTrue(Option.isSome(yield* cache.peek(cachePath(0))))
@@ -117,7 +124,8 @@ describe('transcript scan cache', () => {
       assert.strictEqual(Option.getOrUndefined(yield* cache.peek(cachePath(0))), scan)
     }).pipe(Effect.provide(Layer.mergeAll(
       ScanCache.layer,
-      testFileSystem(transcriptTree(65), { beforeRead }),
+      capacity,
+      testFileSystem(transcriptTree(CAPACITY + 1), { beforeRead }),
     )))
   })
 
@@ -144,14 +152,15 @@ describe('transcript scan cache', () => {
       yield* Deferred.succeed(releaseRead, undefined)
       yield* Fiber.join(active)
 
-      for (let index = 1; index <= 64; index += 1) {
+      for (let index = 1; index <= CAPACITY; index += 1) {
         yield* TestClock.setTime(index)
         yield* cache.get(cachePath(index))
       }
       assert.isTrue(Option.isNone(yield* cache.peek(cachePath(0))))
     }).pipe(Effect.provide(Layer.mergeAll(
       ScanCache.layer,
-      testFileSystem(transcriptTree(65), { beforeRead }),
+      capacity,
+      testFileSystem(transcriptTree(CAPACITY + 1), { beforeRead }),
     )))
   })
 
@@ -161,23 +170,24 @@ describe('transcript scan cache', () => {
       const cache = yield* ScanCache
       yield* cache.get(cachePath(0)).pipe(Effect.flip)
 
-      for (let index = 1; index <= 64; index += 1) {
+      for (let index = 1; index <= CAPACITY; index += 1) {
         yield* TestClock.setTime(index)
         yield* cache.get(cachePath(index))
       }
       assert.isTrue(Option.isNone(yield* cache.peek(cachePath(0))))
     }).pipe(Effect.provide(Layer.mergeAll(
       ScanCache.layer,
-      testFileSystem(transcriptTree(65), { denied: [cachePath(0)] }),
+      capacity,
+      testFileSystem(transcriptTree(CAPACITY + 1), { denied: [cachePath(0)] }),
     ))))
 
-  it.effect('converges to capacity after 65 simultaneous refreshes finish', () => {
+  it.effect('converges to capacity after one more simultaneous refresh than fits', () => {
     let allReadsStarted!: Deferred.Deferred<void>
     let releaseReads!: Deferred.Deferred<void>
     let started = 0
     const beforeRead = () => Effect.gen(function*() {
       started += 1
-      if (started === 65) yield* Deferred.succeed(allReadsStarted, undefined)
+      if (started === CAPACITY + 1) yield* Deferred.succeed(allReadsStarted, undefined)
       yield* Deferred.await(releaseReads)
     })
 
@@ -185,19 +195,20 @@ describe('transcript scan cache', () => {
       allReadsStarted = yield* Deferred.make<void>()
       releaseReads = yield* Deferred.make<void>()
       const cache = yield* ScanCache
-      const paths = Array.from({ length: 65 }, (_, index) => cachePath(index))
+      const paths = Array.from({ length: CAPACITY + 1 }, (_, index) => cachePath(index))
       const refreshing = yield* Effect.forkChild(
-        Effect.forEach(paths, path => cache.get(path), { concurrency: 65 }),
+        Effect.forEach(paths, path => cache.get(path), { concurrency: CAPACITY + 1 }),
       )
       yield* Deferred.await(allReadsStarted)
       yield* Deferred.succeed(releaseReads, undefined)
       yield* Fiber.join(refreshing)
 
       const retained = yield* Effect.forEach(paths, path => cache.peek(path))
-      assert.strictEqual(retained.filter(Option.isSome).length, 64)
+      assert.strictEqual(retained.filter(Option.isSome).length, CAPACITY)
     }).pipe(Effect.provide(Layer.mergeAll(
       ScanCache.layer,
-      testFileSystem(transcriptTree(65), { beforeRead }),
+      capacity,
+      testFileSystem(transcriptTree(CAPACITY + 1), { beforeRead }),
     )))
   })
 })

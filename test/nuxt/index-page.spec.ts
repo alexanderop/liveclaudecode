@@ -20,7 +20,6 @@ describe('session view controls', () => {
       global: {
         stubs: {
           EventFeed: true,
-          RunCanvas: { template: '<div><slot name="actions" /></div>' },
           RunChanges: true,
           RunDiagnostics: true,
           RunHero: true,

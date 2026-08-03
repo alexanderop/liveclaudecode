@@ -52,21 +52,21 @@ export type CopilotLogRecord = typeof CopilotLogRecordSchema.Type
 export type ParsedCopilotLogRecord =
   | { success: true, record: CopilotLogRecord }
   | { success: true, record: { kind: 'unknown', recordKind: number } }
-  | { success: false, known: boolean }
+  | { success: false, known: boolean, error: Schema.SchemaError }
 
 const decodeLogEnvelope = Schema.decodeUnknownResult(CopilotLogEnvelopeSchema, PRESERVE)
 const decodeLogRecord = Schema.decodeUnknownResult(CopilotLogRecordSchema, PRESERVE)
 
 export function parseCopilotLogRecord(value: unknown): ParsedCopilotLogRecord {
   const envelope = decodeLogEnvelope(value)
-  if (!Result.isSuccess(envelope)) return { success: false, known: false }
+  if (!Result.isSuccess(envelope)) return { success: false, known: false, error: envelope.failure }
   if (!Object.hasOwn(CopilotLogRecordSchema.cases, String(envelope.success.kind))) {
     return { success: true, record: { kind: 'unknown', recordKind: envelope.success.kind } }
   }
   const record = decodeLogRecord(value)
   return Result.isSuccess(record)
     ? { success: true, record: record.success }
-    : { success: false, known: true }
+    : { success: false, known: true, error: record.failure }
 }
 
 export const CopilotUriSchema = Schema.Struct({

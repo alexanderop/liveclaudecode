@@ -31,13 +31,17 @@ import {
   UnknownRun,
 } from './services'
 import type {
+  ParseHealthResponse,
   ProjectRuns,
   PublicRunNode,
   RunNode,
   SessionEventsResponse,
+  SessionParseHealth,
   SessionSourceStatus,
   TranscriptEvent,
 } from '#shared/types/run'
+import { PARSE_ISSUE_SAMPLE_LIMIT } from './parse-issues'
+import type { TranscriptScan } from './transcript'
 import {
   buildCostOverview,
   summarizeCosts,
@@ -49,6 +53,7 @@ import { bySubLastDesc, visitNodes } from './run-shared'
 interface ClaudeTree {
   roots: RunNode[]
   byKey: Map<string, RunNode>
+  scanByKey: Map<string, TranscriptScan>
   cwd: string
   malformed: number
   unreadable: number
@@ -527,6 +532,52 @@ export const listCostOverview = Effect.fn('listCostOverview')(function*(
   const catalog = yield* loadSessionCatalog(projectInput, hours)
   const nowMillis = yield* Clock.currentTimeMillis
   return buildCostOverview(catalog.costSamples, catalog.sources, nowMillis, hours)
+})
+
+/**
+ * Which sessions skipped records, and why.
+ *
+ * The source-level `SessionSourceStatus` only carries a tally for a whole
+ * provider, which cannot be acted on: it names neither the transcript nor the
+ * cause. This walks the same catalog the dashboard already built and reports
+ * per session, so a skipped record can be traced to a file, a line, and a
+ * reason. Sessions that parsed cleanly are omitted — the page is a problem
+ * list, not an inventory.
+ */
+export const listParseHealth = Effect.fn('listParseHealth')(function*(
+  projectInput: string,
+  hours: number,
+) {
+  const catalog = yield* loadSessionCatalog(projectInput, hours)
+  const projectNames = new Map(catalog.projects.map(project => [project.id, project.name]))
+  const sessions: SessionParseHealth[] = []
+
+  for (const locator of catalog.locators.values()) {
+    const scan = locator.tree.scanByKey.get(locator.node.key)
+    if (!scan || !scan.parseIssues.skipped) continue
+    sessions.push({
+      source: locator.source,
+      sourceDetail: locator.node.sourceDetail,
+      projectId: locator.projectId,
+      projectName: projectNames.get(locator.projectId) || locator.projectId,
+      key: locator.node.key,
+      label: locator.node.label,
+      transcriptPath: scan.path,
+      lastTs: locator.node.lastTs,
+      skipped: scan.parseIssues.skipped,
+      counts: scan.parseIssues.counts,
+      samples: [...scan.parseIssues.samples],
+    })
+  }
+
+  sessions.sort((a, b) => b.skipped - a.skipped || a.label.localeCompare(b.label))
+  return {
+    hours,
+    sources: catalog.sources,
+    sessions,
+    skipped: sessions.reduce((total, session) => total + session.skipped, 0),
+    sampleLimit: PARSE_ISSUE_SAMPLE_LIMIT,
+  } satisfies ParseHealthResponse
 })
 
 export const getSessionRun = Effect.fn('getSessionRun')(function*(

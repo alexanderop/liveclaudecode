@@ -14,13 +14,14 @@ const props = withDefaults(defineProps<{
   root?: RunNode | null
   run: RunResponse | null
   loading?: boolean
-  sourceIncomplete?: boolean
+  /** The provider's storage could not be read at all, so nothing loaded. */
+  sourceUnavailable?: boolean
   sourceMessage?: string
   selectedKey?: string | null
 }>(), {
   root: null,
   loading: false,
-  sourceIncomplete: false,
+  sourceUnavailable: false,
   sourceMessage: '',
   selectedKey: null,
 })
@@ -95,19 +96,52 @@ const sessionMetadata = computed(() => [
   branchLabel.value ? `Branch ${branchLabel.value}` : '',
   overviewRoot.value?.firstTs ? formatTime(overviewRoot.value.firstTs, false) : '',
 ].filter(Boolean))
+/**
+ * Records skipped in *this* session's transcripts, not the provider-wide tally
+ * the source status carries — a count from some other session cannot be acted
+ * on from here.
+ */
+const parseSummary = computed(() => props.run?.diagnostics.parse || null)
+const skippedRecords = computed(() => parseSummary.value?.skipped || 0)
+
+/**
+ * Which cause dominates decides who can fix it: unreadable lines are the
+ * transcript's problem, an unmodelled shape is liveclaudecode's.
+ */
+const parseCause = computed(() => {
+  const counts = parseSummary.value?.counts
+  if (!counts) return ''
+  const unmodelled = counts.schemaMismatch + counts.unsupportedShape
+  if (unmodelled && counts.invalidJson) {
+    return `${unmodelled} used a shape liveclaudecode does not model and ${counts.invalidJson} were not valid JSON.`
+  }
+  if (unmodelled) {
+    return 'They used a shape liveclaudecode does not model, which usually means its transcript schema is out of date.'
+  }
+  return 'Those lines were not valid JSON — usually a transcript still being written, or a damaged file.'
+})
 const attentionTitle = computed(() => {
-  if (props.sourceIncomplete) return 'Session data may be incomplete'
+  if (props.sourceUnavailable) return `${providerLabel.value} data could not be read`
+  if (skippedRecords.value) {
+    return `${skippedRecords.value} record${skippedRecords.value === 1 ? '' : 's'} in this session could not be parsed`
+  }
   const total = attentionCount.value || overviewRoot.value?.subErrors || 0
   return `${total} ${total === 1 ? 'incident needs' : 'incidents need'} review`
 })
 const attentionDetail = computed(() => {
-  if (props.sourceIncomplete) {
-    return props.sourceMessage || `${providerLabel.value} could not be read completely, so some counts may be missing.`
+  if (props.sourceUnavailable) {
+    return props.sourceMessage || `${providerLabel.value} storage could not be opened, so no counts are available.`
   }
+  if (skippedRecords.value) return `${parseCause.value} Counts here may be low.`
   if (displayState.value.kind === 'failed') return 'The session ended without a successful final result.'
   return 'The session recovered, but these warnings may have affected its result.'
 })
-const showAttention = computed(() => props.sourceIncomplete || attentionCount.value > 0 || Boolean(overviewRoot.value?.subErrors))
+/** Only a parse problem has a file and a line to show, so only it links out. */
+const attentionOpensDebug = computed(() => !props.sourceUnavailable && skippedRecords.value > 0)
+const showAttention = computed(() => props.sourceUnavailable
+  || skippedRecords.value > 0
+  || attentionCount.value > 0
+  || Boolean(overviewRoot.value?.subErrors))
 const metrics = computed<Array<{ label: string, value: string | number, icon: string, destination: PrimaryWorkspaceKind }>>(() => {
   const root = overviewRoot.value
   if (!root) return []
@@ -195,8 +229,17 @@ async function copyTranscriptPath(): Promise<void> {
         </button>
       </section>
 
+      <NuxtLink
+        v-if="showAttention && attentionOpensDebug"
+        to="/debug"
+        class="overview-attention"
+      >
+        <UIcon name="i-lucide-bug" />
+        <span><strong>{{ attentionTitle }}</strong><small>{{ attentionDetail }} See which records and where.</small></span>
+        <UIcon name="i-lucide-chevron-right" />
+      </NuxtLink>
       <button
-        v-if="showAttention"
+        v-else-if="showAttention"
         type="button"
         class="overview-attention"
         :class="{ failed: displayState.kind === 'failed' }"

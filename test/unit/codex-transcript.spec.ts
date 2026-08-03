@@ -64,11 +64,75 @@ describe('Codex transcript scan', () => {
       assert.strictEqual(scan.metadata.id, 'session-1')
       assert.strictEqual(scan.line, 2)
       assert.strictEqual(scan.malformed, 1)
+      assert.strictEqual(scan.parseIssues.skipped, 1)
+      assert.strictEqual(scan.parseIssues.samples[0]?.reason, 'invalid-json')
     }).pipe(Effect.provide(testFileSystem({
       [PATH]: fixture.rollout(
         [fixture.sessionMeta('session-1', { cwd: '/repo' })],
         { malformed: true, trailingPartial: true },
       ),
+    })))
+  })
+
+  it.effect('reports function call arguments that are not valid JSON', () => {
+    const scan = new CodexTranscriptScan(PATH)
+    return Effect.gen(function*() {
+      yield* scan.refresh()
+
+      // The record itself decodes, but `arguments` is documented JSON, so a
+      // string that does not parse is a shape this repository cannot model.
+      assert.strictEqual(scan.malformed, 1)
+      assert.strictEqual(scan.parseIssues.skipped, scan.malformed)
+      assert.strictEqual(scan.parseIssues.samples[0]?.reason, 'unsupported-shape')
+      assert.ok(scan.parseIssues.samples[0]?.detail.includes('exec_command'))
+      assert.ok(scan.parseIssues.samples[0]?.excerpt.includes('not-json'))
+    }).pipe(Effect.provide(testFileSystem({
+      [PATH]: fixture.rollout([
+        fixture.sessionMeta('session-1', { cwd: '/repo' }),
+        {
+          timestamp: fixture.C0(4),
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'exec_command',
+            call_id: 'call-1',
+            arguments: '{not-json',
+          },
+        },
+      ]),
+    })))
+  })
+
+  it.effect('does not report free-form custom tool input or plain text output', () => {
+    const scan = new CodexTranscriptScan(PATH)
+    return Effect.gen(function*() {
+      yield* scan.refresh()
+
+      // A `custom_tool_call` carries text, not JSON: `exec` sends JavaScript and
+      // `apply_patch` sends a patch. Tool output is plain text just as often as
+      // it is JSON. Neither is a transcript we mis-model, and counting them was
+      // what reported every healthy Codex session as degraded.
+      assert.strictEqual(scan.malformed, 0)
+      assert.strictEqual(scan.parseIssues.skipped, 0)
+      assert.deepStrictEqual(scan.parseIssues.samples, [])
+      assert.isTrue(scan.events.some(event => event.kind === 'tool_use' && event.tool === 'exec'))
+      assert.isTrue(scan.events.some(event => event.kind === 'tool_result' && !event.error))
+    }).pipe(Effect.provide(testFileSystem({
+      [PATH]: fixture.rollout([
+        fixture.sessionMeta('session-1', { cwd: '/repo' }),
+        {
+          timestamp: fixture.C0(4),
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-1',
+            input: 'const r = await tools.exec_command({ cmd: "pnpm test" });\ntext(r.output);\n',
+            status: 'completed',
+          },
+        },
+        fixture.toolOutput('call-1', 'Process exited with code 0\nOutput:\nall tests passed', { custom: true }),
+      ]),
     })))
   })
 

@@ -97,6 +97,7 @@ describe('execution graph layout', () => {
       {
         root,
         diagnostics: {
+          parse: { skipped: 0, counts: { invalidJson: 0, schemaMismatch: 0, unsupportedShape: 0 } },
           incidents: [{
             id: 'tool-error',
             severity: 'error',

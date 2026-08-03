@@ -7,8 +7,10 @@ import type {
   RunNode,
   ScanDiagnostics,
   SessionEnvironment,
+  SessionParseSummary,
   Usage,
 } from '#shared/types/run'
+import { emptyParseSummary } from './parse-issues'
 
 /**
  * Helpers shared by the Claude, Codex, and Copilot run builders and the
@@ -143,6 +145,7 @@ export interface RunDiagnosticsAccumulator {
   usage: Usage
   causal: CausalSummary
   environment: SessionEnvironment
+  parse: SessionParseSummary
 }
 
 export function emptyRunDiagnostics(): RunDiagnosticsAccumulator {
@@ -157,6 +160,7 @@ export function emptyRunDiagnostics(): RunDiagnosticsAccumulator {
     usage: emptyUsage(),
     causal: emptyCausal(),
     environment: emptyEnvironment(),
+    parse: emptyParseSummary(),
   }
 }
 
@@ -197,5 +201,6 @@ export function finishRunDiagnostics(target: RunDiagnosticsAccumulator): RunDiag
     environment: target.environment,
     causal: target.causal,
     usage: target.usage,
+    parse: target.parse,
   }
 }

@@ -82,16 +82,19 @@ const contextUsesModal = computed(() => {
   const availablePrimary = viewportWidth.value - browserWidth - effectivePanelWidth.value - 7
   return availablePrimary < 640
 })
-const sourceIncomplete = computed(() => {
+/**
+ * Only a source we could not open at all belongs on the session overview. A
+ * merely degraded source carries a provider-wide skipped-record tally that may
+ * come from other sessions entirely; the selected session's own skipped
+ * records travel with its run diagnostics instead.
+ */
+const unavailableSource = computed(() => {
   const source = live.selectedRoot.value?.source
-  if (!source) return false
-  return live.sources.value.some(status => status.source === source && status.state !== 'ready')
+  if (!source) return null
+  return live.sources.value.find(status => status.source === source && status.state === 'unavailable') || null
 })
-const selectedSourceMessage = computed(() => {
-  const source = live.selectedRoot.value?.source
-  if (!source) return ''
-  return live.sources.value.find(status => status.source === source && status.state !== 'ready')?.message || ''
-})
+const sourceUnavailable = computed(() => Boolean(unavailableSource.value))
+const selectedSourceMessage = computed(() => unavailableSource.value?.message || '')
 const attentionCount = computed(() => (live.run.value?.diagnostics.incidents || [])
   .filter(incident => incident.severity !== 'info').length)
 const sessionAgentCount = computed(() => flattenRunTree(live.selectedRoot.value).length)
@@ -324,8 +327,8 @@ watch(attentionCount, (count, previous = 0) => {
 watch(() => live.offline.value, offline => {
   statusAnnouncement.value = offline ? 'Viewer disconnected' : 'Viewer reconnected'
 })
-watch(sourceIncomplete, incomplete => {
-  statusAnnouncement.value = incomplete ? 'Session source degraded' : 'Session source recovered'
+watch(sourceUnavailable, unavailable => {
+  statusAnnouncement.value = unavailable ? 'Session source unavailable' : 'Session source recovered'
 })
 watch(
   () => ({
@@ -439,8 +442,14 @@ onMounted(() => {
               @select="chooseDestination"
             />
 
+            <!--
+              Lazy on purpose: the canvas pulls in Vue Flow and dagre, which is
+              the largest chunk in the app, and the dashboard opens on the
+              overview. Loading it with the page would spend that download and
+              parse before the first tree ever renders.
+            -->
             <KeepAlive :max="10">
-              <RunCanvas
+              <LazyRunCanvas
                 v-if="workspaceState.primary === 'map'"
                 :key="sessionIdentity"
                 :run="live.run.value"
@@ -462,7 +471,7 @@ onMounted(() => {
                 :root="live.selectedRoot.value"
                 :run="live.run.value"
                 :loading="live.loading.value"
-                :source-incomplete="sourceIncomplete"
+                :source-unavailable="sourceUnavailable"
                 :source-message="selectedSourceMessage"
                 @open="openWorkspace"
                 @ask="openAskPanel"

@@ -41,18 +41,19 @@ describe('Copilot schemas', () => {
   })
 
   it('rejects malformed known records without accepting generic objects', () => {
-    assert.deepStrictEqual(parseCopilotLogRecord({ kind: 2, k: 'not-a-path' }), {
-      success: false,
-      known: true,
-    })
-    assert.deepStrictEqual(parseCopilotLogRecord({ kind: 2, k: ['requests'], v: [], i: -1 }), {
-      success: false,
-      known: true,
-    })
-    assert.deepStrictEqual(parseCopilotLogRecord({ kind: 2, k: ['requests'], v: [], i: 1.5 }), {
-      success: false,
-      known: true,
-    })
+    for (const value of [
+      { kind: 2, k: 'not-a-path' },
+      { kind: 2, k: ['requests'], v: [], i: -1 },
+      { kind: 2, k: ['requests'], v: [], i: 1.5 },
+    ]) {
+      const result = parseCopilotLogRecord(value)
+      assert.strictEqual(result.success, false)
+      if (!result.success) {
+        assert.strictEqual(result.known, true)
+        // Carried so `/debug` can say why the record was skipped.
+        assert.ok(result.error.message.length > 0)
+      }
+    }
     assert.strictEqual(parseCopilotSnapshot({ version: 3 }), null)
   })
 })

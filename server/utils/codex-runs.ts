@@ -10,6 +10,7 @@ import type {
   RunNode,
 } from '#shared/types/run'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import { addParseIssueCounts } from './parse-issues'
 import {
   bySubLastDesc,
   countUnreadable,
@@ -173,6 +174,8 @@ export function codexRunDiagnostics(root: RunNode, scanByKey: Map<string, CodexT
   for (const node of nodes) {
     const scan = scanByKey.get(node.key)
     if (!scan) continue
+    addParseIssueCounts(aggregate.parse.counts, scan.parseIssues.counts)
+    aggregate.parse.skipped += scan.parseIssues.skipped
     const diagnostic = scan.diagnostics()
     const who = node.kind === 'session' ? 'Main session' : node.label
     if (node === root) aggregate.environment = diagnostic.environment

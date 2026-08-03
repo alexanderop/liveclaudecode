@@ -113,7 +113,26 @@ interface ScanEntry<A> {
   lastAccess: number
 }
 
-const SCAN_CACHE_CAPACITY = 64
+/**
+ * How many parsed transcripts each scan cache keeps resident.
+ *
+ * The working set is one entry per session inside the selected time range, and
+ * every tree build touches all of them. A capacity below that count makes each
+ * build evict the entries the next build immediately needs, so every poll
+ * re-reads and re-parses every transcript from byte zero — the dominant cost of
+ * a dashboard refresh. Sizing this above a realistic session count keeps the
+ * incremental reader incremental; the idle time-to-live below, not this number,
+ * is what bounds growth over a long-running process.
+ *
+ * A `Context.Reference` rather than a constant so a caller (a test, or a future
+ * memory-constrained deployment) can trade residency for footprint without
+ * threading a parameter through every cache.
+ */
+export const ScanCacheCapacity = Context.Reference<number>(
+  'lcc/ScanCacheCapacity',
+  { defaultValue: () => 2_048 },
+)
+
 const SCAN_CACHE_IDLE_TTL_MILLIS = 30 * 60 * 1_000
 const PROMPT_CACHE_CAPACITY = 256
 
@@ -152,10 +171,11 @@ const refreshCachedScan = Effect.fn('refreshCachedScan')(function*<A extends Ref
   key: string,
   create: () => A,
 ): Effect.fn.Return<A, PlatformError.PlatformError, FileSystem.FileSystem> {
+  const capacity = yield* ScanCacheCapacity
   const startedAt = yield* Clock.currentTimeMillis
   let entry = entries.get(key)
   if (!entry) {
-    trimScanEntries(entries, startedAt, SCAN_CACHE_CAPACITY - 1)
+    trimScanEntries(entries, startedAt, capacity - 1)
     entry = {
       scan: create(),
       semaphore: Semaphore.makeUnsafe(1),
@@ -173,7 +193,7 @@ const refreshCachedScan = Effect.fn('refreshCachedScan')(function*<A extends Ref
       const finishedAt = yield* Clock.currentTimeMillis
       active.users -= 1
       active.lastAccess = finishedAt
-      trimScanEntries(entries, finishedAt, SCAN_CACHE_CAPACITY)
+      trimScanEntries(entries, finishedAt, capacity)
     })),
   )
 })
@@ -182,8 +202,9 @@ const peekCachedScan = Effect.fn('peekCachedScan')(function*<A>(
   entries: Map<string, ScanEntry<A>>,
   key: string,
 ): Effect.fn.Return<Option.Option<A>> {
+  const capacity = yield* ScanCacheCapacity
   const now = yield* Clock.currentTimeMillis
-  trimScanEntries(entries, now, SCAN_CACHE_CAPACITY)
+  trimScanEntries(entries, now, capacity)
   return Option.fromUndefinedOr(entries.get(key)?.scan)
 })
 

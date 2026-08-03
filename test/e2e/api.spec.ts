@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { $fetch, fetch, setup } from '@nuxt/test-utils/e2e'
-import type { CostOverviewResponse, EventsResponse, RunResponse, SessionEventsResponse, TreeResponse } from '#shared/types/run'
+import type { CostOverviewResponse, EventsResponse, ParseHealthResponse, RunResponse, SessionEventsResponse, TreeResponse } from '#shared/types/run'
 import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import * as fixture from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
@@ -198,6 +198,7 @@ describe('read-only API', async () => {
     const paths = [
       '/api/tree',
       '/api/costs',
+      '/api/debug',
       `/api/run?key=${SESSION}`,
       `/api/events?key=${SESSION}&since=0`,
       `/api/session-events?key=${SESSION}`,
@@ -265,6 +266,29 @@ describe('read-only API', async () => {
       expect.objectContaining({ source: 'codex', label: 'gpt-5.6-test' }),
     ]))
     expect(response.usage.out).toBeGreaterThan(11)
+  })
+
+  it('attributes each skipped record to its transcript, line, and cause', async () => {
+    const response = await $fetch<ParseHealthResponse>('/api/debug')
+    const codexSession = response.sessions.find(session => session.source === 'codex')
+
+    // The Codex rollout fixture carries one line that is not valid JSON. The
+    // source status only tallies it; this endpoint has to locate it.
+    expect(response.skipped).toBe(1)
+    expect(codexSession).toMatchObject({
+      source: 'codex',
+      key: `codex:${CODEX_SESSION}`,
+      transcriptPath: codexRootPath,
+      skipped: 1,
+      counts: { invalidJson: 1, schemaMismatch: 0, unsupportedShape: 0 },
+    })
+    expect(codexSession?.samples).toHaveLength(1)
+    expect(codexSession?.samples[0]).toMatchObject({ reason: 'invalid-json' })
+    expect(codexSession?.samples[0]?.excerpt).toContain('response_item')
+    expect(codexSession?.samples[0]?.detail.length).toBeGreaterThan(0)
+
+    // Sessions that parsed cleanly are absent: this is a problem list.
+    expect(response.sessions.map(session => session.source)).toEqual(['codex'])
   })
 
   it('merges root and subagent transcripts into one chronological activity stream', async () => {

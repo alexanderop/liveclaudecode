@@ -49,9 +49,10 @@ export const ClaudeUsageSchema = Schema.Struct({
   cache_creation_input_tokens: Schema.optionalKey(NonNegativeInt),
   cache_creation: Schema.optionalKey(ClaudeCacheCreationSchema),
   server_tool_use: Schema.optionalKey(ClaudeServerToolUseSchema),
-  service_tier: Schema.optionalKey(Schema.String),
-  inference_geo: Schema.optionalKey(Schema.String),
-  speed: Schema.optionalKey(Schema.String),
+  // Synthetic assistant records (model `<synthetic>`) emit these as null.
+  service_tier: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  inference_geo: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  speed: Schema.optionalKey(Schema.NullOr(Schema.String)),
 })
 
 export const ClaudeTextBlockSchema = Schema.Struct({

@@ -39,7 +39,6 @@ describe('accessibility', () => {
       attachTo: document.body,
       global: {
         stubs: {
-          RunCanvas: true,
           UTooltip: { template: '<slot />' },
         },
       },
@@ -62,7 +61,6 @@ describe('accessibility', () => {
       attachTo: document.body,
       global: {
         stubs: {
-          RunCanvas: true,
           UTooltip: { template: '<slot />' },
         },
       },

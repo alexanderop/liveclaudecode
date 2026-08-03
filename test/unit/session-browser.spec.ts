@@ -4,6 +4,7 @@ import { TestClock } from 'effect/testing'
 import {
   getSessionActivity,
   getSessionEvents,
+  listParseHealth,
   loadSessionCatalog,
   SessionCatalogCache,
   SessionLocatorCache,
@@ -131,6 +132,47 @@ describe('unified session catalog', () => {
           })],
         })),
       ]),
+    }))))
+
+  it.effect('attributes skipped records to the session and file they came from', () =>
+    Effect.gen(function*() {
+      const health = yield* listParseHealth('', 999_999)
+
+      // Worst first, so the biggest problem is not buried behind a small one.
+      assert.deepStrictEqual(
+        health.sessions.map(session => [session.key, session.skipped]),
+        [['claude-noisy', 2], ['codex:codex-2', 1]],
+      )
+      assert.strictEqual(health.skipped, 3)
+
+      const claudeSession = health.sessions[0]!
+      assert.strictEqual(claudeSession.source, 'claude')
+      assert.strictEqual(claudeSession.transcriptPath, `${CLAUDE}/repo/claude-noisy.jsonl`)
+      assert.deepStrictEqual(claudeSession.counts, {
+        invalidJson: 1,
+        schemaMismatch: 1,
+        unsupportedShape: 0,
+      })
+      assert.deepStrictEqual(
+        claudeSession.samples.map(issue => [issue.reason, issue.line]),
+        [['invalid-json', 0], ['schema-mismatch', 1]],
+      )
+      // The decode error names the field, which is what makes it actionable.
+      assert.ok(claudeSession.samples[1]?.detail.includes('content'))
+
+      // A session that parsed cleanly is absent: this is a problem list.
+      assert.strictEqual(health.sessions.some(session => session.key === 'claude-clean'), false)
+    }).pipe(Effect.provide(layer({
+      [`${CLAUDE}/repo/claude-clean.jsonl`]: claude.transcript([
+        claude.userText('Clean session'),
+      ]),
+      [`${CLAUDE}/repo/claude-noisy.jsonl`]: '{"type":"assistant""broken"}\n'
+        + '{"type":"assistant","message":{"role":"assistant","content":42}}\n'
+        + claude.transcript([claude.userText('Noisy session')]),
+      [`${CODEX}/2026/07/26/rollout-codex-2.jsonl`]: codex.rollout([
+        codex.sessionMeta('codex-2', { cwd: '/repo' }),
+        codex.message('user', 'Codex session'),
+      ], { malformed: true }),
     }))))
 
   it.effect('shares one Claude discovery budget across every catalog project', () => {

@@ -36,6 +36,7 @@ import {
   toolSummary,
 } from './transcript-content'
 import { consumeNewRecords } from './incremental-jsonl'
+import { ParseIssueLog } from './parse-issues'
 import {
   compactText,
   type MutableFileChange,
@@ -101,25 +102,30 @@ function finite(value: number | undefined): number {
 }
 
 /**
- * `arguments`/`input` arrive JSON-encoded. A malformed string falls back to
- * `{}` as before, but now feeds `onMalformed` so the caller can surface it
- * (the scan's `malformed` counter) instead of dropping it silently.
+ * A `function_call`'s `arguments` arrive JSON-encoded, so a string that fails to
+ * decode is a shape we cannot model and feeds `onMalformed`. A
+ * `custom_tool_call`'s `input` is free-form text by design — `exec` carries
+ * JavaScript and `apply_patch` carries patch text — so its callers pass no
+ * `onMalformed` and take the empty fallback silently.
  */
-function parseArguments(value: string, onMalformed: () => void): Readonly<Record<string, unknown>> {
+function parseArguments(value: string, onMalformed?: () => void): Readonly<Record<string, unknown>> {
   const decoded = parseCodexToolArgumentsJson(value)
   if (Result.isSuccess(decoded)) return decoded.success
-  onMalformed()
+  onMalformed?.()
   return {}
 }
 
-function explicitToolOutcome(value: unknown, onMalformed: () => void): boolean | null {
+/**
+ * Tool output is JSON only when the tool chose to emit it that way; plain text
+ * is just as normal, and both leave the outcome undetermined rather than
+ * signalling a transcript we mis-model. A decode failure is therefore not a
+ * parse issue.
+ */
+function explicitToolOutcome(value: unknown): boolean | null {
   const output = typeof value === 'string'
     ? Result.match(parseCodexToolOutputJson(value), {
       onSuccess: success => success,
-      onFailure: () => {
-        onMalformed()
-        return null
-      },
+      onFailure: () => null,
     })
     : parseCodexToolOutput(value)
   if (!output) return null
@@ -169,6 +175,8 @@ export class CodexTranscriptScan {
   firstTs: Timestamp = null
   lastTs: Timestamp = null
   usage: Usage = emptyUsage()
+  /** Why the `malformed` records were skipped; see `ParseIssueLog`. */
+  readonly parseIssues = new ParseIssueLog()
   taskActive = false
   mtime = 0
   size = 0
@@ -182,7 +190,7 @@ export class CodexTranscriptScan {
 
   /** Parse the records appended since the last refresh; see consumeNewRecords. */
   readonly refresh = Effect.fn('CodexTranscriptScan.refresh')(function*(this: CodexTranscriptScan) {
-    const { records, next } = yield* consumeNewRecords(this.path, this)
+    const { records, malformed, next } = yield* consumeNewRecords(this.path, this)
     this.line = next.line
     this.malformed = next.malformed
     this.mtime = next.mtime
@@ -191,11 +199,16 @@ export class CodexTranscriptScan {
     this.lastLoadedMtime = next.lastLoadedMtime
     this.lastLoadedSize = next.lastLoadedSize
 
+    for (const entry of malformed) {
+      this.parseIssues.recordInvalidJson(entry.index, entry.line, entry.error)
+    }
+
     for (const [index, value] of records) {
       const parsed = parseCodexRecord(value)
       if (!parsed.success) {
         yield* Effect.logDebug('Skipping malformed Codex transcript record', { path: this.path, line: index })
         this.malformed += 1
+        this.parseIssues.recordSchemaMismatch(index, value, parsed.error)
         continue
       }
       if (parsed.record.kind === 'unknown') this.unknown += 1
@@ -287,7 +300,17 @@ export class CodexTranscriptScan {
       const name = displayToolName(rawName)
       const id = item.call_id
       const encoded = item.type === 'function_call' ? item.arguments : item.input
-      const input = parseArguments(encoded, () => { this.malformed += 1 })
+      const input = item.type === 'function_call'
+        ? parseArguments(encoded, () => {
+          this.malformed += 1
+          this.parseIssues.recordUnsupportedShape(
+            line,
+            encoded,
+            `Tool call ${rawName} carried arguments that are not valid JSON`,
+            rawName,
+          )
+        })
+        : parseArguments(encoded)
       const commandText = name === 'exec_command' && typeof input.cmd === 'string'
         ? input.cmd.trim().replace(/\s+/g, ' ').slice(0, 160)
         : ''
@@ -324,7 +347,7 @@ export class CodexTranscriptScan {
 
     const id = item.call_id
     const source = this.toolUses.get(id)
-    const outcome = explicitToolOutcome(item.output, () => { this.malformed += 1 })
+    const outcome = explicitToolOutcome(item.output)
     const error = outcome === false
     this.openTools.delete(id)
     const text = resultText(item.output)

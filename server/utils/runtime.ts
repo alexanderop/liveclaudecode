@@ -50,6 +50,23 @@ export function disposeRuntime(): Promise<void> {
   return runtime.dispose()
 }
 
+/**
+ * Run an Effect that no request is waiting on, such as a startup warm-up.
+ *
+ * Nothing consumes the result, so a failure is logged rather than raised: work
+ * the server merely wanted to get a head start on must never be the reason it
+ * refuses to serve. `disposeRuntime` interrupts whatever is still in flight.
+ */
+export function runBackground(
+  label: string,
+  effect: Effect.Effect<unknown, AppError, AppServices>,
+): void {
+  void runtime.runPromise(Effect.catchCause(
+    effect,
+    cause => Effect.logWarning(`Background task failed: ${label}`, { cause }),
+  ))
+}
+
 export type AppError =
   | NoTranscriptsFound
   | UnknownProject

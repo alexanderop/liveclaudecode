@@ -36,6 +36,7 @@ const allRoots = computed(() => props.allProjects.flatMap(project => project.roo
 const liveCount = computed(() => allRoots.value.filter(root => root.subLive).length)
 const attentionCount = computed(() => allRoots.value.filter(root => root.subErrors && !root.subLive).length)
 const unhealthySources = computed(() => props.sources.filter(source => source.state !== 'ready'))
+const skippedRecords = computed(() => props.sources.reduce((total, source) => total + source.malformed, 0))
 const activeFilterCount = computed(() => [
   sourceFilter.value !== 'all',
   projectFilter.value !== 'all',
@@ -209,6 +210,16 @@ function organizeBy(value: 'project' | 'list'): void {
       >
         <UIcon name="i-lucide-chart-no-axes-combined" />
         <span>Costs</span>
+      </UButton>
+      <UButton
+        to="/debug"
+        class="primary-nav-item"
+        color="neutral"
+        variant="ghost"
+      >
+        <UIcon name="i-lucide-bug" />
+        <span>Debug</span>
+        <span v-if="skippedRecords" class="nav-count warning">{{ skippedRecords }}</span>
       </UButton>
     </nav>
 
