@@ -4,6 +4,13 @@ import { NonNegativeInt, parseOrNull } from './parse'
 const PRESERVE = { onExcessProperty: 'preserve' } as const
 
 const optionalString = Schema.optionalKey(Schema.String)
+/**
+ * Codex emits `"phase": null` on messages that belong to no phase, so an
+ * absent key and an explicit `null` mean the same thing here. Decoding these
+ * as a failure would drop the whole record — including the final assistant
+ * message — instead of one unused field.
+ */
+const optionalNullableString = Schema.optionalKey(Schema.NullOr(Schema.String))
 const optionalFinite = Schema.optionalKey(Schema.Finite)
 const optionalNonNegativeInt = Schema.optionalKey(NonNegativeInt)
 
@@ -67,7 +74,7 @@ export const CodexMessageItemSchema = Schema.Struct({
   role: Schema.Literals(['user', 'assistant', 'developer', 'system']),
   content: Schema.Array(Schema.Unknown),
   id: optionalString,
-  phase: optionalString,
+  phase: optionalNullableString,
 })
 
 export const CodexFunctionCallItemSchema = Schema.Struct({
@@ -151,7 +158,7 @@ export const CodexPatchApplyEndPayloadSchema = Schema.Struct({
 export const CodexAgentMessagePayloadSchema = Schema.Struct({
   type: Schema.Literal('agent_message'),
   message: Schema.String,
-  phase: Schema.optionalKey(Schema.String),
+  phase: optionalNullableString,
 })
 
 export const CodexAgentReasoningPayloadSchema = Schema.Struct({

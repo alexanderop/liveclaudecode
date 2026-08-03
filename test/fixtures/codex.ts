@@ -71,7 +71,7 @@ export function turnContext(
 export function message(
   role: 'user' | 'assistant' | 'developer' | 'system',
   text: string,
-  options: { ts?: string, phase?: string } = {},
+  options: { ts?: string, phase?: string | null } = {},
 ): RecordValue {
   return {
     timestamp: options.ts || C0(2),
@@ -80,7 +80,7 @@ export function message(
       type: 'message',
       role,
       content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }],
-      ...(options.phase ? { phase: options.phase } : {}),
+      ...(options.phase === undefined ? {} : { phase: options.phase }),
     },
   }
 }

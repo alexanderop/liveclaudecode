@@ -55,6 +55,25 @@ describe('Codex rollout schemas', () => {
     }
   })
 
+  it('keeps phase-less records readable when Codex writes an explicit null phase', () => {
+    const event = parseCodexRecord(fixture.event('agent_message', {
+      message: 'Review was interrupted.',
+      phase: null,
+      memory_citation: null,
+    }))
+    assert.isTrue(event.success)
+    if (!event.success || event.record.kind !== 'event_msg') return
+    assert.strictEqual(event.record.known, true)
+    assert.strictEqual(event.record.data.type, 'agent_message')
+    if (!('message' in event.record.data)) return
+    assert.strictEqual(event.record.data.message, 'Review was interrupted.')
+
+    const item = parseCodexRecord(fixture.message('assistant', 'Finished', { phase: null }))
+    assert.isTrue(item.success)
+    if (!item.success || item.record.kind !== 'response_item') return
+    assert.strictEqual(item.record.data.type, 'message')
+  })
+
   it('accepts current task timestamps and nullable token usage', () => {
     const started = parseCodexRecord(fixture.event('task_started', {
       turn_id: 'turn-1',
