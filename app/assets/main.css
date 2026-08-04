@@ -730,7 +730,7 @@ html.panel-resizing * { cursor: col-resize !important; user-select: none !import
   padding: 0;
   border-bottom: 1px solid var(--line-soft);
 }
-.inspector-tabs [data-slot="list"] { display: grid; width: 100%; grid-template-columns: repeat(5, 1fr); gap: 0; padding: 0 5px; border-radius: 0; background: transparent; }
+.inspector-tabs [data-slot="list"] { display: grid; width: 100%; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0; padding: 0 5px; border-radius: 0; background: transparent; }
 .inspector-tabs button {
   position: relative;
   display: inline-flex;
@@ -878,7 +878,8 @@ html.panel-resizing * { cursor: col-resize !important; user-select: none !import
 .session-panel > .guide-view,
 .session-panel > .changes-view,
 .session-panel > .diagnostics-view { min-height: 0; flex: 1; }
-.session-panel > .chat-panel { min-height: 0; flex: 1; }
+.session-panel > .chat-panel,
+.inspector > .chat-panel { min-height: 0; flex: 1; }
 .session-panel .guide-view,
 .session-panel .now-view,
 .session-panel .changes-view,

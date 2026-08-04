@@ -163,7 +163,8 @@ Spatial rules:
   unchanged.
 - Mobile: Ask opens as a full-screen modal sheet. Closing it returns to the
   unchanged primary workspace.
-- Opening Ask replaces Agent details in the context region.
+- Opening Ask from the launcher replaces Agent details in the context region.
+  The agent-scoped Ask inside Agent details is a tab there, not this state.
 - Ask conversation state is owned per selected session.
 
 ### 8.3 Consolidation of existing views
@@ -590,6 +591,7 @@ provide primary navigation.
 |                                               | Incidents                    |
 |                                               | Files                        |
 |                                               | Result                       |
+|                                               | Ask                          |
 |                                               |                              |
 | [Open view]                                   |                              |
 +-----------------------------------------------+------------------------------+
@@ -626,6 +628,17 @@ Ask persistence:
 - Opening Ask replaces Agent details.
 - Ask state requires a keyed per-session store or a controlled KeepAlive
   strategy; relying on the current conditional mount is insufficient.
+
+Agent-scoped Ask:
+
+- Agent details carries its own Ask tab, scoped to the inspected agent's
+  transcript alone. It is a tab, not a context-panel state, so it does not
+  replace Agent details the way the launcher's session Ask does.
+- Its conversation is keyed per project and agent key, separate from the
+  session Ask and from every other agent's.
+- Selecting a different agent returns the panel to Summary rather than carrying
+  the tab onto another conversation.
+- Leaving the tab unmounts the panel, so a hidden agent Ask does not poll.
 
 ## 18. Global header and search
 

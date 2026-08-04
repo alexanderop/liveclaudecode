@@ -25,11 +25,14 @@ import {
   WorkingDirectory,
   VsCodeUserDataDirectories,
 } from '#server/utils/services'
+import * as claude from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
 import { testFileSystem } from '../fixtures/filesystem'
 
 const CODEX = '/codex/sessions'
 const TRANSCRIPT = `${CODEX}/2026/07/28/rollout-chat-run.jsonl`
+const CLAUDE = '/claude/projects/repo'
+const SUBAGENT_TRANSCRIPT = `${CLAUDE}/ask-parent/subagents/agent-a.jsonl`
 
 function chatLayer(
   prompts: unknown[],
@@ -116,6 +119,19 @@ function chatLayer(
       codex.sessionMeta('chat-run', { cwd: '/repo' }),
       codex.message('user', 'Run the tests'),
     ]),
+    [`${CLAUDE}/ask-parent.jsonl`]: claude.transcript([
+      claude.userText('Ship the dashboard'),
+      claude.assistant([claude.tool('Agent', 'spawn-a', { description: 'Sweep the dashboard styles' })]),
+    ]),
+    [SUBAGENT_TRANSCRIPT]: claude.transcript([
+      claude.assistant([claude.tool('Edit', 'edit-1', { file_path: '/repo/app/assets/main.css' })]),
+      claude.userResult('edit-1', 'ok'),
+    ]),
+    [`${CLAUDE}/ask-parent/subagents/agent-a.meta.json`]: JSON.stringify({
+      agentType: 'implementation-worker',
+      description: 'Sweep the dashboard styles',
+      toolUseId: 'spawn-a',
+    }),
   })))
 }
 
@@ -210,9 +226,35 @@ describe('session chat', () => {
       const secondPrompt = prompts[1] as { prompt: Array<{ type: string, text: string }> }
       assert.strictEqual(firstPrompt.prompt.length, 2)
       assert.isTrue(firstPrompt.prompt[0]!.text.includes(TRANSCRIPT))
+      // A whole-session conversation must not inherit the subagent framing.
+      assert.isFalse(firstPrompt.prompt[0]!.text.includes('subagent'))
       assert.deepStrictEqual(secondPrompt.prompt, [{ type: 'text', text: 'What should I fix?' }])
       assert.strictEqual(second.events.filter(isTurnEnd).length, 2)
     }).pipe(Effect.provide(chatLayer(prompts)))
+  })
+
+  it.effect('points a subagent conversation at that subagent\'s own transcript', () => {
+    const prompts: unknown[] = []
+    const connections: AcpConnectionOptions[] = []
+    return Effect.gen(function*() {
+      yield* sendChatMessage(
+        '',
+        999_999,
+        '/repo',
+        'ask-parent/agent-a',
+        'claude',
+        'What did this agent change?',
+      )
+      yield* waitForIdle('/repo', 'ask-parent/agent-a')
+
+      const preamble = (prompts[0] as { prompt: Array<{ text: string }> }).prompt[0]!.text
+      assert.isTrue(preamble.includes(SUBAGENT_TRANSCRIPT))
+      assert.isTrue(preamble.includes('Sweep the dashboard styles'))
+      assert.isTrue(preamble.includes('implementation-worker'))
+      assert.isTrue(preamble.includes('neither the parent session\'s messages nor any sibling'))
+      // The subagent's recorded cwd, not the projects directory.
+      assert.strictEqual(connections[0]!.cwd, '/repo')
+    }).pipe(Effect.provide(chatLayer(prompts, connections)))
   })
 
   it.effect('cancels a new reservation while admission waits for eviction cleanup', () => {

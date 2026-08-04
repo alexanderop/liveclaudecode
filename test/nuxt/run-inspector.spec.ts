@@ -4,6 +4,8 @@ import type { VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import RunInspector from '~/components/RunInspector.vue'
 import type { RunNode, RunResponse } from '#shared/types/run'
+import { chatActionResponse, chatEventsResponse } from '../fixtures/chat'
+import { mockLiveApi } from '../fixtures/live-api'
 import { runNode, runResponse, timelineLane, transcriptEvent } from '../fixtures/runs'
 
 let component: VueWrapper | null = null
@@ -11,7 +13,16 @@ let component: VueWrapper | null = null
 afterEach(() => {
   component?.unmount()
   component = null
+  vi.unstubAllGlobals()
 })
+
+const ASK_TAB = 5
+
+/** Requests the chat poll made, so a test can watch polling start and stop. */
+function chatPolls(fetch: ReturnType<typeof mockLiveApi>): number {
+  return fetch.mock.calls.filter(([url, options]) =>
+    String(url).startsWith('/api/chat') && options?.method !== 'POST').length
+}
 
 function inspectorNode(key: string, overrides: Partial<RunNode> = {}): RunNode {
   return runNode({
@@ -90,6 +101,8 @@ describe('run inspector', () => {
         root,
         selected: child,
         selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
         events: [transcriptEvent('Reviewed the accessibility flow.', {
           ts: '2026-07-28T10:00:01.000Z',
         })],
@@ -131,6 +144,8 @@ describe('run inspector', () => {
         root,
         selected: child,
         selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
         events: [transcriptEvent('Audit the **focus order**', { role: 'user', kind: 'prompt' })],
         eventsLoading: false,
         density: 'normal',
@@ -164,6 +179,8 @@ describe('run inspector', () => {
         root,
         selected: child,
         selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
         events: [],
         eventsLoading: false,
         density: 'normal',
@@ -190,6 +207,8 @@ describe('run inspector', () => {
         root,
         selected: child,
         selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
         events: [],
         eventsLoading: true,
         density: 'compact',
@@ -203,5 +222,123 @@ describe('run inspector', () => {
     await flushPromises()
     expect(wrapper.get('.inspector-activity-loading').text()).toContain('Loading agent activity')
     expect(wrapper.find('.feed').exists()).toBe(false)
+  })
+
+  it('scopes the Ask tab to the inspected subagent', async () => {
+    const child = inspectorNode('root/review', { label: 'Review accessibility' })
+    const root = inspectorNode('root', { children: [child] })
+    const fetch = mockLiveApi(root, {
+      chat: () => chatEventsResponse(),
+      chatAction: () => chatActionResponse(),
+    })
+    const wrapper = component = await mountSuspended(RunInspector, {
+      props: {
+        run: inspectorRun(root, child),
+        root,
+        selected: child,
+        selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
+        events: [],
+        eventsLoading: false,
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+
+    await wrapper.findAll('[role="tab"]')[ASK_TAB]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
+
+    expect(wrapper.get('.chat-empty').text()).toContain('Ask about this subagent')
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/chat?project=%2Frepo&key=root%2Freview&since=0&revision=0&hours=720'),
+      { signal: expect.any(AbortSignal) },
+    )
+
+    await wrapper.get('textarea').setValue('What did this agent change?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const post = fetch.mock.calls.find(([, options]) => options?.method === 'POST')
+    expect(post?.[1]?.body).toEqual({
+      action: 'send',
+      project: '/repo',
+      key: 'root/review',
+      agent: 'claude',
+      text: 'What did this agent change?',
+    })
+  })
+
+  it('stops polling the subagent chat once another tab is opened', async () => {
+    const child = inspectorNode('root/review', { label: 'Review accessibility' })
+    const root = inspectorNode('root', { children: [child] })
+    const fetch = mockLiveApi(root, { chat: () => chatEventsResponse() })
+    const wrapper = component = await mountSuspended(RunInspector, {
+      props: {
+        run: inspectorRun(root, child),
+        root,
+        selected: child,
+        selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
+        events: [],
+        eventsLoading: false,
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+
+    vi.useFakeTimers()
+    try {
+      await wrapper.findAll('[role="tab"]')[ASK_TAB]!.trigger('mousedown', { button: 0 })
+      await flushPromises()
+      const opened = chatPolls(fetch)
+      await vi.advanceTimersByTimeAsync(2_400)
+      expect(chatPolls(fetch)).toBeGreaterThan(opened)
+
+      await wrapper.findAll('[role="tab"]')[0]!.trigger('mousedown', { button: 0 })
+      await flushPromises()
+      const closed = chatPolls(fetch)
+      await vi.advanceTimersByTimeAsync(2_400)
+
+      expect(wrapper.find('.chat-panel').exists()).toBe(false)
+      expect(chatPolls(fetch)).toBe(closed)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves the Ask tab when another agent is selected', async () => {
+    const child = inspectorNode('root/review', { label: 'Review accessibility' })
+    const sibling = inspectorNode('root/audit', { label: 'Audit the styles' })
+    const root = inspectorNode('root', { children: [child, sibling] })
+    mockLiveApi(root, { chat: () => chatEventsResponse() })
+    const wrapper = component = await mountSuspended(RunInspector, {
+      props: {
+        run: inspectorRun(root, child),
+        root,
+        selected: child,
+        selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
+        events: [],
+        eventsLoading: false,
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+
+    await wrapper.findAll('[role="tab"]')[ASK_TAB]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
+    expect(wrapper.find('.chat-panel').exists()).toBe(true)
+
+    await wrapper.setProps({ selected: sibling, selectedKey: sibling.key })
+    await flushPromises()
+
+    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('Summary')
+    expect(wrapper.find('.chat-panel').exists()).toBe(false)
   })
 })

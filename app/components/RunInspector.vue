@@ -12,11 +12,15 @@ const props = defineProps<{
   root: RunNode | null
   selected: RunNode | null
   selectedKey: string | null
+  /** Project of the observed session; scopes the Ask conversation with `selectedKey`. */
+  project: string
   events: TranscriptEvent[]
   eventsLoading: boolean
   density: FeedDensity
   errorsOnly: boolean
   followOutput: boolean
+  /** Active time range, forwarded to the chat API so it resolves the same catalog. */
+  hours: number
   currentTime?: number | null
   focusedLine?: number | null
   focusedFile?: string | null
@@ -30,7 +34,7 @@ const emit = defineEmits<{
   'focus-time': [timestamp: number | null, line: number | null]
   'focus-file': [path: string | null]
 }>()
-type InspectorTab = 'summary' | 'activity' | 'incidents' | 'files' | 'result'
+type InspectorTab = 'summary' | 'activity' | 'incidents' | 'files' | 'result' | 'ask'
 const activeTab = ref<InspectorTab>('summary')
 
 const tabs = [
@@ -39,6 +43,7 @@ const tabs = [
   { id: 'incidents', label: 'Incidents', icon: 'i-lucide-circle-alert' },
   { id: 'files', label: 'Files', icon: 'i-lucide-files' },
   { id: 'result', label: 'Result', icon: 'i-lucide-message-square-text' },
+  { id: 'ask', label: 'Ask', icon: 'i-lucide-message-square' },
 ] as const
 const inspectorTabs = computed(() => tabs.map(tab => ({
   ...tab,
@@ -61,6 +66,12 @@ const agentIndex = computed(() => new Map(flattenRunTree(props.root).map(node =>
 const selectedChanges = computed(() => (props.run?.diagnostics.changes || []).filter(change => change.key === props.selectedKey))
 const selectedFiles = computed(() =>
   mergeAgentFileChanges(props.selected?.files || [], selectedChanges.value))
+/**
+ * One ChatPanel instance belongs to one conversation: `useChatSessionState`
+ * reads its project and key once at setup, so another agent needs another
+ * instance rather than a prop update.
+ */
+const chatIdentity = computed(() => `${props.project}\0${props.selectedKey || ''}`)
 const promptEvent = computed(() => props.events.find(event => event.kind === 'prompt'))
 const lastText = computed(() => [...props.events].reverse().find(event => event.kind === 'text'))
 /** The spawn prompt and the returned result are both markdown the model saw or wrote. */
@@ -212,6 +223,15 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
         <p v-else class="result-empty">No final result was recorded.</p>
       </section>
     </div>
+
+    <ChatPanel
+      v-else-if="run && root && selected && activeTab === 'ask'"
+      :key="chatIdentity"
+      :project="project"
+      :session-key="selectedKey || ''"
+      :hours="hours"
+      scope="subagent"
+    />
 
     <UEmpty v-else class="inspector-empty" icon="i-lucide-panel-right" title="Session properties will appear here" variant="naked" />
   </aside>

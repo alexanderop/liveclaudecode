@@ -99,6 +99,27 @@ describe('ChatPanel', () => {
     )
   })
 
+  it('names the conversation after the subagent when scoped to one', async () => {
+    const fetch = mockLiveApi(runNode())
+    const wrapper = component = await mountSuspended(ChatPanel, {
+      props: {
+        project: '/repo',
+        sessionKey: 'session/agent-a',
+        hours: 720,
+        scope: 'subagent' as const,
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.chat-empty').text()).toContain('Ask about this subagent')
+    expect(wrapper.find('[aria-label="Question about this subagent"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="Question about this session"]').exists()).toBe(false)
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/chat?project=%2Frepo&key=session%2Fagent-a&since=0&revision=0&hours=720'),
+      { signal: expect.any(AbortSignal) },
+    )
+  })
+
   it('releases conversation UI state when KeepAlive evicts the session', async () => {
     mockLiveApi(runNode())
     const wrapper = component = await mountSuspended(KeepAliveHarness)

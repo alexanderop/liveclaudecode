@@ -115,7 +115,9 @@ Open a session and select **Ask** (keyboard shortcut `Q`) to start a follow-up
 conversation backed by ACP, the Agent Client Protocol. Claude and Codex are
 available through adapters, and GitHub Copilot is available through Copilot
 CLI's native ACP server. A separate ACP conversation remains attached to the
-observed session while the panel is closed, and **New** discards it.
+observed session while the panel is closed, and **New** discards it. Agent
+details carries its own **Ask** tab, scoped to that subagent's transcript alone
+and kept separate from the session conversation.
 
 By default the server launches these local ACP agents on demand:
 
@@ -162,7 +164,7 @@ process.
 - **Event feed:** compact, normal, and raw densities with an errors-only filter.
 - **Session chat:** follow-up questions answered by a local Claude, Codex, or
   Copilot ACP agent with full tool permissions and the selected transcript as
-  context.
+  context, for a whole session or for one subagent on its own.
 
 Fields that a provider does not record are left empty. The viewer does not
 decrypt Codex encrypted reasoning or infer private content from unrelated stores.

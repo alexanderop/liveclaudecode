@@ -5,7 +5,17 @@ const props = defineProps<{
   project: string
   sessionKey: string
   hours: number
+  /**
+   * What the conversation covers. This only picks the copy and accessible
+   * names; the transport and the state cache are keyed by project and
+   * session key either way.
+   *
+   * @default 'session'
+   */
+  scope?: 'session' | 'subagent'
 }>()
+
+const subagentScope = computed(() => props.scope === 'subagent')
 
 type ChatRow =
   | { kind: 'user' | 'error', text: string }
@@ -151,7 +161,7 @@ onDeactivated(() => transport.pause())
 
     <UChatMessages
       class="chat-log"
-      aria-label="Session chat messages"
+      :aria-label="subagentScope ? 'Subagent chat messages' : 'Session chat messages'"
       :status="chatUiStatus"
       should-auto-scroll
       :should-scroll-to-bottom="true"
@@ -160,16 +170,20 @@ onDeactivated(() => transport.pause())
         v-if="!project || !sessionKey"
         class="chat-empty"
         icon="i-lucide-message-square"
-        title="Select a session first"
-        description="The local agent needs a session transcript to answer questions."
+        :title="subagentScope ? 'Select an agent first' : 'Select a session first'"
+        :description="subagentScope
+          ? 'The local agent needs a subagent transcript to answer questions.'
+          : 'The local agent needs a session transcript to answer questions.'"
         variant="naked"
       />
       <UEmpty
         v-else-if="!rows.length && !busy"
         class="chat-empty"
         icon="i-lucide-messages-square"
-        title="Ask about this session"
-        description="The selected local coding agent can inspect the session, edit files, and run commands with full permissions."
+        :title="subagentScope ? 'Ask about this subagent' : 'Ask about this session'"
+        :description="subagentScope
+          ? 'The selected local coding agent can inspect this subagent\'s transcript, edit files, and run commands with full permissions.'
+          : 'The selected local coding agent can inspect the session, edit files, and run commands with full permissions.'"
         variant="naked"
       />
 
@@ -251,7 +265,7 @@ onDeactivated(() => transport.pause())
     <UChatPrompt
       v-model="draft"
       class="chat-composer"
-      aria-label="Question about this session"
+      :aria-label="subagentScope ? 'Question about this subagent' : 'Question about this session'"
       placeholder="Ask why something happened…"
       :rows="2"
       :maxrows="8"

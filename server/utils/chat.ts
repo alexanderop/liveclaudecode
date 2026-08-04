@@ -24,6 +24,7 @@ import {
   type SessionNotification,
 } from '#shared/schemas/acp'
 import { parseChatAction } from '#shared/schemas/chat'
+import { normalizeSessionLabel } from '#shared/utils/session-label'
 import type {
   ChatActionResponse,
   ChatAgentId,
@@ -182,11 +183,29 @@ function chatUpdateHandler(record: ChatRecord, generation: number) {
   })
 }
 
+/**
+ * The framing sent once per ACP conversation. A subagent's transcript holds
+ * only that subagent's own turns — the parent session and its siblings live in
+ * other files — so the agent is told where the record stops rather than left to
+ * infer it from a file that simply ends early.
+ */
 function chatPreamble(location: SessionEventLocation, transcriptPath: string, cwd: string): string {
+  const { node } = location
+  const subagent = node.kind === 'subagent'
+  const label = normalizeSessionLabel(node.label, node.key)
   return [
     'You are embedded in the Ask panel of liveclaudecode, a dashboard for observing coding-agent sessions.',
-    `The user is inspecting a recorded ${location.source} session and asks follow-up questions about it.`,
-    `The session transcript (JSONL) is at: ${transcriptPath}`,
+    subagent
+      ? `The user is inspecting one subagent run of a recorded ${location.source} session and asks follow-up questions about it.`
+      : `The user is inspecting a recorded ${location.source} session and asks follow-up questions about it.`,
+    ...(subagent
+      ? [
+          `The subagent is "${label}"${node.agentType ? `, an ${node.agentType} agent` : ''}.`,
+          'The transcript is only this subagent\'s own conversation: it contains neither the parent session\'s messages nor any sibling subagent\'s work.',
+          'Scope every answer to that transcript. When the answer is not in it, say so instead of inferring what the parent session did.',
+        ]
+      : []),
+    `The ${subagent ? 'subagent' : 'session'} transcript (JSONL) is at: ${transcriptPath}`,
     `The observed session's working directory was: ${cwd}`,
     'Answer by reading the transcript and any files it references.',
     'You have full tool access and may edit files or run commands when needed to fulfill the request.',

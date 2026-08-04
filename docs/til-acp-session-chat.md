@@ -72,7 +72,10 @@ The following happens:
 1. The browser sends the question and selected session ID to the local
    `/api/chat` endpoint.
 2. The Node server resolves that ID to the actual JSONL transcript and the
-   session's original working directory.
+   session's original working directory. A subagent has its own ID, which
+   resolves to `<session>/subagents/<agent>.jsonl` — a file holding only that
+   subagent's turns — and the preamble says so, so the answering agent does not
+   read the parent session's work into the gap.
 3. The server starts the selected Claude, Codex, or Copilot ACP agent:
 
    ```text
@@ -123,7 +126,9 @@ There are two separate histories:
   server's memory.
 
 Ask never resumes or appends to the original provider session. The first Ask
-message includes its transcript path as context. Later questions reuse the new
+message includes its transcript path as context. Asking about a subagent from
+Agent details starts its own ACP conversation, separate from the parent
+session's. Later questions reuse the new
 ACP conversation, so the answering agent remembers the discussion. Clicking
 **New** closes that agent process and discards the in-memory chat.
 
