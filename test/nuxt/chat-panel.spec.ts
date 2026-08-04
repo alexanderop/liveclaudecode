@@ -45,12 +45,13 @@ describe('ChatPanel', () => {
           events: initial
             ? [
                 { kind: 'user', text: 'Why did the tests fail?' },
+                { kind: 'thought-chunk', agent: 'copilot', text: '## Checking\n\nThe `setup` hook.' },
                 { kind: 'assistant-chunk', agent: 'copilot', text: 'The setup ' },
                 { kind: 'assistant-chunk', agent: 'copilot', text: '**failed**.' },
                 { kind: 'turn-end', stopReason: 'end_turn' },
               ]
             : [],
-          next: 4,
+          next: 5,
           revision: 1,
           reset: initial,
           agent: 'copilot',
@@ -64,8 +65,10 @@ describe('ChatPanel', () => {
     })
     await flushPromises()
 
-    expect(wrapper.get('.chat-message.user').text()).toContain('Why did the tests fail?')
     await vi.waitFor(() => {
+      expect(wrapper.get('.chat-message.user .markdown-body').text()).toContain('Why did the tests fail?')
+      expect(wrapper.get('.chat-thought .markdown-body h2').text()).toBe('Checking')
+      expect(wrapper.get('.chat-thought .markdown-body code').text()).toBe('setup')
       expect(wrapper.get('.chat-message.assistant strong').text()).toBe('failed')
     })
     expect(wrapper.get('.chat-message.assistant header').text()).toContain('Copilot')

@@ -1,19 +1,8 @@
 <script setup lang="ts">
-import security from '@comark/nuxt/plugins/security'
 import type { TranscriptEvent } from '#shared/types/run'
 import type { FeedDensity } from '~/composables/useLiveRuns'
-import CodeBlock from '~/components/CodeBlock.vue'
-import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
 import { parseTimestamp } from '~/utils/format'
 import { toolUseIcon, toolUseLabel } from '~/utils/tool-display'
-
-const markdownPlugins = [
-  security({
-    blockedTags: ['script', 'iframe', 'object', 'embed', 'link', 'style', 'base', 'meta'],
-    allowedProtocols: ['http', 'https', 'mailto'],
-  }),
-]
-const markdownComponents = { a: TranscriptMarkdownLink, pre: CodeBlock }
 
 const props = defineProps<{
   events: TranscriptEvent[]
@@ -107,13 +96,37 @@ function labelFor(event: TranscriptEvent): string {
 }
 
 function iconFor(event: TranscriptEvent): string {
+  if (event.kind === 'tool_result') return event.error ? 'i-lucide-circle-alert' : 'i-lucide-corner-down-right'
   if (event.spawn) return 'i-lucide-git-fork'
   if (event.error) return 'i-lucide-circle-alert'
   if (event.kind === 'prompt') return 'i-lucide-user-round'
   if (event.kind === 'text') return 'i-lucide-sparkles'
   if (event.kind === 'thinking') return 'i-lucide-brain'
-  if (event.kind === 'tool_result') return 'i-lucide-corner-down-right'
   return toolUseIcon(event.tool)
+}
+
+/**
+ * Tool-use ids of delegations, so their results can be told apart from ordinary
+ * tool output. A subagent returns its final message, which is prose; command
+ * output and file contents are not.
+ */
+const spawnToolIds = computed(() => {
+  const ids = new Set<string>()
+  for (const event of props.events) {
+    if (event.kind === 'tool_use' && event.spawn && event.id) ids.add(event.id)
+  }
+  return ids
+})
+
+/**
+ * Whether an event body is markdown a person wrote or a model produced. Raw
+ * tool output, system records, and error text are left verbatim, since markdown
+ * rendering would swallow their indentation and punctuation.
+ */
+function isProse(event: TranscriptEvent): boolean {
+  if (event.error) return false
+  if (event.kind === 'tool_result') return Boolean(event.id && spawnToolIds.value.has(event.id))
+  return event.kind === 'text' || event.kind === 'prompt' || event.kind === 'thinking'
 }
 
 function resultSummary(event: TranscriptEvent): string {
@@ -269,16 +282,11 @@ onMounted(() => {
           <template v-else-if="event.kind === 'tool_result'">
             <details class="event-details result-details" :open="event.error">
               <summary>{{ resultSummary(event) }}</summary>
-              <pre>{{ event.body || '' }}</pre>
+              <TranscriptMarkdown v-if="isProse(event)" :markdown="event.body || ''" />
+              <pre v-else>{{ event.body || '' }}</pre>
             </details>
           </template>
-          <Comark
-            v-else-if="event.kind === 'text'"
-            class="markdown-body"
-            :markdown="event.body || ''"
-            :plugins="markdownPlugins"
-            :components="markdownComponents"
-          />
+          <TranscriptMarkdown v-else-if="isProse(event)" :markdown="event.body || ''" />
           <pre v-else>{{ event.body || '' }}</pre>
           <div v-if="(event.full || 0) > 8_000" class="truncated">Truncated · {{ formatCount(event.full || 0) }} characters total</div>
           <div v-if="event.usage" class="usage">

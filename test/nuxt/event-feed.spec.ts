@@ -60,6 +60,66 @@ describe('EventFeed', () => {
     expect(wrapper.get('.markdown-body .code-block-body').text()).toBe('just some output')
   })
 
+  it('renders prompts and reasoning as Markdown', async () => {
+    const wrapper = component = await mountSuspended(EventFeed, {
+      props: {
+        events: [
+          transcriptEvent('Fix the **flaky** test', { role: 'user', kind: 'prompt' }),
+          transcriptEvent('## Plan\n\n- Read the spec', { kind: 'thinking', line: 2 }),
+        ],
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+    await flushPromises()
+
+    const bodies = wrapper.findAll('.markdown-body')
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0]?.get('strong').text()).toBe('flaky')
+    expect(bodies[1]?.get('h2').text()).toBe('Plan')
+  })
+
+  it('renders a subagent result as Markdown but leaves other tool output verbatim', async () => {
+    const wrapper = component = await mountSuspended(EventFeed, {
+      props: {
+        events: [
+          transcriptEvent('', { kind: 'tool_use', tool: 'Task', id: 'call-1', spawn: true, summary: 'Audit the timeline' }),
+          transcriptEvent('## Findings\n\nThe timeline is **sound**.', { role: 'tool', kind: 'tool_result', tool: 'Task', id: 'call-1', line: 2 }),
+          transcriptEvent('  total 12\n  drwxr-xr-x  app', { role: 'tool', kind: 'tool_result', tool: 'Bash', id: 'call-2', line: 3 }),
+        ],
+        density: 'raw',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.result-details .markdown-body h2').text()).toBe('Findings')
+    expect(wrapper.get('.result-details .markdown-body strong').text()).toBe('sound')
+    expect(wrapper.findAll('.result-details pre').map(block => block.element.textContent)).toEqual([
+      '  total 12\n  drwxr-xr-x  app',
+    ])
+  })
+
+  it('leaves a failed subagent result verbatim', async () => {
+    const wrapper = component = await mountSuspended(EventFeed, {
+      props: {
+        events: [
+          transcriptEvent('', { kind: 'tool_use', tool: 'Task', id: 'call-1', spawn: true, summary: 'Audit the timeline' }),
+          transcriptEvent('Error: the subagent exited\n  * check the logs', { role: 'tool', kind: 'tool_result', tool: 'Task', id: 'call-1', line: 2, error: true }),
+        ],
+        density: 'raw',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.result-details .markdown-body').exists()).toBe(false)
+    expect(wrapper.get('.result-details pre').text()).toBe('Error: the subagent exited\n  * check the logs')
+  })
+
   it('renders an edit tool call as a diff of the edited file', async () => {
     const wrapper = component = await mountSuspended(EventFeed, {
       props: {

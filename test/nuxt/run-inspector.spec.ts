@@ -1,7 +1,7 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import RunInspector from '~/components/RunInspector.vue'
 import type { RunNode, RunResponse } from '#shared/types/run'
 import { runNode, runResponse, timelineLane, transcriptEvent } from '../fixtures/runs'
@@ -117,6 +117,68 @@ describe('run inspector', () => {
 
     await wrapper.get('.inspector-close').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('renders the subagent prompt and result as highlighted Markdown', async () => {
+    const child = inspectorNode('review', {
+      label: 'Review accessibility',
+      finalText: '## Findings\n\nUse the helper:\n\n```ts\nconst answer = 42\n```\n',
+    })
+    const root = inspectorNode('root', { children: [child] })
+    const wrapper = component = await mountSuspended(RunInspector, {
+      props: {
+        run: inspectorRun(root, child),
+        root,
+        selected: child,
+        selectedKey: child.key,
+        events: [transcriptEvent('Audit the **focus order**', { role: 'user', kind: 'prompt' })],
+        eventsLoading: false,
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+
+    await wrapper.findAll('[role="tab"]')[4]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
+
+    await vi.waitFor(() => {
+      const sections = wrapper.findAll('.inspector-result .result-copy')
+      expect(sections).toHaveLength(2)
+      expect(sections[0]!.get('strong').text()).toBe('focus order')
+      expect(sections[1]!.get('h2').text()).toBe('Findings')
+      expect(wrapper.find('.inspector-result .code-block-body').exists()).toBe(true)
+    })
+    const shiki = wrapper.get('.inspector-result .code-block-body pre')
+    expect(shiki.classes()).toContain('shiki')
+    expect(shiki.text()).toBe('const answer = 42')
+    expect(shiki.findAll('span[style]').length).toBeGreaterThan(1)
+  })
+
+  it('falls back to plain copy when the result tab has nothing recorded', async () => {
+    const child = inspectorNode('review', { label: 'Review accessibility' })
+    const root = inspectorNode('root', { children: [child] })
+    const wrapper = component = await mountSuspended(RunInspector, {
+      props: {
+        run: inspectorRun(root, child),
+        root,
+        selected: child,
+        selectedKey: child.key,
+        events: [],
+        eventsLoading: false,
+        density: 'normal',
+        errorsOnly: false,
+        followOutput: false,
+      },
+    })
+
+    await wrapper.findAll('[role="tab"]')[4]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
+
+    expect(wrapper.findAll('.inspector-result .result-empty').map(copy => copy.text())).toEqual([
+      'No prompt event was recorded.',
+      'No final result was recorded.',
+    ])
   })
 
   it('shows a loading state while switching to another agent activity stream', async () => {

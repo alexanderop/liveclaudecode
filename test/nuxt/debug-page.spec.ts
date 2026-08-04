@@ -1,6 +1,6 @@
 import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import type { VueWrapper } from '@vue/test-utils'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import DebugPage from '~/pages/debug.vue'
 import { parseHealthResponse, sessionParseHealth } from '../fixtures/runs'
 
@@ -57,6 +57,11 @@ describe('debug page', () => {
     expect(body.get('.issue-location').text()).toContain('line 412')
     expect(body.get('.issue-detail').text()).toContain('Missing key')
     expect(body.get('.issue-excerpt').text()).toContain('"type":"assistant"')
+
+    // The excerpt is a raw record, so it is highlighted as JSON to be read at a glance.
+    await vi.waitFor(() => expect(body.find('.issue-excerpt .code-block-body').exists()).toBe(true))
+    expect(body.get('.issue-excerpt .code-block-body pre').classes()).toContain('shiki')
+    expect(body.findAll('.issue-excerpt .code-block-body span[style]').length).toBeGreaterThan(1)
   })
 
   it('says how many skipped records went unsampled', async () => {

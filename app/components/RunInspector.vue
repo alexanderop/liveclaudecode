@@ -63,6 +63,9 @@ const selectedFiles = computed(() =>
   mergeAgentFileChanges(props.selected?.files || [], selectedChanges.value))
 const promptEvent = computed(() => props.events.find(event => event.kind === 'prompt'))
 const lastText = computed(() => [...props.events].reverse().find(event => event.kind === 'text'))
+/** The spawn prompt and the returned result are both markdown the model saw or wrote. */
+const promptMarkdown = computed(() => promptEvent.value?.body || '')
+const resultMarkdown = computed(() => props.selected?.finalText || lastText.value?.body || '')
 
 function focusIncident(index: number): void {
   const incident = selectedIncidents.value[index]
@@ -198,8 +201,16 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
     </div>
 
     <div v-else-if="run && selected && activeTab === 'result'" class="inspector-details inspector-result">
-      <section><span class="section-eyebrow">Prompt</span><pre>{{ promptEvent?.body || 'No prompt event was recorded.' }}</pre></section>
-      <section><span class="section-eyebrow">Final result</span><div class="result-copy">{{ selected.finalText || lastText?.body || 'No final result was recorded.' }}</div></section>
+      <section>
+        <span class="section-eyebrow">Prompt</span>
+        <TranscriptMarkdown v-if="promptMarkdown" class="result-copy" :markdown="promptMarkdown" />
+        <p v-else class="result-empty">No prompt event was recorded.</p>
+      </section>
+      <section>
+        <span class="section-eyebrow">Final result</span>
+        <TranscriptMarkdown v-if="resultMarkdown" class="result-copy" :markdown="resultMarkdown" />
+        <p v-else class="result-empty">No final result was recorded.</p>
+      </section>
     </div>
 
     <UEmpty v-else class="inspector-empty" icon="i-lucide-panel-right" title="Session properties will appear here" variant="naked" />

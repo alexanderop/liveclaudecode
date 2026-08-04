@@ -251,7 +251,7 @@ async function copy(text: string, label: string): Promise<void> {
                         </button>
                       </span>
                       <p class="issue-detail">{{ issue.detail }}</p>
-                      <pre class="issue-excerpt"><code>{{ issue.excerpt }}</code></pre>
+                      <CodeBlock class="issue-excerpt" :code="issue.excerpt" language="json" />
                     </li>
                   </ol>
 
@@ -292,7 +292,8 @@ async function copy(text: string, label: string): Promise<void> {
 .issue-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }.issue-head svg { width: 12px; color: var(--text-tertiary); }.issue-head b { font-size: 8.5px; }.issue-head em { padding: 2px 6px; border-radius: 999px; background: var(--surface-hover); color: var(--text-secondary); font: 7px var(--mono); font-style: normal; }
 .issue-location { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 6px; border: 1px solid var(--line-soft); border-radius: 6px; background: transparent; color: var(--text-tertiary); font: 7.5px var(--mono); cursor: pointer; }.issue-location:hover { color: var(--text-secondary); }.issue-location svg { width: 9px; }
 .issue-detail { margin: 7px 0 0; color: var(--text-secondary); font-size: 9px; line-height: 1.5; }
-.issue-excerpt { margin: 7px 0 0; padding: 8px 9px; overflow-x: auto; border-radius: 7px; background: var(--surface-hover); }.issue-excerpt code { color: var(--text-tertiary); font: 7.5px var(--mono); white-space: pre; }
+.issue-excerpt { margin: 7px 0 0; }
+.issue-excerpt :deep(pre.shiki), .issue-excerpt :deep(.code-block-plain) { max-height: 180px; font-size: 9px; line-height: 1.55; }
 .issue-more { margin: 9px 0 0; color: var(--text-tertiary); font-size: 8px; }
 @media (max-width: 900px) { .summary-grid { grid-template-columns: 1fr; }.session-head { grid-template-columns: 30px minmax(0, 1fr) auto 14px; }.session-tags { display: none; } }
 @media (max-width: 760px) { .debug-appbar { grid-template-columns: 1fr auto; padding: 0 13px; }.debug-appbar nav,.local-state { display: none; }.debug-main { padding: 24px 12px 82px; }.debug-intro { align-items: flex-start; flex-direction: column; }.debug-intro :deep(.relative) { width: 100%; } }

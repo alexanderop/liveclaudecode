@@ -1,8 +1,5 @@
 <script setup lang="ts">
-import security from '@comark/nuxt/plugins/security'
 import type { ChatAgentId } from '#shared/types/chat'
-import CodeBlock from '~/components/CodeBlock.vue'
-import TranscriptMarkdownLink from '~/components/TranscriptMarkdownLink.vue'
 
 const props = defineProps<{
   project: string
@@ -16,13 +13,6 @@ type ChatRow =
   | { kind: 'tool', toolCallId: string, title: string, toolKind: string, status: string }
   | { kind: 'turn-end', stopReason: string }
 
-const markdownPlugins = [
-  security({
-    blockedTags: ['script', 'iframe', 'object', 'embed', 'link', 'style', 'base', 'meta'],
-    allowedProtocols: ['http', 'https', 'mailto'],
-  }),
-]
-const markdownComponents = { a: TranscriptMarkdownLink, pre: CodeBlock }
 const agents: ReadonlyArray<{ id: ChatAgentId, label: string }> = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex' },
@@ -194,6 +184,7 @@ onDeactivated(() => transport.pause())
           side="right"
         >
           <template #header><header><UIcon name="i-lucide-user-round" />You</header></template>
+          <template #content><TranscriptMarkdown :markdown="row.text" /></template>
         </UChatMessage>
         <UChatMessage
           v-else-if="row.kind === 'assistant'"
@@ -205,12 +196,7 @@ onDeactivated(() => transport.pause())
         >
           <template #header><header><UIcon name="i-lucide-sparkles" />{{ agentLabels[row.agent] }}</header></template>
           <template #content>
-            <Comark
-              class="markdown-body"
-              :markdown="row.text"
-              :plugins="markdownPlugins"
-              :components="markdownComponents"
-            />
+            <TranscriptMarkdown :markdown="row.text" />
           </template>
         </UChatMessage>
         <UChatReasoning
@@ -219,7 +205,9 @@ onDeactivated(() => transport.pause())
           :text="row.text"
           :streaming="busy && index === rows.length - 1"
           icon="i-lucide-brain"
-        />
+        >
+          <TranscriptMarkdown :markdown="row.text" />
+        </UChatReasoning>
         <UChatTool
           v-else-if="row.kind === 'tool'"
           class="chat-tool"
