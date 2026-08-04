@@ -32,6 +32,12 @@ export type WorkspaceState = {
   context: ContextPanelState
   launcher: LauncherState
   investigation: InvestigationFocus
+  /**
+   * Focus view hides the session browser, header, and view tabs so the primary
+   * workspace fills the window. It is presentation only: every other part of
+   * the state survives entering and leaving it.
+   */
+  focused: boolean
 }
 
 export function initialWorkspaceState(): WorkspaceState {
@@ -40,6 +46,7 @@ export function initialWorkspaceState(): WorkspaceState {
     context: { kind: 'closed' },
     launcher: { kind: 'closed' },
     investigation: {},
+    focused: false,
   }
 }
 
@@ -98,6 +105,15 @@ export function cancelExpandedLauncher(state: WorkspaceState): WorkspaceState {
     context: state.launcher.suspendedContext,
     launcher: { kind: 'closed' },
   }
+}
+
+export function toggleFocus(state: WorkspaceState): WorkspaceState {
+  return { ...state, focused: !state.focused, launcher: { kind: 'closed' } }
+}
+
+export function exitFocus(state: WorkspaceState): WorkspaceState {
+  if (!state.focused) return state
+  return { ...state, focused: false }
 }
 
 export function closeContext(state: WorkspaceState): WorkspaceState {

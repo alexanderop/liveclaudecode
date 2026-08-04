@@ -14,7 +14,7 @@ const props = withDefaults(defineProps<{
 })
 
 const followActive = defineModel<boolean>('followActive', { required: true })
-const emit = defineEmits<{ showSidebar: [] }>()
+const emit = defineEmits<{ showSidebar: [], focus: [] }>()
 
 const sourceLabel = computed(() => sessionSourceLabel(props.root?.source))
 const title = computed(() => normalizeSessionLabel(props.root?.label || '', 'Local sessions'))
@@ -76,6 +76,16 @@ const status = computed(() => {
             :aria-pressed="followActive"
             @click="followActive = !followActive"
           >Follow active</UButton>
+          <UButton
+            v-if="root"
+            class="quiet-action focus-view-action"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-maximize-2"
+            aria-label="Enter focus view"
+            aria-keyshortcuts="F"
+            @click="emit('focus')"
+          >Focus</UButton>
           <UColorModeSelect
             class="color-mode-select"
             aria-label="Color mode"

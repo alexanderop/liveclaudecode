@@ -72,4 +72,23 @@ describe('RunHero', () => {
     await wrapper.setProps({ workspace: 'activity' })
     expect(wrapper.get('.follow-active').text()).toContain('Follow active')
   })
+
+  it('offers focus view only once a session is selected', async () => {
+    const wrapper = component = await mountSuspended(RunHero, {
+      props: {
+        root: null,
+        sidebarVisible: true,
+        followActive: false,
+      },
+    })
+
+    expect(wrapper.find('.focus-view-action').exists()).toBe(false)
+
+    await wrapper.setProps({ root: runNode() })
+    const focus = wrapper.get('.focus-view-action')
+
+    expect(focus.attributes('aria-keyshortcuts')).toBe('F')
+    await focus.trigger('click')
+    expect(wrapper.emitted('focus')).toEqual([[]])
+  })
 })

@@ -51,3 +51,67 @@ describe('session view controls', () => {
     expect(wrapper.findComponent({ name: 'EventFeed' }).props('density')).toBe('compact')
   })
 })
+
+describe('focus view', () => {
+  async function mountDashboard(): Promise<VueWrapper> {
+    mockLiveApi(runNode({ subErrors: 0, errors: 0 }))
+    const wrapper = component = await mountSuspended(IndexPage, {
+      global: {
+        stubs: {
+          EventFeed: true,
+          RunChanges: true,
+          RunDiagnostics: true,
+          RunHero: true,
+          RunInspector: true,
+          RunOverview: true,
+          RunSidebar: true,
+        },
+      },
+    })
+    await vi.waitFor(() => expect(wrapper.get('[data-destination="activity"]').attributes('disabled')).toBeUndefined())
+    return wrapper
+  }
+
+  function press(key: string): Promise<void> {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key, cancelable: true }))
+    return nextTick()
+  }
+
+  it('hides the browser and view tabs on F and restores them on Escape', async () => {
+    const wrapper = await mountDashboard()
+
+    await press('f')
+
+    expect(wrapper.get('.shell').classes()).toContain('focus-mode')
+    expect(wrapper.find('.session-view-tabs').exists()).toBe(false)
+    expect(wrapper.get('.focus-exit').text()).toContain('Ship the dashboard')
+
+    await press('Escape')
+
+    expect(wrapper.get('.shell').classes()).not.toContain('focus-mode')
+    expect(wrapper.find('.focus-exit').exists()).toBe(false)
+    expect(wrapper.find('.session-view-tabs').exists()).toBe(true)
+  })
+
+  it('leaves focus view with the exit control', async () => {
+    const wrapper = await mountDashboard()
+    await press('f')
+
+    await wrapper.get('button[aria-label="Exit focus view"]').trigger('click')
+
+    expect(wrapper.get('.shell').classes()).not.toContain('focus-mode')
+  })
+
+  it('ignores F while typing so session filters keep working', async () => {
+    const wrapper = await mountDashboard()
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.focus()
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true }))
+    await nextTick()
+    input.remove()
+
+    expect(wrapper.get('.shell').classes()).not.toContain('focus-mode')
+  })
+})

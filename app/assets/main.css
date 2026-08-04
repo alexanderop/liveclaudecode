@@ -1899,6 +1899,51 @@ html.panel-resizing * { cursor: col-resize !important; user-select: none !import
 
 .progressive-workspace { overflow: hidden; }
 .progressive-workspace .session-primary { position: relative; overflow: hidden; background: var(--bg); }
+
+/*
+  Focus view. The browser and its resize handle are hidden rather than
+  unmounted so the dashboard group keeps its persisted width, and the only
+  chrome left is the floating exit pill.
+*/
+.shell.focus-mode .dashboard-session-sidebar,
+.shell.focus-mode .sidebar-resize-handle { display: none; }
+/*
+  A flow strip rather than a floating pill: the canvas already parks overlays
+  in every corner of the primary workspace, and a 30px bar still hands back
+  the ~90px the header and view tabs were using.
+*/
+.focus-exit {
+  display: flex;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 2px 10px 2px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+.focus-exit-session {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.focus-exit-session svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.focus-exit-action {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--dim);
+}
+.focus-exit-action:hover { background: var(--surface-hover); color: var(--fg-soft); }
 .primary-list-workspace { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
 .primary-list-workspace > .changes-view,
 .primary-list-workspace > .diagnostics-view { min-height: 0; flex: 1; padding-bottom: 92px; }

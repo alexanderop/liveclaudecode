@@ -9,6 +9,8 @@ import {
   openAsk,
   openPrimary,
   switchSelectedSession,
+  toggleFocus,
+  exitFocus,
 } from '~/utils/workspace-state'
 
 describe('progressive disclosure workspace state', () => {
@@ -18,6 +20,7 @@ describe('progressive disclosure workspace state', () => {
       context: { kind: 'closed' },
       launcher: { kind: 'closed' },
       investigation: {},
+      focused: false,
     })
   })
 
@@ -64,6 +67,26 @@ describe('progressive disclosure workspace state', () => {
     })
     expect(focusFile(withFile, undefined).investigation.filePath).toBeUndefined()
     expect(focusIncident(withFile, undefined).investigation.incidentId).toBeUndefined()
+  })
+
+  it('toggles focus view without disturbing the rest of the workspace', () => {
+    const inspecting = openAgentDetails(
+      openPrimary(initialWorkspaceState(), 'activity'),
+      'session/worker',
+    )
+    const focused = toggleFocus(inspecting)
+
+    expect(inspecting.focused).toBe(false)
+    expect(focused).toEqual({ ...inspecting, focused: true })
+    expect(toggleFocus(focused).focused).toBe(false)
+    expect(exitFocus(focused)).toEqual(inspecting)
+    expect(exitFocus(inspecting)).toBe(inspecting)
+  })
+
+  it('keeps focus view across a session switch', () => {
+    const focused = toggleFocus(openPrimary(initialWorkspaceState(), 'map'))
+
+    expect(switchSelectedSession(focused).focused).toBe(true)
   })
 
   it('preserves an explicit primary workspace across a session switch', () => {

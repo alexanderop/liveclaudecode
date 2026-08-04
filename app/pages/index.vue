@@ -7,6 +7,7 @@ import { parseTimestamp } from '~/utils/format'
 import { structuralComputed, structurallyEqual } from '~/utils/structural-computed'
 import {
   closeContext,
+  exitFocus,
   focusFile as focusInvestigationFile,
   focusIncident as focusInvestigationIncident,
   initialWorkspaceState,
@@ -14,6 +15,7 @@ import {
   openAsk,
   openPrimary,
   switchSelectedSession,
+  toggleFocus,
   type PrimaryWorkspaceKind,
   type WorkspaceState,
 } from '~/utils/workspace-state'
@@ -69,13 +71,17 @@ const PANEL_STORAGE_KEY = 'liveclaudecode:panel-width'
 const { width: viewportWidth } = useWindowSize({ initialWidth: 1440 })
 const sidebarWidth = useLocalStorage(SIDEBAR_STORAGE_KEY, SIDEBAR_DEFAULT, { initOnMounted: true })
 const panelWidth = useLocalStorage(PANEL_STORAGE_KEY, PANEL_DEFAULT, { initOnMounted: true })
-const sidebarVisible = computed(() => !sidebarCollapsed.value)
+const focusMode = computed(() => workspaceState.value.focused)
+// Focus view hides the browser without touching the user's own collapse
+// preference, so the layout math has to treat it as hidden all the same.
+const sidebarVisible = computed(() => !sidebarCollapsed.value && !focusMode.value)
 const effectivePanelWidth = computed(() => Math.min(panelWidth.value, viewportWidth.value * 0.4, PANEL_MAX))
 const selectedSessionKey = computed(() => live.selectedRoot.value?.key || null)
 const sessionIdentity = computed(() => live.selectedProject.value && selectedSessionKey.value
   ? `${live.selectedProject.value}/${selectedSessionKey.value}`
   : '')
 const selectedContextVisible = computed(() => workspaceState.value.context.kind !== 'closed')
+const focusTitle = computed(() => normalizeSessionLabel(live.selectedRoot.value?.label || '', 'Local sessions'))
 const contextUsesModal = computed(() => {
   if (viewportWidth.value <= 680) return true
   const browserWidth = sidebarVisible.value ? sidebarWidth.value + 7 : 0
@@ -248,6 +254,22 @@ function openAskPanel(): void {
   workspaceState.value = openAsk(workspaceState.value, sessionIdentity.value)
   nextTick(() => document.querySelector<HTMLElement>('.chat-panel [aria-label="Question about this session"], .chat-panel button')?.focus())
 }
+function leaveFocusView(): void {
+  if (!focusMode.value) return
+  workspaceState.value = exitFocus(workspaceState.value)
+  statusAnnouncement.value = 'Focus view off'
+  nextTick(() => document.querySelector<HTMLElement>('.focus-view-action')?.focus())
+}
+function toggleFocusView(): void {
+  if (focusMode.value) {
+    leaveFocusView()
+    return
+  }
+  if (!live.selectedRoot.value) return
+  workspaceState.value = toggleFocus(workspaceState.value)
+  statusAnnouncement.value = 'Focus view on. Press Escape to exit.'
+  focusWorkspaceHeading()
+}
 function chooseDestination(destination: PrimaryWorkspaceKind | 'ask'): void {
   if (destination === 'ask') openAskPanel()
   else openWorkspace(destination)
@@ -268,6 +290,15 @@ async function selectSession(project: string, key: string): Promise<void> {
   await live.select(key, project)
 }
 
+/**
+ * Single-key shortcuts must stay out of the way of every text surface the
+ * dashboard has: filters, the Ask composer, and the command palette input.
+ */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  return ['input', 'textarea', 'select'].includes(target.tagName.toLowerCase())
+}
 function handleShortcut(event: KeyboardEvent): void {
   if (event.defaultPrevented || event.isComposing) return
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b' && !event.altKey) {
@@ -275,9 +306,23 @@ function handleShortcut(event: KeyboardEvent): void {
     sidebarCollapsed.value = !sidebarCollapsed.value
     return
   }
-  if (event.key !== 'Escape' || !selectedContextVisible.value) return
+  if (event.key === 'Escape') {
+    // The context panel sits on top of focus view, so it unwinds first.
+    if (selectedContextVisible.value) {
+      event.preventDefault()
+      closeContextPanel()
+      return
+    }
+    if (!focusMode.value) return
+    event.preventDefault()
+    leaveFocusView()
+    return
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) return
+  if (searchOpen.value || isTypingTarget(event.target)) return
+  if (event.key.toLowerCase() !== 'f') return
   event.preventDefault()
-  closeContextPanel()
+  toggleFocusView()
 }
 
 watch(
@@ -321,6 +366,11 @@ watch(
 watch(inspectedNode, node => {
   if (inspectedKey.value && !node) closeContextPanel()
 })
+watch(() => live.selectedRoot.value, root => {
+  // Nothing left to focus on; drop back to the full shell rather than
+  // stranding the user in a chrome-less empty workspace.
+  if (!root && focusMode.value) workspaceState.value = exitFocus(workspaceState.value)
+})
 watch(attentionCount, (count, previous = 0) => {
   if (count > previous) statusAnnouncement.value = `${count} warning or error ${count === 1 ? 'incident' : 'incidents'} recorded`
 })
@@ -355,7 +405,13 @@ onMounted(() => {
 </script>
 
 <template>
-  <UDashboardGroup class="shell" storage="local" storage-key="liveclaudecode" unit="px">
+  <UDashboardGroup
+    class="shell"
+    :class="{ 'focus-mode': focusMode }"
+    storage="local"
+    storage-key="liveclaudecode"
+    unit="px"
+  >
     <UDashboardSearch
       v-model:open="searchOpen"
       :groups="searchGroups"
@@ -418,11 +474,13 @@ onMounted(() => {
     <UDashboardPanel class="main-content-panel" :ui="{ root: '!min-h-0' }">
       <main class="main-content">
         <RunHero
+          v-show="!focusMode"
           v-model:follow-active="live.followActive.value"
           :sidebar-visible="sidebarVisible"
           :root="live.selectedRoot.value"
           :workspace="workspaceState.primary"
           @show-sidebar="sidebarCollapsed = false"
+          @focus="toggleFocusView"
         />
 
         <div
@@ -431,7 +489,24 @@ onMounted(() => {
           :style="workspaceStyle"
         >
           <section class="session-primary" :aria-label="`${primaryViews.find(view => view.id === workspaceState.primary)?.label} workspace`">
+            <div v-if="focusMode" class="focus-exit">
+              <span class="focus-exit-session">
+                <UIcon name="i-lucide-focus" />{{ focusTitle }}
+              </span>
+              <UKbd value="Esc" />
+              <UButton
+                class="focus-exit-action"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-minimize-2"
+                aria-label="Exit focus view"
+                aria-keyshortcuts="Escape F"
+                @click="leaveFocusView"
+              />
+            </div>
+
             <OpenViewLauncher
+              v-if="!focusMode"
               :current="workspaceState.primary"
               :agent-count="sessionAgentCount"
               :activity-count="sessionActivityCount"
