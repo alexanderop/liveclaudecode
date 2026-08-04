@@ -439,6 +439,14 @@ export const ClaudeGitOperationSchema = Schema.Struct({
  */
 export const ClaudeToolUseResultSchema = Schema.Struct({
   timedOutAfterMs: lenientKey(Schema.Finite),
+  // Bash results carry the streams unmerged, plus an interpretation of a
+  // non-zero exit code when Claude Code has a friendly explanation for one
+  // ("No matches found", "Files differ"). The interpretation is not a failure
+  // flag — see `commandOutcome` in ./transcript-content.
+  stdout: lenientKey(Schema.String),
+  stderr: lenientKey(Schema.String),
+  interrupted: lenientKey(Schema.Boolean),
+  returnCodeInterpretation: lenientKey(Schema.String),
   filePath: lenientKey(Schema.String),
   structuredPatch: lenientKey(Schema.Array(
     ClaudePatchHunkSchema.pipe(Schema.catchDecoding(() => Effect.succeedSome({}))),
@@ -473,9 +481,55 @@ const hookAttachmentFields = {
   toolUseID: lenientKey(Schema.String),
 }
 
+/** One end of an LSP range; both ends are zero-based. */
+const ClaudeDiagnosticPositionSchema = Schema.Struct({
+  line: lenientKey(Schema.Finite),
+  character: lenientKey(Schema.Finite),
+})
+
+/** One IDE/LSP diagnostic. `code` is a string in every observed record. */
+const ClaudeDiagnosticEntrySchema = Schema.Struct({
+  message: lenientKey(Schema.String),
+  severity: lenientKey(Schema.String),
+  source: lenientKey(Schema.String),
+  code: lenientKey(Schema.String),
+  range: lenientKey(Schema.Struct({
+    start: lenientKey(ClaudeDiagnosticPositionSchema),
+    end: lenientKey(ClaudeDiagnosticPositionSchema),
+  })),
+})
+
+/** The diagnostics reported for one file; a malformed entry degrades to empty. */
+const ClaudeDiagnosticFileSchema = Schema.Struct({
+  uri: lenientKey(Schema.String),
+  diagnostics: lenientKey(Schema.Array(
+    ClaudeDiagnosticEntrySchema.pipe(Schema.catchDecoding(() => Effect.succeedSome({}))),
+  )),
+})
+
 export const ClaudeAttachmentPayloadSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal('hook_non_blocking_error'), ...hookAttachmentFields }),
   Schema.Struct({ type: Schema.Literal('hook_cancelled'), ...hookAttachmentFields }),
+  Schema.Struct({
+    type: Schema.Literal('hook_success'),
+    ...hookAttachmentFields,
+    durationMs: lenientKey(Schema.Finite),
+    command: lenientKey(Schema.String),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('diagnostics'),
+    isNew: lenientKey(Schema.Boolean),
+    files: lenientKey(Schema.Array(
+      ClaudeDiagnosticFileSchema.pipe(Schema.catchDecoding(() => Effect.succeedSome({}))),
+    )),
+  }),
+  /** The harness's own budget accounting, as opposed to our price-table estimate. */
+  Schema.Struct({
+    type: Schema.Literal('budget_usd'),
+    used: lenientKey(Schema.Finite),
+    total: lenientKey(Schema.Finite),
+    remaining: lenientKey(Schema.Finite),
+  }),
   Schema.Struct({
     type: Schema.Literal('read_truncation_notice'),
     banner: Schema.optionalKey(Schema.Unknown),
@@ -491,9 +545,11 @@ export const ClaudeAttachmentPayloadSchema = Schema.Union([
 export type ClaudeAttachmentPayload = typeof ClaudeAttachmentPayloadSchema.Type
 
 /**
- * Attachment types beyond the four the dashboard reports simply fail to
+ * Attachment types beyond the ones the dashboard reports simply fail to
  * decode and return `null`; the scanner ignores them, exactly as the old
- * hand-rolled `type` dispatch did.
+ * hand-rolled `type` dispatch did. The remainder are context bookkeeping
+ * (`task_reminder`, `skill_listing`, the `*_delta` listings) that says nothing
+ * about how the session behaved.
  */
 export const parseClaudeAttachment = parseOrNull(ClaudeAttachmentPayloadSchema, PRESERVE)
 

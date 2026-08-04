@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseClaudeAssistantBlock,
+  parseClaudeAttachment,
   parseClaudeRecord,
   parseClaudeSubagentMeta,
+  parseClaudeToolUseResult,
   parseClaudeUserBlock,
 } from '#shared/schemas/claude'
 
@@ -146,6 +148,88 @@ describe('Claude on-disk schemas', () => {
       key: 'workflow-key',
       result: { status: 'accurate' },
     })).toMatchObject({ success: true, record: { kind: 'workflow_result' } })
+  })
+
+  it('parses an IDE diagnostics attachment', () => {
+    expect(parseClaudeAttachment({
+      type: 'diagnostics',
+      isNew: true,
+      files: [{
+        uri: 'file:///repo/server/api/run.get.ts',
+        diagnostics: [{
+          message: "Cannot find name 'runRequest'.",
+          severity: 'Error',
+          range: { start: { line: 10, character: 9 }, end: { line: 10, character: 19 } },
+          source: 'ts',
+          code: '2552',
+        }],
+      }],
+    })).toMatchObject({
+      type: 'diagnostics',
+      isNew: true,
+      files: [{
+        uri: 'file:///repo/server/api/run.get.ts',
+        diagnostics: [{ severity: 'Error', code: '2552', range: { start: { line: 10 } } }],
+      }],
+    })
+  })
+
+  it('degrades a malformed diagnostic entry instead of rejecting the record', () => {
+    const parsed = parseClaudeAttachment({
+      type: 'diagnostics',
+      files: [{ uri: 'file:///repo/a.ts', diagnostics: [{ severity: 42, range: 'nowhere' }] }],
+    })
+
+    expect(parsed).toMatchObject({ type: 'diagnostics' })
+    if (!parsed || parsed.type !== 'diagnostics') return
+    // The entry survives as an empty one; the file and the record are kept.
+    expect(parsed.files?.[0]?.diagnostics).toEqual([{}])
+  })
+
+  it('parses hook success and budget attachments', () => {
+    expect(parseClaudeAttachment({
+      type: 'hook_success',
+      hookName: 'SessionStart:startup',
+      hookEvent: 'SessionStart',
+      toolUseID: 'hook-1',
+      exitCode: 0,
+      durationMs: 54,
+      command: 'node hook.mjs',
+      stdout: 'context',
+      stderr: '',
+    })).toMatchObject({
+      type: 'hook_success',
+      hookName: 'SessionStart:startup',
+      durationMs: 54,
+    })
+
+    expect(parseClaudeAttachment({
+      type: 'budget_usd',
+      used: 0.724246,
+      total: 1.5,
+      remaining: 0.775754,
+    })).toMatchObject({ type: 'budget_usd', used: 0.724246, total: 1.5 })
+  })
+
+  it('parses the Bash fields of a tool-use result', () => {
+    expect(parseClaudeToolUseResult({
+      stdout: 'nothing here',
+      stderr: '',
+      interrupted: false,
+      isImage: false,
+      noOutputExpected: false,
+      returnCodeInterpretation: 'No matches found',
+    })).toMatchObject({
+      stdout: 'nothing here',
+      interrupted: false,
+      returnCodeInterpretation: 'No matches found',
+    })
+
+    // A field of the wrong type drops out rather than failing the payload.
+    const lenient = parseClaudeToolUseResult({ stdout: 12, stderr: 'boom', interrupted: 'yes' })
+    expect(lenient).toMatchObject({ stderr: 'boom' })
+    expect(lenient?.stdout).toBeUndefined()
+    expect(lenient?.interrupted).toBeUndefined()
   })
 
   it('validates subagent metadata while allowing future fields', () => {

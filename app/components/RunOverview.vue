@@ -166,6 +166,15 @@ const showAttention = computed(() => props.sourceUnavailable
   || skippedRecords.value > 0
   || attentionCount.value > 0
   || Boolean(overviewRoot.value?.subErrors))
+/**
+ * The harness's own spend, when it recorded one. It outranks the price-table
+ * estimate: it is what the session actually reports, not what we infer.
+ */
+const budget = computed(() => props.run?.diagnostics.budget || null)
+const estimatedCost = computed(() => props.run?.diagnostics.cost?.pricedRequests
+  ? formatUsd(props.run.diagnostics.cost.usd)
+  : '—')
+
 const metrics = computed<Array<{ label: string, value: string | number, icon: string, destination: PrimaryWorkspaceKind }>>(() => {
   const root = overviewRoot.value
   if (!root) return []
@@ -175,10 +184,8 @@ const metrics = computed<Array<{ label: string, value: string | number, icon: st
     { label: props.run?.files.length === 1 ? 'File changed' : 'Files changed', value: props.run?.files.length || 0, icon: 'i-lucide-files', destination: 'changes' },
     { label: 'Elapsed', value: formatDuration(root.firstTs, root.subLast), icon: 'i-lucide-timer', destination: 'activity' },
     {
-      label: 'Estimated cost',
-      value: props.run?.diagnostics.cost?.pricedRequests
-        ? formatUsd(props.run.diagnostics.cost.usd)
-        : '—',
+      label: budget.value ? 'Reported cost' : 'Estimated cost',
+      value: budget.value ? formatUsd(budget.value.usedUsd) : estimatedCost.value,
       icon: 'i-lucide-circle-dollar-sign',
       destination: 'diagnostics',
     },
@@ -349,6 +356,7 @@ async function copyTranscriptPath(): Promise<void> {
               <div><dt>Output tokens</dt><dd>{{ formatCount(run?.diagnostics.usage.out || overviewRoot.tokensOut) }}</dd></div>
               <div><dt>Cache read</dt><dd>{{ formatCount(run?.diagnostics.usage.cr || 0) }}</dd></div>
               <div><dt>Estimated API cost</dt><dd>{{ run?.diagnostics.cost?.pricedRequests ? formatUsd(run.diagnostics.cost.usd) : 'Not available' }}</dd></div>
+              <div v-if="budget"><dt>Reported budget</dt><dd>{{ formatUsd(budget.usedUsd) }} of {{ formatUsd(budget.totalUsd) }} used</dd></div>
               <div><dt>First event</dt><dd>{{ formatTime(overviewRoot.firstTs) }}</dd></div>
               <div><dt>Last event</dt><dd>{{ formatTime(overviewRoot.subLast) }}</dd></div>
             </dl>

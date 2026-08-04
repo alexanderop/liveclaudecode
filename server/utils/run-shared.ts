@@ -2,7 +2,9 @@ import { Effect, Option, Order } from 'effect'
 import type * as FileSystem from 'effect/FileSystem'
 import type {
   AgentDiagnosticSummary,
+  BudgetReport,
   CausalSummary,
+  HookSummary,
   RunDiagnostics,
   RunNode,
   ScanDiagnostics,
@@ -143,6 +145,9 @@ export interface RunDiagnosticsAccumulator {
   changes: RunDiagnostics['changes']
   git: RunDiagnostics['git']
   agents: AgentDiagnosticSummary[]
+  /** Kept keyed while merging so per-agent summaries fold into one row per hook. */
+  hooks: Map<string, HookSummary>
+  budget: BudgetReport | null
   usage: Usage
   causal: CausalSummary
   environment: SessionEnvironment
@@ -159,6 +164,8 @@ export function emptyRunDiagnostics(): RunDiagnosticsAccumulator {
     changes: [],
     git: [],
     agents: [],
+    hooks: new Map(),
+    budget: null,
     usage: emptyUsage(),
     causal: emptyCausal(),
     environment: emptyEnvironment(),
@@ -185,6 +192,29 @@ export function mergeScanDiagnostics(
   target.compactions.push(...diagnostic.compactions.map(compaction => ({ ...compaction, who, key })))
   target.changes.push(...diagnostic.changes.map(change => ({ ...change, who, key })))
   target.git.push(...diagnostic.git.map(event => ({ ...event, who, key })))
+
+  // Hooks are attributed to the whole run rather than to an agent: the same
+  // hook fires across the session, and one row per hook per agent would say
+  // less than one row per hook.
+  for (const hook of diagnostic.hooks ?? []) {
+    const existing = target.hooks.get(hook.name)
+    if (!existing) {
+      target.hooks.set(hook.name, { ...hook })
+      continue
+    }
+    existing.event ||= hook.event
+    existing.runs += hook.runs
+    existing.failures += hook.failures
+    existing.totalMs += hook.totalMs
+    existing.maxMs = Math.max(existing.maxMs, hook.maxMs)
+    if ((hook.lastTs ?? '') > (existing.lastTs ?? '')) existing.lastTs = hook.lastTs
+  }
+
+  // Only the main session records a budget, and it rewrites it as it spends,
+  // so the newest record across the run is the current state.
+  if (diagnostic.budget && (diagnostic.budget.ts ?? '') >= (target.budget?.ts ?? '')) {
+    target.budget = diagnostic.budget
+  }
 }
 
 /**
@@ -239,6 +269,11 @@ export function finishRunDiagnostics(target: RunDiagnosticsAccumulator): RunDiag
     changes: target.changes.sort(byTimestamp).slice(-300),
     git: target.git.sort(byTimestamp).slice(-100),
     agents: target.agents,
+    // Slowest first: a hook's total cost is why it is worth looking at.
+    ...(target.hooks.size
+      ? { hooks: [...target.hooks.values()].sort((a, b) => b.totalMs - a.totalMs) }
+      : {}),
+    ...(target.budget ? { budget: target.budget } : {}),
     environment: target.environment,
     causal: target.causal,
     usage: target.usage,

@@ -31,4 +31,25 @@ describe('RunChanges', () => {
       rel: 'noopener noreferrer',
     })
   })
+
+  it('shows the recorded reason for a command that exited non-zero benignly', async () => {
+    const base = runResponse()
+    const run = {
+      ...base,
+      node: {
+        ...base.node,
+        commands: [
+          { cmd: 'grep -r nothing .', ts: '2026-07-25T18:01:00.000Z', ok: true, tid: 'g1', note: 'No matches found' },
+          { cmd: 'pnpm lint', ts: '2026-07-25T18:02:00.000Z', ok: true, tid: 'l1' },
+        ],
+      },
+    }
+    const wrapper = component = await mountSuspended(RunChanges, { props: { run } })
+
+    const notes = wrapper.findAll('.command-note')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]!.text()).toBe('No matches found')
+    // The note is presentation only; the command still counts as passing.
+    expect(wrapper.text()).toContain('2Passed')
+  })
 })

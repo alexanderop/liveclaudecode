@@ -59,7 +59,11 @@ const health = computed(() => {
   return { class: 'healthy', label: 'No incidents' }
 })
 
+/** Hooks the run recorded, slowest first as the server ordered them. */
+const hooks = computed(() => props.run?.diagnostics.hooks || [])
+
 function incidentIcon(incident: DiagnosticIncident): string {
+  if (incident.category === 'lsp') return 'i-lucide-file-code-2'
   if (incident.category === 'permission') return 'i-lucide-shield-alert'
   if (incident.category === 'timeout') return 'i-lucide-timer-off'
   if (incident.category === 'hook') return 'i-lucide-unplug'
@@ -299,6 +303,22 @@ function turnWidth(turn: TurnTiming): string {
           </div>
         </section>
       </div>
+
+      <section v-if="hooks.length" class="content-section receipt-section">
+        <div class="section-heading">
+          <div><h3>Hooks</h3><p>Configured hooks and the time they added to the session</p></div>
+          <span class="section-count">{{ hooks.length }}</span>
+        </div>
+        <div class="receipt-list">
+          <div v-for="hook in hooks" :key="hook.name" class="receipt-row hook-row">
+            <span class="agent-avatar" :class="{ error: hook.failures }"><UIcon name="i-lucide-unplug" /></span>
+            <span><strong :title="hook.name">{{ hook.name }}</strong><small>{{ hook.event || 'hook' }}</small></span>
+            <span><strong>{{ formatCount(hook.runs) }}</strong><small>runs</small></span>
+            <span><strong :class="{ danger: hook.failures }">{{ hook.failures || '—' }}</strong><small>failures</small></span>
+            <span><strong>{{ hook.totalMs ? formatMilliseconds(hook.totalMs) : '—' }}</strong><small>total · {{ hook.maxMs ? formatMilliseconds(hook.maxMs) : '—' }} max</small></span>
+          </div>
+        </div>
+      </section>
 
       <section v-if="run.diagnostics.compactions.length" class="content-section compaction-section">
         <div class="section-heading"><div><h3>Compaction boundaries</h3><p>Context reduction events that can change later model behavior</p></div></div>

@@ -116,6 +116,50 @@ export function commandOk(output: string, isError: boolean): boolean {
   return !(FAIL_RE.test(head) && !PASS_RE.test(head.slice(0, 200)))
 }
 
+/** What a Bash tool result reports about how its command ended. */
+export interface CommandOutcome {
+  ok: boolean
+  /** An explicit explanation from the transcript; '' when it gave none. */
+  note: string
+}
+
+/** The subset of `toolUseResult` a Bash record carries about its command. */
+export interface CommandResultFields {
+  stdout?: string
+  stderr?: string
+  interrupted?: boolean
+  returnCodeInterpretation?: string
+}
+
+/**
+ * Decide a command's outcome, preferring what the record states over what its
+ * output looks like.
+ *
+ * `returnCodeInterpretation` deserves care: it is present only when the
+ * command exited non-zero *and* Claude Code has a benign explanation for it —
+ * every observed value is "No matches found", "Files differ", or "Some
+ * directories were inaccessible", always alongside `is_error: false`. Treating
+ * its presence as a failure would flag every fruitless grep, so it becomes a
+ * note and leaves `ok` alone.
+ *
+ * That leaves `commandOk`'s heuristic as the only signal for a genuine
+ * failure, since `is_error` is not set on Bash results. It at least runs
+ * against the real streams here instead of the re-rendered result text.
+ */
+export function commandOutcome(
+  result: CommandResultFields | null,
+  text: string,
+  isError: boolean,
+): CommandOutcome {
+  if (result?.interrupted === true) return { ok: false, note: 'Interrupted' }
+  if (isError) return { ok: false, note: '' }
+  if (result?.returnCodeInterpretation) {
+    return { ok: true, note: result.returnCodeInterpretation }
+  }
+  const streams = [result?.stdout, result?.stderr].filter(Boolean).join('\n')
+  return { ok: commandOk(streams || text, false), note: '' }
+}
+
 export function shortPath(path: string, root = ''): string {
   if (!path) return ''
   const prefix = `${root.replace(/\/$/, '')}/`

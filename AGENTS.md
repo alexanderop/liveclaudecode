@@ -95,7 +95,12 @@ Follow VueUse conventions:
 This project uses Effect `4.0.0-beta.101`. Training knowledge and online posts
 usually describe v3 and are unsafe sources for API decisions.
 
-Before writing Effect code, read `repos/effect/LLMS.md`. Then consult only the
+Before touching any Effect code — every time, including small edits — invoke
+the `effect` skill (`.claude/skills/effect`). It is the opinionated guide for
+this project's Effect v4 usage and takes precedence over recollection of
+earlier sessions.
+
+Then read `repos/effect/LLMS.md`, and consult only the
 relevant runnable examples under `repos/effect/ai-docs/src/**`; use
 `repos/effect/packages/effect/SCHEMA.md` for Schema work and
 `repos/effect/packages/effect/src/**` when behavior or API availability is in

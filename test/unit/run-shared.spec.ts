@@ -293,6 +293,45 @@ describe('run diagnostics aggregation', () => {
     )
   })
 
+  it('folds hooks into one row per name and keeps the newest budget', () => {
+    const aggregate = emptyRunDiagnostics()
+    mergeScanDiagnostics(aggregate, scanDiagnostics({
+      hooks: [
+        { name: 'lint', event: 'PostToolUse', runs: 2, failures: 1, totalMs: 40, maxMs: 30, lastTs: '2026-01-01T00:00:01Z' },
+        { name: 'inject', event: 'SessionStart', runs: 1, failures: 0, totalMs: 5, maxMs: 5, lastTs: '2026-01-01T00:00:00Z' },
+      ],
+      budget: { usedUsd: 0.2, totalUsd: 1.5, remainingUsd: 1.3, ts: '2026-01-01T00:00:01Z' },
+    }), 'Main session', 'sess-1')
+    mergeScanDiagnostics(aggregate, scanDiagnostics({
+      hooks: [{ name: 'lint', event: '', runs: 1, failures: 0, totalMs: 60, maxMs: 60, lastTs: '2026-01-01T00:00:09Z' }],
+      budget: { usedUsd: 0.7, totalUsd: 1.5, remainingUsd: 0.8, ts: '2026-01-01T00:00:09Z' },
+    }), 'Explore', 'agent-1')
+
+    const finished = finishRunDiagnostics(aggregate)
+    // Slowest first, and a hook seen by two agents stays a single row.
+    assert.deepStrictEqual(
+      finished.hooks?.map(hook => [hook.name, hook.event, hook.runs, hook.failures, hook.totalMs, hook.maxMs, hook.lastTs]),
+      [
+        ['lint', 'PostToolUse', 3, 1, 100, 60, '2026-01-01T00:00:09Z'],
+        ['inject', 'SessionStart', 1, 0, 5, 5, '2026-01-01T00:00:00Z'],
+      ],
+    )
+    assert.deepStrictEqual(finished.budget, {
+      usedUsd: 0.7,
+      totalUsd: 1.5,
+      remainingUsd: 0.8,
+      ts: '2026-01-01T00:00:09Z',
+    })
+  })
+
+  it('omits hooks and budget for a harness that records neither', () => {
+    const aggregate = emptyRunDiagnostics()
+    mergeScanDiagnostics(aggregate, scanDiagnostics(), 'Main session', 'sess-1')
+    const finished = finishRunDiagnostics(aggregate)
+    assert.isUndefined(finished.hooks)
+    assert.isUndefined(finished.budget)
+  })
+
   it('keeps a longer tail of context samples than of list entries', () => {
     const aggregate = emptyRunDiagnostics()
     for (let index = 549; index >= 0; index -= 1) {

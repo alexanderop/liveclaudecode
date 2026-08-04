@@ -3,7 +3,7 @@ import { consumeNewRecords } from './incremental-jsonl'
 import { ParseIssueLog } from './parse-issues'
 import {
   clip,
-  commandOk,
+  commandOutcome,
   resultText,
   safeStringify,
   shortPath,
@@ -26,6 +26,7 @@ import {
   parseClaudeToolUseResult,
   parseClaudeUserBlock,
   type ClaudeAssistantRecord,
+  type ClaudeAttachmentPayload,
   type ClaudeSessionStateRecord,
   type ClaudeSystemRecord,
   type ClaudeToolStats,
@@ -36,14 +37,17 @@ import {
 } from '#shared/schemas/claude'
 import type {
   AgentOutcome,
+  BudgetReport,
   ChangeDetail,
   CommandRun,
   CompactionEvent,
   ContextUsageSample,
   CurrentActivity,
   DiagnosticIncident,
+  DiagnosticSeverity,
   FileChange,
   GitEvent,
+  HookSummary,
   Milestone,
   ScanDiagnostics,
   SessionEnvironment,
@@ -68,6 +72,28 @@ export const EDIT_TOOLS = new Set([
 ])
 export const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'NotebookRead'])
 export const SPAWN_TOOLS = new Set(['Agent', 'Task'])
+
+/**
+ * LSP severity names as the IDE writes them, lowercased. `Hint` and
+ * `Information` are editor suggestions rather than session problems, so they
+ * land at `info` instead of being promoted to a warning.
+ */
+const LSP_SEVERITY: Record<string, DiagnosticSeverity> = {
+  error: 'error',
+  warning: 'warning',
+  information: 'info',
+  info: 'info',
+  hint: 'info',
+}
+
+/**
+ * How many diagnostics a single record may contribute. A project-wide
+ * typecheck failure can report hundreds at once, and the incident list is a
+ * summary of how the session behaved, not a problems panel.
+ */
+const MAX_DIAGNOSTICS_PER_RECORD = 20
+
+type ClaudeDiagnosticsAttachment = Extract<ClaudeAttachmentPayload, { type: 'diagnostics' }>
 
 type JsonRecord = Record<string, unknown>
 
@@ -122,6 +148,16 @@ export class TranscriptScan {
   readonly skills: SkillUse[] = []
   readonly milestones: Milestone[] = []
   readonly incidents: DiagnosticIncident[] = []
+  /** Hook activity keyed by hook name, aggregated rather than listed. */
+  private readonly hooks = new Map<string, HookSummary>()
+  /**
+   * `path:line:code:message` keys already reported. The IDE re-sends its whole
+   * diagnostic set as the file changes, so without this the same unresolved
+   * error would land in the incident list once per snapshot.
+   */
+  private readonly seenDiagnostics = new Set<string>()
+  /** The newest harness-reported budget; null when the session recorded none. */
+  budget: BudgetReport | null = null
   readonly turns: TurnTiming[] = []
   readonly context: ContextUsageSample[] = []
   readonly compactions: CompactionEvent[] = []
@@ -499,7 +535,11 @@ export class TranscriptScan {
         const isError = Boolean(block.data.is_error) || text.trimStart().toLowerCase().startsWith('error')
         if (isError) this.errors += 1
         const command = this.commandByToolId.get(id)
-        if (command) command.ok = commandOk(text, isError)
+        if (command) {
+          const outcome = commandOutcome(toolUseResult, text, isError)
+          command.ok = outcome.ok
+          if (outcome.note) command.note = outcome.note
+        }
         const [body, full] = clip(text)
         const source = this.toolUses.get(id)
         if (isError) {
@@ -667,11 +707,73 @@ export class TranscriptScan {
     }
   }
 
+  /**
+   * Fold one hook invocation into its per-name summary. Failures are counted
+   * as runs too, so `runs` stays the denominator for `failures`.
+   */
+  private recordHook(
+    name: string,
+    event: string,
+    ts: Timestamp,
+    options: { durationMs?: number, failed?: boolean } = {},
+  ): void {
+    const key = name || event || 'hook'
+    const summary = this.hooks.get(key) ?? {
+      name: key,
+      event: '',
+      runs: 0,
+      failures: 0,
+      totalMs: 0,
+      maxMs: 0,
+      lastTs: null,
+    }
+    const durationMs = options.durationMs ?? 0
+    summary.event ||= event
+    summary.runs += 1
+    if (options.failed) summary.failures += 1
+    summary.totalMs += durationMs
+    summary.maxMs = Math.max(summary.maxMs, durationMs)
+    summary.lastTs = ts ?? summary.lastTs
+    this.hooks.set(key, summary)
+  }
+
+  /** Turn an IDE diagnostics snapshot into incidents, deduped and bounded. */
+  private ingestDiagnostics(
+    attachment: ClaudeDiagnosticsAttachment,
+    line: number,
+    ts: Timestamp,
+  ): void {
+    let reported = 0
+    for (const file of attachment.files ?? []) {
+      const path = shortPath((file.uri ?? '').replace(/^file:\/\//, ''), this.cwd)
+      for (const entry of file.diagnostics ?? []) {
+        if (reported >= MAX_DIAGNOSTICS_PER_RECORD) return
+        const severity = LSP_SEVERITY[(entry.severity ?? '').toLowerCase()] ?? 'warning'
+        const at = (entry.range?.start?.line ?? 0) + 1
+        const code = [entry.source, entry.code].filter(Boolean).join(' ')
+        const key = `${path}:${at}:${code}:${entry.message ?? ''}`
+        if (this.seenDiagnostics.has(key)) continue
+        this.seenDiagnostics.add(key)
+        reported += 1
+        this.addIncident({
+          severity,
+          category: 'lsp',
+          title: compactText(entry.message, 120) || 'The IDE reported a diagnostic',
+          detail: [path && `${path}:${at}`, code].filter(Boolean).join(' · '),
+          ts,
+          line,
+          ...(code ? { code } : {}),
+        })
+      }
+    }
+  }
+
   private ingestAttachment(value: unknown, line: number, ts: Timestamp): void {
     const attachment = parseClaudeAttachment(value)
     if (!attachment) return
     if (attachment.type === 'hook_non_blocking_error' || attachment.type === 'hook_cancelled') {
       const cancelled = attachment.type === 'hook_cancelled'
+      this.recordHook(attachment.hookName ?? '', attachment.hookEvent ?? '', ts, { failed: true })
       this.addIncident({
         severity: cancelled ? 'warning' : 'error',
         category: 'hook',
@@ -703,6 +805,20 @@ export class TranscriptScan {
         ts,
         line,
       })
+    } else if (attachment.type === 'hook_success') {
+      this.recordHook(attachment.hookName ?? '', attachment.hookEvent ?? '', ts, {
+        durationMs: attachment.durationMs ?? 0,
+      })
+    } else if (attachment.type === 'diagnostics') {
+      this.ingestDiagnostics(attachment, line, ts)
+    } else if (attachment.type === 'budget_usd') {
+      // Rewritten as the session spends, so the newest record is the state.
+      this.budget = {
+        usedUsd: attachment.used ?? 0,
+        totalUsd: attachment.total ?? 0,
+        remainingUsd: attachment.remaining ?? 0,
+        ts,
+      }
     }
   }
 
@@ -749,6 +865,8 @@ export class TranscriptScan {
       changes: this.changeDetails,
       git: this.gitEvents,
       environment: { ...this.environment },
+      ...(this.hooks.size ? { hooks: [...this.hooks.values()] } : {}),
+      ...(this.budget ? { budget: this.budget } : {}),
       causal: {
         records: this.causalRecords,
         recordsWithUuid: this.causalRecordsWithUuid,

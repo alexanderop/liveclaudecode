@@ -113,7 +113,7 @@ export type DiagnosticSeverity = 'error' | 'warning' | 'info'
 export interface DiagnosticIncident {
   id: string
   severity: DiagnosticSeverity
-  category: 'api' | 'tool' | 'permission' | 'hook' | 'timeout' | 'interruption' | 'agent' | 'truncation' | 'workflow'
+  category: 'api' | 'tool' | 'permission' | 'hook' | 'timeout' | 'interruption' | 'agent' | 'truncation' | 'workflow' | 'lsp'
   title: string
   detail: string
   ts: Timestamp
@@ -221,6 +221,33 @@ export interface GitEvent {
   key?: string
 }
 
+/**
+ * The budget the harness itself reports, as opposed to the `CostEstimate` this
+ * tool derives from a local price table. Rewritten as the session runs, so the
+ * last record is the current state.
+ */
+export interface BudgetReport {
+  usedUsd: number
+  totalUsd: number
+  remainingUsd: number
+  ts: Timestamp
+}
+
+/**
+ * One hook's activity across a session, aggregated rather than listed: a
+ * `UserPromptSubmit` hook fires on every prompt, so the per-invocation records
+ * are repetitive while the totals are what identify a slow or flaky hook.
+ */
+export interface HookSummary {
+  name: string
+  event: string
+  runs: number
+  failures: number
+  totalMs: number
+  maxMs: number
+  lastTs: Timestamp
+}
+
 export interface CausalSummary {
   records: number
   recordsWithUuid: number
@@ -239,6 +266,9 @@ export interface ScanDiagnostics {
   git: GitEvent[]
   environment: SessionEnvironment
   causal: CausalSummary
+  /** Claude-only signals; the Codex and Copilot scanners omit them. */
+  hooks?: HookSummary[]
+  budget?: BudgetReport
 }
 
 export interface AgentDiagnosticSummary {
@@ -327,6 +357,10 @@ export interface RunDiagnostics {
   causal: CausalSummary
   usage: Usage
   cost?: CostEstimate
+  /** Hook activity per hook name; absent for harnesses that do not record it. */
+  hooks?: HookSummary[]
+  /** The harness-reported budget, which outranks `cost` when present. */
+  budget?: BudgetReport
   /** Records skipped across this run's own transcripts, split by cause. */
   parse: SessionParseSummary
 }
@@ -367,6 +401,8 @@ export interface CommandRun {
   ts: Timestamp
   ok: boolean | null
   tid: string
+  /** Why the command exited as it did, when the transcript said so explicitly. */
+  note?: string
 }
 
 export interface TranscriptStats {

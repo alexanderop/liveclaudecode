@@ -166,4 +166,57 @@ describe('RunDiagnostics', () => {
 
     expect(wrapper.get('.environment-list').text()).toContain('normal')
   })
+
+  it('lists hook activity with its failures and timing', async () => {
+    const withHooks = runResponse({
+      diagnostics: runDiagnostics({
+        hooks: [
+          { name: 'lint', event: 'PostToolUse', runs: 3, failures: 1, totalMs: 42_000, maxMs: 30_000, lastTs: '2026-07-25T18:00:04.000Z' },
+          { name: 'inject', event: 'SessionStart', runs: 1, failures: 0, totalMs: 5, maxMs: 5, lastTs: '2026-07-25T18:00:00.000Z' },
+        ],
+      }),
+    })
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
+      props: { run: withHooks, selectedKey: null },
+    })
+
+    const rows = wrapper.findAll('.hook-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.text()).toContain('lint')
+    expect(rows[0]!.text()).toContain('PostToolUse')
+    expect(rows[0]!.text()).toContain('42s')
+    expect(rows[1]!.text()).toContain('inject')
+  })
+
+  it('omits the hooks section when no hook activity was recorded', async () => {
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
+      props: { run, selectedKey: null },
+    })
+
+    expect(wrapper.find('.hook-row').exists()).toBe(false)
+  })
+
+  it('renders an IDE diagnostic as a distinct incident severity', async () => {
+    const withLsp = runResponse({
+      diagnostics: runDiagnostics({
+        incidents: [{
+          id: '1:lsp',
+          severity: 'info',
+          category: 'lsp',
+          title: 'Value is declared but never read.',
+          detail: 'server/api/run.get.ts:4 · ts-plugin 6133',
+          ts: '2026-07-25T18:00:02.000Z',
+          line: 1,
+          code: 'ts-plugin 6133',
+        }],
+      }),
+    })
+    const wrapper = component = await mountSuspended(RunDiagnostics, {
+      props: { run: withLsp, selectedKey: null },
+    })
+
+    const row = wrapper.get('.incident-row')
+    expect(row.classes()).toContain('info')
+    expect(row.text()).toContain('server/api/run.get.ts:4')
+  })
 })

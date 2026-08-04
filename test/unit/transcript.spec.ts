@@ -4,6 +4,7 @@ import { FastCheck, TestClock } from 'effect/testing'
 import {
   clip,
   commandOk,
+  commandOutcome,
   findMilestones,
   MAX_CHARS,
   shortPath,
@@ -523,6 +524,126 @@ describe('TranscriptScan', () => {
       )
     }))
 
+  it.effect('reports IDE diagnostics as incidents, mapping severity by level', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.attachment('diagnostics', {
+          isNew: true,
+          files: [{
+            uri: 'file:///repo/server/api/run.get.ts',
+            diagnostics: [
+              {
+                message: "Cannot find name 'runRequest'.",
+                severity: 'Error',
+                range: { start: { line: 10, character: 9 }, end: { line: 10, character: 19 } },
+                source: 'ts',
+                code: '2552',
+              },
+              {
+                message: 'Value is declared but never read.',
+                severity: 'Hint',
+                range: { start: { line: 3, character: 0 }, end: { line: 3, character: 5 } },
+                source: 'ts-plugin',
+                code: '6133',
+              },
+            ],
+          }],
+        }),
+      ])
+
+      assert.deepStrictEqual(
+        result.diagnostics().incidents.map(incident => [
+          incident.category,
+          incident.severity,
+          incident.title,
+          incident.detail,
+          incident.code,
+        ]),
+        [
+          ['lsp', 'error', "Cannot find name 'runRequest'.", 'server/api/run.get.ts:11 · ts 2552', 'ts 2552'],
+          ['lsp', 'info', 'Value is declared but never read.', 'server/api/run.get.ts:4 · ts-plugin 6133', 'ts-plugin 6133'],
+        ],
+      )
+    }))
+
+  it.effect('reports a re-sent diagnostic only once', () =>
+    Effect.gen(function*() {
+      const snapshot = {
+        files: [{
+          uri: 'file:///repo/a.ts',
+          diagnostics: [{
+            message: 'Broken',
+            severity: 'Error',
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+            source: 'ts',
+            code: '1',
+          }],
+        }],
+      }
+      const result = yield* scanOf([
+        fixture.attachment('diagnostics', snapshot),
+        fixture.attachment('diagnostics', snapshot),
+      ])
+
+      assert.strictEqual(result.diagnostics().incidents.length, 1)
+    }))
+
+  it.effect('aggregates hook runs per name across successes and failures', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.attachment('hook_success', { hookName: 'lint', hookEvent: 'PostToolUse', durationMs: 12 }),
+        fixture.attachment('hook_success', { hookName: 'lint', hookEvent: 'PostToolUse', durationMs: 30 }),
+        fixture.attachment('hook_success', { hookName: 'inject', hookEvent: 'SessionStart', durationMs: 5 }),
+        fixture.attachment('hook_non_blocking_error', { hookName: 'lint', hookEvent: 'PostToolUse', exitCode: 1, stderr: 'boom' }),
+      ])
+
+      assert.deepStrictEqual(
+        result.diagnostics().hooks?.map(hook => [hook.name, hook.event, hook.runs, hook.failures, hook.totalMs, hook.maxMs]),
+        [
+          ['lint', 'PostToolUse', 3, 1, 42, 30],
+          ['inject', 'SessionStart', 1, 0, 5, 5],
+        ],
+      )
+    }))
+
+  it.effect('keeps the newest reported budget, since the record is rewritten as it spends', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.attachment('budget_usd', { used: 0, total: 1.5, remaining: 1.5 }),
+        fixture.attachment('budget_usd', { used: 0.72, total: 1.5, remaining: 0.78 }),
+      ])
+
+      assert.deepStrictEqual(result.diagnostics().budget, {
+        usedUsd: 0.72,
+        totalUsd: 1.5,
+        remainingUsd: 0.78,
+        ts: fixture.T0(2),
+      })
+    }))
+
+  it.effect('omits hooks and budget when the session recorded neither', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([fixture.userText('hello')])
+      const diagnostics = result.diagnostics()
+      assert.isUndefined(diagnostics.hooks)
+      assert.isUndefined(diagnostics.budget)
+    }))
+
+  it.effect('annotates a command with the recorded reason for its exit code', () =>
+    Effect.gen(function*() {
+      const result = yield* scanOf([
+        fixture.assistant([fixture.tool('Bash', 't1', { command: 'grep -r nothing .' })]),
+        fixture.userResult('t1', '', {
+          toolUseResult: { stdout: '', stderr: '', interrupted: false, returnCodeInterpretation: 'No matches found' },
+        }),
+      ])
+
+      assert.deepStrictEqual(
+        result.commands.map(command => [command.cmd, command.ok, command.note]),
+        [['grep -r nothing .', true, 'No matches found']],
+      )
+    }))
+
   it.effect('takes the newest generated title, since the record is rewritten in place', () =>
     Effect.gen(function*() {
       const result = yield* scanOf([
@@ -671,6 +792,31 @@ describe('transcript helpers', () => {
     const prefix = 'ok 1 - first\n'.repeat(30)
     assert.isTrue(commandOk(`${prefix}# pass 3\n# fail 0\n# duration_ms 40`, false))
     assert.isFalse(commandOk(`${prefix}# pass 2\n# fail 1\n# duration_ms 40`, false))
+  })
+
+  it('keeps a benign non-zero exit passing and records why', () => {
+    assert.deepStrictEqual(
+      commandOutcome({ returnCodeInterpretation: 'No matches found', stdout: '', stderr: '' }, '', false),
+      { ok: true, note: 'No matches found' },
+    )
+  })
+
+  it('reports an interrupted command as failed', () => {
+    assert.deepStrictEqual(
+      commandOutcome({ interrupted: true, stdout: 'partial', stderr: '' }, 'partial', false),
+      { ok: false, note: 'Interrupted' },
+    )
+  })
+
+  it('judges the recorded streams rather than the rendered result text', () => {
+    // The rendered text says nothing; the failure only appears on stderr.
+    assert.isFalse(commandOutcome({ stdout: '', stderr: 'error TS2552: nope' }, '', false).ok)
+    assert.isTrue(commandOutcome({ stdout: 'all good', stderr: '' }, 'error TS2552: nope', false).ok)
+  })
+
+  it('falls back to the result text when no streams were recorded', () => {
+    assert.deepStrictEqual(commandOutcome(null, '✓ 12 passed', false), { ok: true, note: '' })
+    assert.deepStrictEqual(commandOutcome(null, 'anything', true), { ok: false, note: '' })
   })
 
   /**

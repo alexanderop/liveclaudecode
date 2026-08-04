@@ -91,6 +91,7 @@ const scopeLabel = computed(() => scope.value === 'session' ? 'Whole session' : 
                 <UIcon :name="command.ok === null ? 'i-lucide-loader-circle' : command.ok ? 'i-lucide-check' : 'i-lucide-x'" />
               </span>
               <code :title="command.cmd">{{ command.cmd }}</code>
+              <small v-if="command.note" class="command-note">{{ command.note }}</small>
               <time>{{ formatTime(command.ts, false) }}</time>
             </div>
           </div>
