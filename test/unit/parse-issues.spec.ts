@@ -1,6 +1,7 @@
 import { assert, describe, it } from '@effect/vitest'
-import { Result, Schema } from 'effect'
+import { Effect, Result, Schema } from 'effect'
 import {
+  addParseIssueCounts,
   invalidJsonIssue,
   ParseIssueLog,
   PARSE_ISSUE_SAMPLE_LIMIT,
@@ -9,6 +10,17 @@ import {
   totalParseIssues,
   unsupportedShapeIssue,
 } from '../../server/utils/parse-issues'
+import { NonNegativeInt } from '#shared/schemas/parse'
+
+/**
+ * A census built from the same `NonNegativeInt` the transcript schemas use for
+ * count-shaped fields, so the generated cases match what a real scan can hold.
+ */
+const CensusSchema = Schema.Struct({
+  invalidJson: NonNegativeInt,
+  schemaMismatch: NonNegativeInt,
+  unsupportedShape: NonNegativeInt,
+})
 
 const Record_ = Schema.Struct({
   type: Schema.Literal('assistant'),
@@ -133,4 +145,31 @@ describe('ParseIssueLog', () => {
     assert.deepStrictEqual(log.counts, { invalidJson: 0, schemaMismatch: 0, unsupportedShape: 0 })
     assert.strictEqual(log.samples.length, 0)
   })
+})
+
+describe('parse census arithmetic', () => {
+  it.effect.prop(
+    'merging two censuses totals to the sum of their totals',
+    { left: CensusSchema, right: CensusSchema },
+    ({ left, right }) =>
+      Effect.sync(() => {
+        const expected = totalParseIssues(left) + totalParseIssues(right)
+        const merged = { ...left }
+        addParseIssueCounts(merged, right)
+        assert.strictEqual(totalParseIssues(merged), expected)
+      }),
+  )
+
+  it.effect.prop(
+    'merging is commutative in the total it reports',
+    { left: CensusSchema, right: CensusSchema },
+    ({ left, right }) =>
+      Effect.sync(() => {
+        const leftFirst = { ...left }
+        addParseIssueCounts(leftFirst, right)
+        const rightFirst = { ...right }
+        addParseIssueCounts(rightFirst, left)
+        assert.deepStrictEqual(leftFirst, rightFirst)
+      }),
+  )
 })

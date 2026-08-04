@@ -10,7 +10,7 @@ import {
   shortPath,
   toolSummary,
 } from '#server/utils/transcript-content'
-import { TranscriptScan } from '#server/utils/transcript'
+import { EDIT_TOOLS, TranscriptScan } from '#server/utils/transcript'
 import * as fixture from '../fixtures/transcripts'
 import { makeCallLog } from '../fixtures/call-log'
 import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
@@ -835,4 +835,65 @@ describe('transcript helpers', () => {
     assert.strictEqual(length, text.length)
     assert.isTrue(text.startsWith(body))
   })
+})
+
+/**
+ * The changed-files list is rendered as a display path, and every consumer —
+ * the sidebar, the diff view, the run projection — treats the map key as that
+ * display path. These pin the shape for arbitrary paths rather than for the
+ * handful the example tests use.
+ *
+ * Note what is *not* claimed: a path of three segments or fewer is already
+ * short enough to show, so `shortPath` leaves it alone and the key keeps its
+ * leading slash. The bound that matters is the segment count, and the promise
+ * that a long absolute path is always shortened to a relative tail.
+ */
+describe('changed-file keys', () => {
+  const segment = FastCheck.stringMatching(/^[a-zA-Z0-9._-]{1,12}$/)
+  const absolutePath = FastCheck.array(segment, { minLength: 1, maxLength: 8 })
+    .map(parts => `/${parts.join('/')}`)
+  const editTool = FastCheck.constantFrom(...EDIT_TOOLS)
+
+  const scanOfEdits = (paths: ReadonlyArray<string>, tool: string) =>
+    new TranscriptScan(PATH).refresh().pipe(Effect.provide(testFileSystem({
+      [PATH]: fixture.transcript(paths.map((path, index) =>
+        fixture.assistant([fixture.tool(tool, `t${index}`, { file_path: path })]),
+      )),
+    })))
+
+  it.effect.prop(
+    'never keep more than three segments, and are always a tail of the real path',
+    { paths: FastCheck.array(absolutePath, { minLength: 1, maxLength: 6 }), tool: editTool },
+    ({ paths, tool }) =>
+      Effect.gen(function*() {
+        const scan = yield* scanOfEdits(paths, tool)
+
+        for (const key of scan.files.keys()) {
+          assert.isAtMost(
+            key.split('/').filter(Boolean).length,
+            3,
+            `"${key}" keeps more than three segments`,
+          )
+          assert.isTrue(
+            paths.some(path => path.endsWith(key)),
+            `"${key}" is not the tail of any recorded path`,
+          )
+        }
+      }),
+  )
+
+  it.effect.prop(
+    'shorten a deep absolute path to a relative tail',
+    {
+      parts: FastCheck.array(segment, { minLength: 4, maxLength: 8 }),
+      tool: editTool,
+    },
+    ({ parts, tool }) =>
+      Effect.gen(function*() {
+        const path = `/${parts.join('/')}`
+        const scan = yield* scanOfEdits([path], tool)
+
+        assert.deepStrictEqual([...scan.files.keys()], [parts.slice(-3).join('/')])
+      }),
+  )
 })

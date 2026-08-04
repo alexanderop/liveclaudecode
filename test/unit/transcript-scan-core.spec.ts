@@ -118,6 +118,26 @@ describe('previews', () => {
     circular.self = circular
     assert.strictEqual(compactText(circular), '')
   })
+
+  // A preview is rendered into a fixed-width cell, so the cap is the contract:
+  // no input shape may talk its way past it.
+  it.effect.prop(
+    'never returns more characters than the limit allows',
+    { value: FastCheck.anything(), limit: FastCheck.integer({ min: 0, max: 512 }) },
+    ({ value, limit }) =>
+      Effect.sync(() => {
+        assert.isAtMost(compactText(value, limit).length, limit)
+      }),
+  )
+
+  it.effect.prop(
+    'never returns a preview containing a newline or a tab',
+    { value: FastCheck.anything() },
+    ({ value }) =>
+      Effect.sync(() => {
+        assert.isFalse(/[\n\t\r]/.test(compactText(value)), 'preview must stay on one line')
+      }),
+  )
 })
 
 describe('incidents and milestones', () => {
