@@ -1,4 +1,4 @@
-import { assert, describe, expect, it } from '@effect/vitest'
+import { assert, describe, it } from '@effect/vitest'
 import { Effect } from 'effect'
 import {
   InvalidRequestQuery,
@@ -10,24 +10,28 @@ import {
 
 describe('request hours schema', () => {
   it('uses a valid query override, including all time', () => {
-    expect(parseHours(168, '24')).toBe(24)
-    expect(parseHours(168, '0')).toBe(0)
-    expect(parseHours(168, '720')).toBe(720)
-    expect(parseHours(168, ' 24 ')).toBe(24)
-    expect(parseHours(168, '1e2')).toBe(100)
+    assert.strictEqual(parseHours(168, '24'), 24)
+    assert.strictEqual(parseHours(168, '0'), 0)
+    assert.strictEqual(parseHours(168, '720'), 720)
+    assert.strictEqual(parseHours(168, ' 24 '), 24)
+    assert.strictEqual(parseHours(168, '1e2'), 100)
   })
 
   it('falls back to the configured range for unsafe query values', () => {
-    expect(parseHours(24, '')).toBe(24)
-    expect(parseHours(24, '-1')).toBe(24)
-    expect(parseHours(24, 'not-a-number')).toBe(24)
-    expect(parseHours(24, ['0'])).toBe(24)
+    assert.strictEqual(parseHours(24, ''), 24)
+    assert.strictEqual(parseHours(24, '-1'), 24)
+    assert.strictEqual(parseHours(24, 'not-a-number'), 24)
+    assert.strictEqual(parseHours(24, ['0']), 24)
   })
 
   it('uses seven days when both the query and configuration are invalid', () => {
-    expect(parseHours('invalid', undefined)).toBe(168)
-    expect(parseHours('', undefined)).toBe(0)
-    expect(parseHours(null, undefined)).toBe(0)
+    assert.strictEqual(parseHours('invalid', undefined), 168)
+    assert.strictEqual(parseHours('', undefined), 0)
+    assert.strictEqual(parseHours(null, undefined), 0)
+    // A configured value the coercion cannot handle degrades instead of
+    // throwing past `runRequest`'s error mapping.
+    assert.strictEqual(parseHours(Symbol('hours'), undefined), 168)
+    assert.strictEqual(parseHours({ valueOf() { throw new Error('boom') } }, undefined), 168)
   })
 })
 

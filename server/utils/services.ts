@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { Cache, Clock, Context, Duration, Effect, Exit, Layer, Option, Schema, Semaphore } from 'effect'
+import { Cache, Clock, Config, Context, Duration, Effect, Exit, Layer, Option, Schema, Semaphore } from 'effect'
 import type * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
 import { parseClaudeRecord } from '#shared/schemas/claude'
@@ -12,51 +12,93 @@ import { CopilotTranscriptScan } from './copilot-transcript'
 import { readHead } from './incremental-jsonl'
 import { plainText } from './transcript-content'
 
+const defaultProjectsDirectory = () => join(homedir(), '.claude', 'projects')
+const defaultCodexSessionsDirectory = () => join(homedir(), '.codex', 'sessions')
+const defaultCopilotSessionStateDirectory = () => join(homedir(), '.copilot', 'session-state')
+const defaultVsCodeUserDataDirectories = (): ReadonlyArray<string> => [
+  join(homedir(), 'Library', 'Application Support', 'Code', 'User'),
+  join(homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User'),
+]
+
 /**
  * Root of Claude Code's transcript store.
  *
  * A `Context.Reference` rather than a plain constant so tests can point it at a
  * fixture directory without every function having to thread it through as a
- * parameter.
+ * parameter. The default is the platform location; environment overrides are
+ * applied by {@link layerTranscriptDirectories}.
  */
 export const ProjectsDirectory = Context.Reference<string>(
   'lcc/ProjectsDirectory',
-  {
-    defaultValue: () => process.env.LCC_CLAUDE_PROJECTS
-      || join(homedir(), '.claude', 'projects'),
-  },
+  { defaultValue: defaultProjectsDirectory },
 )
 
 /** Root shared by Codex CLI, desktop, exec sessions, and subagents. */
 export const CodexSessionsDirectory = Context.Reference<string>(
   'lcc/CodexSessionsDirectory',
-  {
-    defaultValue: () => process.env.LCC_CODEX_SESSIONS
-      || join(homedir(), '.codex', 'sessions'),
-  },
+  { defaultValue: defaultCodexSessionsDirectory },
 )
 
 /** VS Code user-data roots whose local chat session stores may be inspected. */
 export const VsCodeUserDataDirectories = Context.Reference<ReadonlyArray<string>>(
   'lcc/VsCodeUserDataDirectories',
-  {
-    defaultValue: () => process.env.LCC_VSCODE_USER_DATA
-      ? process.env.LCC_VSCODE_USER_DATA.split(delimiter).filter(Boolean)
-      : [
-          join(homedir(), 'Library', 'Application Support', 'Code', 'User'),
-          join(homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User'),
-        ],
-  },
+  { defaultValue: defaultVsCodeUserDataDirectories },
 )
 
 /** Root of GitHub Copilot CLI's append-only local session event logs. */
 export const CopilotSessionStateDirectory = Context.Reference<string>(
   'lcc/CopilotSessionStateDirectory',
-  {
-    defaultValue: () => process.env.LCC_COPILOT_SESSIONS
-      || join(homedir(), '.copilot', 'session-state'),
-  },
+  { defaultValue: defaultCopilotSessionStateDirectory },
 )
+
+/**
+ * A setting whose variable is absent *or* empty reads as unset, so an exported
+ * but blank `LCC_*` falls back to the platform default rather than pointing the
+ * scanner at the filesystem root.
+ */
+const optionalSetting = (name: string): Config.Config<Option.Option<string>> =>
+  Config.map(
+    Config.option(Config.string(name)),
+    value => Option.flatMap(value, raw => raw.length > 0 ? Option.some(raw) : Option.none()),
+  )
+
+/**
+ * The transcript roots, resolved from the environment when the runtime starts.
+ *
+ * This is the only place the `LCC_*` overrides are read, and it reads them
+ * through `Config` so the values resolve against the runtime's active
+ * `ConfigProvider` — a test can supply its own instead of mutating the
+ * process environment, and nothing is memoized process-globally.
+ */
+export const layerTranscriptDirectories: Layer.Layer<never, Config.ConfigError>
+  = Layer.effectContext(Effect.gen(function*() {
+    const projects = yield* optionalSetting('LCC_CLAUDE_PROJECTS')
+    const codex = yield* optionalSetting('LCC_CODEX_SESSIONS')
+    const copilot = yield* optionalSetting('LCC_COPILOT_SESSIONS')
+    const vsCode = yield* optionalSetting('LCC_VSCODE_USER_DATA')
+    const vsCodeDirectories = Option.match(vsCode, {
+      onNone: defaultVsCodeUserDataDirectories,
+      onSome: (raw) => {
+        const directories = raw.split(delimiter).filter(Boolean)
+        return directories.length ? directories : defaultVsCodeUserDataDirectories()
+      },
+    })
+
+    return Context.make(
+      ProjectsDirectory,
+      Option.getOrElse(projects, defaultProjectsDirectory),
+    ).pipe(
+      Context.add(
+        CodexSessionsDirectory,
+        Option.getOrElse(codex, defaultCodexSessionsDirectory),
+      ),
+      Context.add(
+        CopilotSessionStateDirectory,
+        Option.getOrElse(copilot, defaultCopilotSessionStateDirectory),
+      ),
+      Context.add(VsCodeUserDataDirectories, vsCodeDirectories),
+    )
+  }))
 
 /** The process working directory, as a service so tests can override it. */
 export const WorkingDirectory = Context.Reference<string>(

@@ -80,7 +80,10 @@ const workspaceFor = Effect.fn('workspaceFor')(function*(directory: string) {
   if (!raw) return ''
   return yield* Result.match(parseCopilotWorkspaceJson(raw), {
     onSuccess: metadata => Effect.succeed(normalizeWorkspace(metadata.folder || metadata.workspace || '')),
-    onFailure: error => Effect.logDebug('Failed to parse workspace.json', { path, error }).pipe(
+    // A workspace.json that exists but does not parse means every session in
+    // this directory loses its project attribution, so it is worth seeing at
+    // the default log level rather than only under debug.
+    onFailure: error => Effect.logWarning('Failed to parse workspace.json', { path, error }).pipe(
       Effect.as(''),
     ),
   })

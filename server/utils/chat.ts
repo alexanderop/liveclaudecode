@@ -1,5 +1,5 @@
 import { dirname } from 'node:path'
-import { Context, Deferred, Effect, Fiber, Option, Result, Schema, Scope, Stream } from 'effect'
+import { Config, Context, Deferred, Effect, Fiber, Layer, Option, Result, Schema, Scope, Stream } from 'effect'
 import type { Duration } from 'effect'
 import { AcpAgentError, AcpConnector, type AcpConnection } from './acp-connection'
 import { isDirectory } from './project'
@@ -66,50 +66,72 @@ export interface ChatAgentCommand {
   env: Record<string, string>
 }
 
-function commandFromEnv(
-  value: string | undefined,
-  fallback: ReadonlyArray<string>,
-): { command: string, args: ReadonlyArray<string> } {
-  const parts = value ? value.split(/\s+/).filter(Boolean) : fallback
-  const resolved = parts.length ? parts : fallback
-  return { command: resolved[0]!, args: resolved.slice(1) }
+/** How each agent is launched when nothing overrides it, and its fixed env. */
+const AGENT_DEFAULTS: Readonly<Record<ChatAgentId, {
+  readonly setting: string
+  readonly commandLine: ReadonlyArray<string>
+  readonly env: Record<string, string>
+}>> = {
+  claude: {
+    setting: 'LCC_ACP_CLAUDE',
+    commandLine: ['npx', '-y', '@agentclientprotocol/claude-agent-acp'],
+    env: {},
+  },
+  codex: {
+    setting: 'LCC_ACP_CODEX',
+    commandLine: ['npx', '-y', '@agentclientprotocol/codex-acp'],
+    env: { INITIAL_AGENT_MODE: 'agent-full-access', NO_BROWSER: '1' },
+  },
+  copilot: {
+    setting: 'LCC_ACP_COPILOT',
+    commandLine: ['copilot', '--acp', '--stdio', '--allow-all'],
+    env: {},
+  },
+}
+
+/** A configured command line is whitespace-separated; a blank one is no override. */
+export function chatAgentCommand(
+  agent: ChatAgentId,
+  configured: string | undefined,
+): ChatAgentCommand {
+  const { commandLine, env } = AGENT_DEFAULTS[agent]
+  const parts = configured ? configured.split(/\s+/).filter(Boolean) : []
+  const resolved = parts.length ? parts : commandLine
+  return { command: resolved[0]!, args: resolved.slice(1), env }
 }
 
 /**
- * ACP agent launchers, keyed by the id the client sends. Overridable via
- * `LCC_ACP_CLAUDE`, `LCC_ACP_CODEX`, or `LCC_ACP_COPILOT` (a full command
- * line, split on spaces). Ask agents start with full tool access; ACP
- * permission requests are approved by the policy below.
+ * ACP agent launchers, keyed by the id the client sends. Ask agents start with
+ * full tool access; ACP permission requests are approved by the policy below.
+ *
+ * Which binary gets that access is a real decision, so the reference default is
+ * the vetted launcher for each agent and {@link layerChatAgentCommands} is the
+ * only place `LCC_ACP_*` overrides are read.
  */
-export function chatAgentCommandsFromEnv(
-  env: Readonly<Record<string, string | undefined>>,
-): Readonly<Record<ChatAgentId, ChatAgentCommand>> {
-  return {
-    claude: {
-      ...commandFromEnv(env.LCC_ACP_CLAUDE, ['npx', '-y', '@agentclientprotocol/claude-agent-acp']),
-      env: {},
-    },
-    codex: {
-      ...commandFromEnv(env.LCC_ACP_CODEX, ['npx', '-y', '@agentclientprotocol/codex-acp']),
-      env: { INITIAL_AGENT_MODE: 'agent-full-access', NO_BROWSER: '1' },
-    },
-    copilot: {
-      ...commandFromEnv(env.LCC_ACP_COPILOT, [
-        'copilot',
-        '--acp',
-        '--stdio',
-        '--allow-all',
-      ]),
-      env: {},
-    },
-  }
-}
-
 export const ChatAgentCommands = Context.Reference<Readonly<Record<ChatAgentId, ChatAgentCommand>>>(
   'lcc/ChatAgentCommands',
   {
-    defaultValue: () => chatAgentCommandsFromEnv(process.env),
+    defaultValue: () => ({
+      claude: chatAgentCommand('claude', undefined),
+      codex: chatAgentCommand('codex', undefined),
+      copilot: chatAgentCommand('copilot', undefined),
+    }),
   },
+)
+
+/** The launchers with `LCC_ACP_*` overrides applied, read once per runtime. */
+export const layerChatAgentCommands: Layer.Layer<never, Config.ConfigError> = Layer.effect(
+  ChatAgentCommands,
+  Effect.gen(function*() {
+    const entries = yield* Effect.forEach(
+      Object.entries(AGENT_DEFAULTS) as ReadonlyArray<[ChatAgentId, { setting: string }]>,
+      ([agent, { setting }]) => Effect.map(
+        Config.option(Config.string(setting)),
+        configured => [agent, chatAgentCommand(agent, Option.getOrUndefined(configured))] as const,
+      ),
+    )
+    return Object.fromEntries(entries) as Readonly<Record<ChatAgentId, ChatAgentCommand>>
+  }),
 )
 
 const chatKey = (project: string, key: string): string => `${project}\0${key}`
@@ -474,7 +496,7 @@ export const cancelChat = Effect.fn('cancelChat')(function*(project: string, key
     // failed notification is logged rather than failing the cancellation.
     const notify = record.connection && record.sessionId
       ? record.connection.notify('session/cancel', { sessionId: record.sessionId }).pipe(
-          Effect.catch(error => Effect.logDebug('chat: cancel notification failed', { error })),
+          Effect.catch(error => Effect.logWarning('chat: cancel notification failed', { error })),
         )
       : Effect.void
     yield* restore(notify).pipe(Effect.ensuring(cleanup))

@@ -139,6 +139,7 @@ export const collect = Effect.fn('collect')(function*(
             label: normalizeSessionLabel(meta?.description || '', agent),
           } satisfies CollectedItem)
         }),
+        { concurrency: FILE_CONCURRENCY },
       )
       return {
         items: Arr.getSomes(subagents),

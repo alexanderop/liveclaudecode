@@ -1,4 +1,4 @@
-import { Effect, Option, Result, Schema, SchemaGetter, SchemaIssue, SchemaTransformation } from 'effect'
+import { Effect, Option, Result, Schema, SchemaIssue, SchemaTransformation } from 'effect'
 
 const stringWithDefault = (fallback: string) => Schema.String.pipe(
   Schema.withDecodingDefault(Effect.succeed(fallback)),
@@ -73,20 +73,28 @@ export class InvalidRequestQuery extends Schema.TaggedErrorClass<InvalidRequestQ
 
 /**
  * Coerces the configured hours value (an env-style setting, not user input)
- * to a non-negative finite number with `SchemaGetter.Number()`, falling back
- * to a week whenever that coercion is not a safe range.
+ * to a non-negative finite number, falling back to a week whenever that
+ * coercion is not a safe range.
+ *
+ * Numeric coercion is wrapped rather than applied directly because it is not
+ * total: `Number(value)` raises for a `Symbol`, and for any object whose
+ * `valueOf` throws. `parseHours` runs outside the request Effect, so a raise
+ * here would escape the typed error mapping in `server/utils/runtime.ts`
+ * entirely; as a decode failure it degrades to the fallback like any other
+ * unusable setting.
  */
-const coerceToNumber = new SchemaTransformation.Transformation(
-  SchemaGetter.Number<unknown>(),
-  SchemaGetter.passthrough<unknown, number>({ strict: false }),
-)
-const clampConfiguredHours = SchemaTransformation.transform({
-  decode: (parsed: number) => Number.isFinite(parsed) && parsed >= 0 ? parsed : 168,
-  encode: (value: number) => value,
+const clampConfiguredHours = SchemaTransformation.transformOrFail({
+  decode: (value: unknown) => Effect.try({
+    try: () => Number(value),
+    catch: () => new SchemaIssue.InvalidValue(Option.some(value), {
+      message: 'hours value cannot be coerced to a number',
+    }),
+  }).pipe(Effect.map(parsed => Number.isFinite(parsed) && parsed >= 0 ? parsed : 168)),
+  encode: (value: number) => Effect.succeed(value as unknown),
 })
 
 const ConfiguredHoursSchema = Schema.Unknown.pipe(
-  Schema.decodeTo(Schema.Number, coerceToNumber.compose(clampConfiguredHours)),
+  Schema.decodeTo(Schema.Number, clampConfiguredHours),
 )
 
 /**
@@ -117,7 +125,7 @@ const RequestedHoursSchema = Schema.String.pipe(
 const decodeSessionQuery = Schema.decodeUnknownResult(SessionQuerySchema)
 const decodeCursorQuery = Schema.decodeUnknownResult(CursorQuerySchema)
 const decodeActivityQuery = Schema.decodeUnknownResult(ActivityQuerySchema)
-const decodeConfiguredHours = Schema.decodeUnknownSync(ConfiguredHoursSchema)
+const decodeConfiguredHours = Schema.decodeUnknownResult(ConfiguredHoursSchema)
 const decodeRequestedHours = Schema.decodeUnknownResult(RequestedHoursSchema)
 
 /**
@@ -136,7 +144,11 @@ export const parseSessionQuery = queryParser(decodeSessionQuery)
 export const parseCursorQuery = queryParser(decodeCursorQuery)
 export const parseActivityQuery = queryParser(decodeActivityQuery)
 
+/**
+ * Neither decode throws, which is what lets `browserOptionsFor` call this in
+ * the h3 handler before its Effect ever reaches `runRequest`.
+ */
 export function parseHours(configuredValue: unknown, requestedValue: unknown): number {
-  const fallback = decodeConfiguredHours(configuredValue)
+  const fallback = Result.getOrElse(decodeConfiguredHours(configuredValue), () => 168)
   return Result.getOrElse(decodeRequestedHours(requestedValue), () => fallback)
 }

@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { Context, Effect, Option, Semaphore } from 'effect'
+import { Context, Effect, Layer, Option, Semaphore } from 'effect'
 import * as Arr from 'effect/Array'
 import * as FileSystem from 'effect/FileSystem'
 import type * as PlatformError from 'effect/PlatformError'
@@ -13,17 +13,21 @@ import { countUnreadable, isFreshFileInfo } from './run-shared'
 export const FILE_CONCURRENCY = 16
 
 /**
- * One semaphore for the whole process, not one per discovery pass.
+ * One permit pool per runtime, not one per discovery pass.
  *
- * A `Context.Reference` rather than a per-call constructor: its default value
- * is computed once and reused by every subsequent lookup that doesn't
- * override it, so concurrent tree builds and background polls all draw from
- * the same descriptor budget instead of each opening their own.
+ * Concurrent tree builds and background polls all draw from this single
+ * descriptor budget instead of each opening their own. It lives in the layer
+ * rather than at module scope so the permits belong to the runtime that built
+ * them: a test gets a fresh pool instead of drawing down one the rest of the
+ * process is already using, and a lost permit cannot stall every later caller
+ * in the process.
  */
-export const FileDiscoveryLimiter = Context.Reference<Semaphore.Semaphore>(
-  'lcc/FileDiscoveryLimiter',
-  { defaultValue: () => Semaphore.makeUnsafe(FILE_CONCURRENCY) },
-)
+export class FileDiscoveryLimiter extends Context.Service<
+  FileDiscoveryLimiter,
+  Semaphore.Semaphore
+>()('lcc/FileDiscoveryLimiter') {
+  static readonly layer = Layer.effect(FileDiscoveryLimiter, Semaphore.make(FILE_CONCURRENCY))
+}
 
 /**
  * Recover a `NotFound` platform failure with `onNotFound`; every other

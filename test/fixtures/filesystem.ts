@@ -1,6 +1,7 @@
-import { Effect, type Layer, Option, Stream } from 'effect'
+import { Effect, Layer, Option, Stream } from 'effect'
 import * as FileSystem from 'effect/FileSystem'
 import * as PlatformError from 'effect/PlatformError'
+import { FileDiscoveryLimiter } from '#server/utils/filesystem-concurrency'
 
 const encoder = new TextEncoder()
 
@@ -55,7 +56,7 @@ export function testFileSystem(tree: FakeTree, options: {
   /** Effects bracketing each read-only filesystem operation. */
   readonly beforeOperation?: (method: string, path: string) => Effect.Effect<void>
   readonly afterOperation?: (method: string, path: string) => Effect.Effect<void>
-} = {}): Layer.Layer<FileSystem.FileSystem> {
+} = {}): Layer.Layer<FileSystem.FileSystem | FileDiscoveryLimiter> {
   const files = new Map(Object.entries(tree).map(([path, value]) => [path, entryOf(value)]))
   const denied = new Set(options.denied ?? [])
   const beforeRead = options.beforeRead ?? (() => Effect.void)
@@ -93,7 +94,9 @@ export function testFileSystem(tree: FakeTree, options: {
       Effect.ensuring(afterOperation(method, path)),
     )
 
-  return FileSystem.layerNoop({
+  // The discovery limiter rides along so each test gets its own permit pool
+  // rather than sharing one budget with every other test in the worker.
+  return Layer.mergeAll(FileDiscoveryLimiter.layer, FileSystem.layerNoop({
     chmod: path => rejectMutation('chmod', path),
     chown: path => rejectMutation('chown', path),
     copy: fromPath => rejectMutation('copy', fromPath),
@@ -187,5 +190,5 @@ export function testFileSystem(tree: FakeTree, options: {
       }
       return Effect.fail(notFound('stat', path))
     },
-  })
+  }))
 }

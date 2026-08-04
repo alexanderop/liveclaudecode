@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Result } from 'effect'
+import { Cause, type Config, Effect, Exit, Layer, ManagedRuntime, Result } from 'effect'
 import type * as PlatformError from 'effect/PlatformError'
 import { NodeServices } from '@effect/platform-node'
 import { createError, type H3Event } from 'h3'
@@ -7,23 +7,29 @@ import {
   CodexScanCache,
   CopilotScanCache,
   type InvalidRunKey,
+  layerTranscriptDirectories,
   type NoTranscriptsFound,
   PromptCache,
   ScanCache,
   type UnknownProject,
   type UnknownRun,
 } from './services'
+import { FileDiscoveryLimiter } from './filesystem-concurrency'
 import { SessionCatalogCache, SessionLocatorCache } from './session-catalog'
 import { type AcpAgentError, AcpConnector } from './acp-connection'
-import type {
-  ChatBusy,
-  ChatCapacity,
-  InvalidChatAction,
+import {
+  type ChatBusy,
+  type ChatCapacity,
+  type InvalidChatAction,
+  layerChatAgentCommands,
 } from './chat'
 import { ChatStore } from './chat-store'
 
 /** Everything the server needs, backed by the real filesystem. */
 const ServerLayer = Layer.mergeAll(
+  layerTranscriptDirectories,
+  layerChatAgentCommands,
+  FileDiscoveryLimiter.layer,
   ScanCache.layer,
   CodexScanCache.layer,
   CopilotScanCache.layer,
@@ -42,8 +48,14 @@ type AppServices = Layer.Success<typeof ServerLayer>
  * Nitro route handlers cannot themselves be Effects, so this is the single
  * bridge between the h3 world and the Effect world. Domain code stays in
  * services; handlers only run an Effect and translate its typed failures.
+ *
+ * Layer construction reads `LCC_*` settings, so a malformed one fails the
+ * build rather than being papered over: it surfaces in every request's `Cause`
+ * as a 500 with the offending variable named, which is what a misconfigured
+ * launch should look like.
  */
-const runtime: ManagedRuntime.ManagedRuntime<AppServices, never> = ManagedRuntime.make(ServerLayer)
+const runtime: ManagedRuntime.ManagedRuntime<AppServices, Config.ConfigError>
+  = ManagedRuntime.make(ServerLayer)
 
 /** Release layer-scoped resources when Nitro shuts down. */
 export function disposeRuntime(): Promise<void> {

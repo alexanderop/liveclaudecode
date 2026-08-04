@@ -1,12 +1,12 @@
 import { assert, describe, it } from '@effect/vitest'
-import { Deferred, Effect, Fiber, Layer, Queue, Result, Scope, Stream } from 'effect'
+import { ConfigProvider, Deferred, Effect, Fiber, Layer, Queue, Result, Scope, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 import { AcpConnector, type AcpConnectionOptions } from '#server/utils/acp-connection'
 import type { SessionNotification } from '#shared/schemas/acp'
 import {
   ChatAgentCommands,
   cancelChat,
-  chatAgentCommandsFromEnv,
+  layerChatAgentCommands,
   pollChatEvents,
   resetChat,
   sendChatMessage,
@@ -119,6 +119,16 @@ function chatLayer(
   })))
 }
 
+/**
+ * Resolve the agent launchers against `settings` alone. Replacing the provider
+ * rather than stubbing `process.env` keeps the case deterministic on a machine
+ * that happens to export `LCC_ACP_*`.
+ */
+const withAgentSettings = (settings: Record<string, string>) =>
+  layerChatAgentCommands.pipe(
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(settings))),
+  )
+
 const isTurnEnd = (event: ChatEvent): event is Extract<ChatEvent, { kind: 'turn-end' }> =>
   event.kind === 'turn-end'
 
@@ -132,22 +142,37 @@ const waitForIdle = Effect.fn('waitForIdle')(function*(project: string, key: str
 })
 
 describe('session chat', () => {
-  it('configures coding agents with full permissions and accepts Copilot in chat actions', () => {
-    const commands = chatAgentCommandsFromEnv({})
-    assert.deepStrictEqual(commands.codex, {
-      command: 'npx',
-      args: ['-y', '@agentclientprotocol/codex-acp'],
-      env: { INITIAL_AGENT_MODE: 'agent-full-access', NO_BROWSER: '1' },
-    })
-    assert.deepStrictEqual(commands.copilot, {
-      command: 'copilot',
-      args: ['--acp', '--stdio', '--allow-all'],
-      env: {},
-    })
-    assert.deepStrictEqual(
-      chatAgentCommandsFromEnv({ LCC_ACP_COPILOT: '/opt/copilot --acp --stdio' }).copilot,
-      { command: '/opt/copilot', args: ['--acp', '--stdio'], env: {} },
-    )
+  it.effect('launches vetted agent commands with full permissions when nothing overrides them', () =>
+    Effect.gen(function*() {
+      const commands = yield* ChatAgentCommands
+      assert.deepStrictEqual(commands.codex, {
+        command: 'npx',
+        args: ['-y', '@agentclientprotocol/codex-acp'],
+        env: { INITIAL_AGENT_MODE: 'agent-full-access', NO_BROWSER: '1' },
+      })
+      assert.deepStrictEqual(commands.copilot, {
+        command: 'copilot',
+        args: ['--acp', '--stdio', '--allow-all'],
+        env: {},
+      })
+    }).pipe(Effect.provide(withAgentSettings({}))))
+
+  it.effect('takes a whitespace-separated command line from the environment', () =>
+    Effect.gen(function*() {
+      const commands = yield* ChatAgentCommands
+      assert.deepStrictEqual(commands.copilot, {
+        command: '/opt/copilot',
+        args: ['--acp', '--stdio'],
+        env: {},
+      })
+      // A blank override is not an override; the vetted launcher stands.
+      assert.strictEqual(commands.claude.command, 'npx')
+    }).pipe(Effect.provide(withAgentSettings({
+      LCC_ACP_COPILOT: '/opt/copilot --acp --stdio',
+      LCC_ACP_CLAUDE: '   ',
+    }))))
+
+  it('accepts Copilot but not an unknown agent in chat actions', () => {
     assert.isTrue(Result.isSuccess(parseChatAction({
       action: 'send',
       project: '/repo',
