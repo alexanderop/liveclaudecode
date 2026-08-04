@@ -1,4 +1,6 @@
 import type {
+  CostOverviewGroup,
+  CostOverviewResponse,
   EventsResponse,
   ParseHealthResponse,
   PublicRunNode,
@@ -10,6 +12,7 @@ import type {
   TimelineLane,
   TranscriptEvent,
   TreeResponse,
+  Usage,
 } from '#shared/types/run'
 
 /** Base timestamp of the fixture session; later fixture times offset from it. */
@@ -236,6 +239,55 @@ export function treeResponse(
     sources: [],
     now: 0,
     hours,
+  }
+}
+
+const usage = (overrides: Partial<Usage> = {}): Usage =>
+  ({ in: 1_000, out: 400, cr: 3_000, cw: 200, ...overrides })
+
+/**
+ * One row of the cost overview. Both the harness cards and the model table
+ * are built from this shape, so the same builder serves both.
+ */
+export function costOverviewGroup(
+  overrides: Partial<CostOverviewGroup> = {},
+): CostOverviewGroup {
+  return {
+    source: 'claude',
+    label: 'Claude Code',
+    model: 'claude-opus-5',
+    sessions: 3,
+    usage: usage(),
+    estimatedUsd: 1.25,
+    pricedRequests: 12,
+    unpricedRequests: 0,
+    days: [
+      { date: '2026-07-24', estimatedUsd: 0.5, usage: usage({ in: 400, out: 150 }) },
+      { date: '2026-07-25', estimatedUsd: 0.75, usage: usage({ in: 600, out: 250 }) },
+    ],
+    ...overrides,
+  }
+}
+
+export function costOverviewResponse(
+  overrides: Partial<CostOverviewResponse> = {},
+): CostOverviewResponse {
+  const harnesses = overrides.harnesses ?? [costOverviewGroup({ model: null })]
+  const models = overrides.models ?? [costOverviewGroup()]
+  return {
+    now: 0,
+    hours: 720,
+    currency: 'USD',
+    estimated: true,
+    estimatedUsd: 1.25,
+    pricedRequests: 12,
+    unpricedRequests: 0,
+    sessions: 3,
+    usage: usage(),
+    sources: [],
+    ...overrides,
+    harnesses,
+    models,
   }
 }
 

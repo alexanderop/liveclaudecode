@@ -1,7 +1,7 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import axe from 'axe-core'
 import type { RunOptions } from 'axe-core'
-import { flushPromises } from '@vue/test-utils'
+import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import RunChanges from '~/components/RunChanges.vue'
@@ -26,7 +26,12 @@ async function expectNoViolations(element: Element, disabledRules: string[] = []
   expect(results.violations).toEqual([])
 }
 
+/** These views are attached to `document.body`, so several may be live at once. */
+let mounted: VueWrapper[] = []
+
 afterEach(() => {
+  for (const component of mounted) component.unmount()
+  mounted = []
   document.body.innerHTML = ''
 })
 
@@ -43,14 +48,11 @@ describe('accessibility', () => {
         },
       },
     })
+    mounted.push(component)
 
-    try {
-      await flushPromises()
-      expect(component.get('[data-workspace-heading]').text()).toBe('No local sessions found')
-      await expectNoViolations(component.element)
-    } finally {
-      component.unmount()
-    }
+    await flushPromises()
+    expect(component.get('[data-workspace-heading]').text()).toBe('No local sessions found')
+    await expectNoViolations(component.element)
   })
 
   it('has no detectable violations across the populated dashboard panels', async () => {
@@ -65,18 +67,15 @@ describe('accessibility', () => {
         },
       },
     })
+    mounted.push(component)
 
-    try {
+    await flushPromises()
+    await expectNoViolations(component.element)
+
+    for (const shortcut of ['a', 'g', 'i', 'd', 'q']) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: shortcut }))
       await flushPromises()
       await expectNoViolations(component.element)
-
-      for (const shortcut of ['a', 'g', 'i', 'd', 'q']) {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: shortcut }))
-        await flushPromises()
-        await expectNoViolations(component.element)
-      }
-    } finally {
-      component.unmount()
     }
   })
 
@@ -90,13 +89,9 @@ describe('accessibility', () => {
       props: { run, selectedKey: run.key },
       attachTo: document.body,
     })
+    mounted.push(changes, overview)
 
-    try {
-      // These are isolated views; the dashboard supplies their enclosing main landmark.
-      await expectNoViolations(document.body, ['region'])
-    } finally {
-      changes.unmount()
-      overview.unmount()
-    }
+    // These are isolated views; the dashboard supplies their enclosing main landmark.
+    await expectNoViolations(document.body, ['region'])
   })
 })

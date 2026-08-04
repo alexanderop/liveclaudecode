@@ -1,6 +1,6 @@
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, shallowRef } from 'vue'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ExecutionCanvasContext } from '~/composables/useExecutionCanvas'
 import { provideExecutionCanvas, useExecutionCanvas } from '~/composables/useExecutionCanvas'
 
@@ -9,6 +9,13 @@ const Probe = defineComponent({
     return { context: useExecutionCanvas() }
   },
   template: '<div />',
+})
+
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
 })
 
 describe('useExecutionCanvas', () => {
@@ -28,13 +35,12 @@ describe('useExecutionCanvas', () => {
       template: '<Probe />',
     })
 
-    const component = mount(Canvas)
+    component = mount(Canvas)
     const probe = component.findComponent(Probe)
     probe.vm.context.selectNode('agent-key')
 
     expect(probe.vm.context.layoutDirection.value).toBe('left-to-right')
     expect(selectNode).toHaveBeenCalledWith('agent-key')
-    component.unmount()
   })
 
   it('throws when rendered outside a RunCanvas subtree', () => {

@@ -1,19 +1,37 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import type { VueWrapper } from '@vue/test-utils'
 import { defineComponent } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { UseChatSessionStateReturn } from '~/composables/useChatSessionState'
+import type { LruEntry } from '~/utils/lru-list'
 
+/** The app-wide `useState` key the composable keeps its session LRU under. */
+const CHAT_SESSION_CACHE_KEY = 'liveclaudecode:ask-sessions'
+
+let component: VueWrapper | null = null
+
+afterEach(() => {
+  component?.unmount()
+  component = null
+})
+
+/**
+ * Run `setup` inside a mounted component so Nuxt composables have an app
+ * context, starting from an empty session LRU: the cache is app-wide state
+ * shared by every mount in this file, so without the reset one test's
+ * evictions decide what the next one observes.
+ */
 async function withChatSessions<T>(setup: () => T): Promise<T> {
   let result!: T
   const Harness = defineComponent({
     setup() {
+      useState<LruEntry<unknown>[]>(CHAT_SESSION_CACHE_KEY, () => []).value = []
       result = setup()
       return {}
     },
     template: '<div />',
   })
-  const component = await mountSuspended(Harness)
-  component.unmount()
+  component = await mountSuspended(Harness)
   return result
 }
 

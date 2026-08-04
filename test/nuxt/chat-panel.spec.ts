@@ -153,14 +153,19 @@ describe('ChatPanel', () => {
   it('aborts unresolved polls as cached sessions deactivate and evict', async () => {
     const signals: AbortSignal[] = []
     mockLiveApi(runNode(), {
-      chat: (_url, options) => new Promise<ChatEventsResponse>((_resolve, reject) => {
+      chat: (_url, options) => {
+        // A poll that only ever settles by being aborted.
+        const poll = deferred<ChatEventsResponse>()
         const signal = options?.signal
-        if (!signal) return
+        if (!signal) return poll.promise
         signals.push(signal)
-        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {
-          once: true,
-        })
-      }),
+        signal.addEventListener(
+          'abort',
+          () => poll.reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        )
+        return poll.promise
+      },
     })
     const wrapper = component = await mountSuspended(KeepAliveHarness)
     await flushPromises()

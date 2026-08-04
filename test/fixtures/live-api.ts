@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import type {
+  CostOverviewResponse,
   EventsResponse,
   RunNode,
   RunResponse,
@@ -9,6 +10,7 @@ import type {
 } from '#shared/types/run'
 import { chatActionResponse, chatEventsResponse } from './chat'
 import {
+  costOverviewResponse,
   eventsResponse,
   runResponse,
   sessionEventsResponse,
@@ -20,6 +22,11 @@ export interface LiveApiRequestOptions {
   readonly method?: string
   readonly body?: unknown
   readonly signal?: AbortSignal
+  /**
+   * `useFetch` passes its query as options rather than in the URL, so callers
+   * built that way are inspected here instead of with {@link urlParam}.
+   */
+  readonly query?: Record<string, unknown>
 }
 
 export interface LiveApiHandlers {
@@ -49,6 +56,10 @@ export interface LiveApiHandlers {
     url: string,
     options?: LiveApiRequestOptions,
   ) => ChatActionResponse | Promise<ChatActionResponse>
+  readonly costs?: (
+    url: string,
+    options?: LiveApiRequestOptions,
+  ) => CostOverviewResponse | Promise<CostOverviewResponse>
 }
 
 /** Reads a query parameter from a request URL captured by the mock. */
@@ -80,6 +91,9 @@ export function mockLiveApi(root: RunNode, handlers: LiveApiHandlers = {}) {
     if (url.startsWith('/api/events')) {
       if (handlers.events) return handlers.events(url, options)
       return eventsResponse(urlParam(url, 'key') ?? root.key, [])
+    }
+    if (url.startsWith('/api/costs')) {
+      return (handlers.costs ?? (() => costOverviewResponse()))(url, options)
     }
     if (url.startsWith('/api/chat')) {
       if (options?.method === 'POST') {
