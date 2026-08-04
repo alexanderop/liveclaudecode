@@ -36,8 +36,22 @@ export default defineConfig({
           name: 'e2e',
           include: ['test/e2e/**/*.{test,spec}.ts'],
           environment: 'node',
+          // Empties the route-coverage ledger the specs record into.
+          globalSetup: ['test/fixtures/route-coverage.ts'],
           testTimeout: 120_000,
           hookTimeout: 120_000,
+          ...hygiene,
+        },
+      },
+      {
+        resolve: { alias },
+        test: {
+          name: 'gate',
+          include: ['test/gate/**/*.{test,spec}.ts'],
+          environment: 'node',
+          // A later group than the default 0, so every e2e spec has finished
+          // recording into the route-coverage ledger before the gate reads it.
+          sequence: { groupOrder: 1 },
           ...hygiene,
         },
       },

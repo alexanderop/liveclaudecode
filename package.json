@@ -29,7 +29,7 @@
     "test:desktop:prebuilt": "playwright test --config playwright.desktop.config.ts",
     "test:unit": "vitest run --project unit",
     "test:nuxt": "vitest run --project nuxt",
-    "test:e2e": "vitest run --project e2e",
+    "test:e2e": "vitest run --project e2e --project gate",
     "test:types": "nuxt typecheck && vue-tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {

@@ -10,6 +10,7 @@
     ".nuxt/types/nitro-imports.d.ts",
     "test/unit/**/*.ts",
     "test/e2e/**/*.ts",
+    "test/gate/**/*.ts",
     "test/fixtures/**/*.ts",
     "test/browser/**/*.ts",
     "test/desktop/**/*.ts",
