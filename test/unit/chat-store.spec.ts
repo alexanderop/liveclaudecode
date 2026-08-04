@@ -2,6 +2,7 @@ import { assert, describe, it } from '@effect/vitest'
 import { Deferred, Effect, Fiber, Scope } from 'effect'
 import { TestClock } from 'effect/testing'
 import { ChatStore } from '#server/utils/chat-store'
+import { makeCallLog } from '../fixtures/call-log'
 
 describe('chat resource store', () => {
   it.effect('expires idle chats and closes their retained ACP scope', () =>
@@ -35,7 +36,7 @@ describe('chat resource store', () => {
       const active = yield* store.reserve('active-chat', 'codex', 'Keep working')
       assert.strictEqual(active._tag, 'Reserved')
 
-      const closed: string[] = []
+      const closed = yield* makeCallLog<string>()
       for (let index = 0; index < 10; index += 1) {
         yield* TestClock.setTime(index + 1)
         const key = `idle-${index}`
@@ -43,7 +44,7 @@ describe('chat resource store', () => {
         assert.strictEqual(reservation._tag, 'Reserved')
         if (reservation._tag !== 'Reserved') continue
         const scope = yield* Scope.make()
-        yield* Scope.addFinalizer(scope, Effect.sync(() => { closed.push(key) }))
+        yield* Scope.addFinalizer(scope, closed.record(key))
         reservation.record.scope = scope
         reservation.record.status = 'idle'
         yield* store.settle(key, reservation.record, reservation.generation)
@@ -51,7 +52,7 @@ describe('chat resource store', () => {
 
       assert.isTrue((yield* store.get('active-chat')) !== undefined)
       assert.strictEqual(yield* store.get('idle-0'), undefined)
-      assert.deepStrictEqual(closed, ['idle-0'])
+      assert.deepStrictEqual(yield* closed.all, ['idle-0'])
 
       yield* TestClock.setTime(30 * 60 * 1_000 + 1)
       assert.isTrue((yield* store.get('active-chat')) !== undefined)

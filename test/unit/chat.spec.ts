@@ -1,5 +1,5 @@
 import { assert, describe, it } from '@effect/vitest'
-import { ConfigProvider, Deferred, Effect, Fiber, Layer, Queue, Result, Scope, Stream } from 'effect'
+import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Queue, Result, Scope, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 import { AcpConnector, type AcpConnectionOptions } from '#server/utils/acp-connection'
 import type { SessionNotification } from '#shared/schemas/acp'
@@ -27,6 +27,7 @@ import {
 } from '#server/utils/services'
 import * as claude from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
+import { makeCallLog, type CallLog } from '../fixtures/call-log'
 import { testFileSystem } from '../fixtures/filesystem'
 
 const CODEX = '/codex/sessions'
@@ -34,63 +35,84 @@ const TRANSCRIPT = `${CODEX}/2026/07/28/rollout-chat-run.jsonl`
 const CLAUDE = '/claude/projects/repo'
 const SUBAGENT_TRANSCRIPT = `${CLAUDE}/ask-parent/subagents/agent-a.jsonl`
 
-function chatLayer(
-  prompts: unknown[],
-  connections: AcpConnectionOptions[] = [],
-  connectorOverride?: AcpConnector['Service'],
-) {
-  const connector = connectorOverride ?? AcpConnector.of({
-    connect: (options: AcpConnectionOptions) => Effect.gen(function*() {
-      connections.push(options)
-      // Mirrors the real connector: updates are queued, not delivered via a
-      // direct callback, so a consumer forked onto the stream sees them.
-      const updates = yield* Queue.make<SessionNotification>()
-      yield* Effect.addFinalizer(() => Queue.shutdown(updates))
-      return {
-        request: (method, params) => Effect.gen(function*() {
-          if (method === 'initialize') return { protocolVersion: 1 }
-          if (method === 'session/new') return { sessionId: 'answer-session' }
-          if (method === 'session/prompt') {
-            prompts.push(params)
-            if (options.command === 'copilot') {
+/** The calls the stub connector saw, for tests that assert on them. */
+class PromptLog extends Context.Service<PromptLog, CallLog<unknown>>()('lcc/test/PromptLog') {}
+class ConnectionLog extends Context.Service<
+  ConnectionLog,
+  CallLog<AcpConnectionOptions>
+>()('lcc/test/ConnectionLog') {}
+
+/**
+ * The stub ACP connector together with the logs recording what it was asked
+ * to do. Both are built inside the layer, so each `Effect.provide` gets its
+ * own pair and no observation outlives the test that caused it.
+ */
+function recordingConnector(connectorOverride?: AcpConnector['Service']) {
+  return Layer.effectContext(Effect.gen(function*() {
+    const prompts = yield* makeCallLog<unknown>()
+    const connections = yield* makeCallLog<AcpConnectionOptions>()
+
+    const connector = connectorOverride ?? AcpConnector.of({
+      connect: (options: AcpConnectionOptions) => Effect.gen(function*() {
+        yield* connections.record(options)
+        // Mirrors the real connector: updates are queued, not delivered via a
+        // direct callback, so a consumer forked onto the stream sees them.
+        const updates = yield* Queue.make<SessionNotification>()
+        yield* Effect.addFinalizer(() => Queue.shutdown(updates))
+        return {
+          request: (method, params) => Effect.gen(function*() {
+            if (method === 'initialize') return { protocolVersion: 1 }
+            if (method === 'session/new') return { sessionId: 'answer-session' }
+            if (method === 'session/prompt') {
+              yield* prompts.record(params)
+              if (options.command === 'copilot') {
+                yield* Queue.offer(updates, {
+                  sessionId: 'answer-session',
+                  update: {
+                    kind: 'known',
+                    data: {
+                      sessionUpdate: 'agent_message_chunk',
+                      content: { type: 'text', text: 'Info: Disabled tools: apply_patch, bash, edit' },
+                    },
+                  },
+                })
+              }
               yield* Queue.offer(updates, {
                 sessionId: 'answer-session',
                 update: {
                   kind: 'known',
                   data: {
                     sessionUpdate: 'agent_message_chunk',
-                    content: { type: 'text', text: 'Info: Disabled tools: apply_patch, bash, edit' },
+                    content: { type: 'text', text: 'The tests failed in setup.' },
                   },
                 },
               })
+              // Give the forked stream consumer a turn to drain the queue
+              // before the prompt "response" unblocks the caller, so the
+              // resulting event order is deterministic for the assertions
+              // below (production has the same queue-then-consume shape, just
+              // spread across real I/O instead of a synchronous mock).
+              yield* Effect.yieldNow
+              yield* Effect.yieldNow
+              return { stopReason: 'end_turn' }
             }
-            yield* Queue.offer(updates, {
-              sessionId: 'answer-session',
-              update: {
-                kind: 'known',
-                data: {
-                  sessionUpdate: 'agent_message_chunk',
-                  content: { type: 'text', text: 'The tests failed in setup.' },
-                },
-              },
-            })
-            // Give the forked stream consumer a turn to drain the queue
-            // before the prompt "response" unblocks the caller, so the
-            // resulting event order is deterministic for the assertions
-            // below (production has the same queue-then-consume shape, just
-            // spread across real I/O instead of a synchronous mock).
-            yield* Effect.yieldNow
-            yield* Effect.yieldNow
-            return { stopReason: 'end_turn' }
-          }
-          return {}
-        }),
-        notify: () => Effect.void,
-        updates: Stream.fromQueue(updates),
-      }
-    }),
-  })
+            return {}
+          }),
+          notify: () => Effect.void,
+          updates: Stream.fromQueue(updates),
+        }
+      }),
+    })
 
+    return Context.empty().pipe(
+      Context.add(AcpConnector, connector),
+      Context.add(PromptLog, prompts),
+      Context.add(ConnectionLog, connections),
+    )
+  }))
+}
+
+function chatLayer(connectorOverride?: AcpConnector['Service']) {
   return Layer.mergeAll(
     SessionCatalogCache.layer,
     ScanCache.layer,
@@ -99,7 +121,7 @@ function chatLayer(
     SessionLocatorCache.layer,
     PromptCache.layer,
     ChatStore.layer,
-    Layer.succeed(AcpConnector)(connector),
+    recordingConnector(connectorOverride),
     Layer.succeed(ChatAgentCommands)({
       claude: { command: 'claude-agent-acp', args: [], env: {} },
       codex: { command: 'codex-acp', args: [], env: { INITIAL_AGENT_MODE: 'agent-full-access' } },
@@ -205,9 +227,9 @@ describe('session chat', () => {
     })))
   })
 
-  it.effect('keeps one ACP session for follow-ups and sends transcript context only once', () => {
-    const prompts: unknown[] = []
-    return Effect.gen(function*() {
+  it.effect('keeps one ACP session for follow-ups and sends transcript context only once', () =>
+    Effect.gen(function*() {
+      const prompts = yield* PromptLog
       yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Why did it fail?')
       const first = yield* waitForIdle('/repo', 'codex:chat-run')
 
@@ -221,22 +243,22 @@ describe('session chat', () => {
       yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'What should I fix?')
       const second = yield* waitForIdle('/repo', 'codex:chat-run')
 
-      assert.strictEqual(prompts.length, 2)
-      const firstPrompt = prompts[0] as { prompt: Array<{ type: string, text: string }> }
-      const secondPrompt = prompts[1] as { prompt: Array<{ type: string, text: string }> }
+      const sent = yield* prompts.all
+      assert.strictEqual(sent.length, 2)
+      const firstPrompt = sent[0] as { prompt: Array<{ type: string, text: string }> }
+      const secondPrompt = sent[1] as { prompt: Array<{ type: string, text: string }> }
       assert.strictEqual(firstPrompt.prompt.length, 2)
       assert.isTrue(firstPrompt.prompt[0]!.text.includes(TRANSCRIPT))
       // A whole-session conversation must not inherit the subagent framing.
       assert.isFalse(firstPrompt.prompt[0]!.text.includes('subagent'))
       assert.deepStrictEqual(secondPrompt.prompt, [{ type: 'text', text: 'What should I fix?' }])
       assert.strictEqual(second.events.filter(isTurnEnd).length, 2)
-    }).pipe(Effect.provide(chatLayer(prompts)))
-  })
+    }).pipe(Effect.provide(chatLayer())))
 
-  it.effect('points a subagent conversation at that subagent\'s own transcript', () => {
-    const prompts: unknown[] = []
-    const connections: AcpConnectionOptions[] = []
-    return Effect.gen(function*() {
+  it.effect('points a subagent conversation at that subagent\'s own transcript', () =>
+    Effect.gen(function*() {
+      const prompts = yield* PromptLog
+      const connections = yield* ConnectionLog
       yield* sendChatMessage(
         '',
         999_999,
@@ -247,20 +269,19 @@ describe('session chat', () => {
       )
       yield* waitForIdle('/repo', 'ask-parent/agent-a')
 
-      const preamble = (prompts[0] as { prompt: Array<{ text: string }> }).prompt[0]!.text
+      const preamble = ((yield* prompts.all)[0] as { prompt: Array<{ text: string }> }).prompt[0]!.text
       assert.isTrue(preamble.includes(SUBAGENT_TRANSCRIPT))
       assert.isTrue(preamble.includes('Sweep the dashboard styles'))
       assert.isTrue(preamble.includes('implementation-worker'))
       assert.isTrue(preamble.includes('neither the parent session\'s messages nor any sibling'))
       // The subagent's recorded cwd, not the projects directory.
-      assert.strictEqual(connections[0]!.cwd, '/repo')
-    }).pipe(Effect.provide(chatLayer(prompts, connections)))
-  })
+      assert.strictEqual((yield* connections.all)[0]!.cwd, '/repo')
+    }).pipe(Effect.provide(chatLayer())))
 
-  it.effect('cancels a new reservation while admission waits for eviction cleanup', () => {
-    const prompts: unknown[] = []
-    const connections: AcpConnectionOptions[] = []
-    return Effect.gen(function*() {
+  it.effect('cancels a new reservation while admission waits for eviction cleanup', () =>
+    Effect.gen(function*() {
+      const prompts = yield* PromptLog
+      const connections = yield* ConnectionLog
       const store = yield* ChatStore
       const cleanupStarted = yield* Deferred.make<void>()
       const releaseCleanup = yield* Deferred.make<void>()
@@ -293,22 +314,21 @@ describe('session chat', () => {
       yield* Deferred.succeed(releaseCleanup, undefined)
       const sendResult = yield* Fiber.join(sending)
       assert.strictEqual(sendResult.status, 'idle')
-      assert.strictEqual(connections.length, 0)
-      assert.strictEqual(prompts.length, 0)
+      assert.strictEqual(yield* connections.count, 0)
+      assert.strictEqual(yield* prompts.count, 0)
       const response = yield* pollChatEvents('/repo', 'codex:chat-run', 0, 0)
       assert.deepStrictEqual(response.events.map(event => event.kind), ['user', 'turn-end'])
-    }).pipe(Effect.provide(chatLayer(prompts, connections)))
-  })
+    }).pipe(Effect.provide(chatLayer())))
 
-  it.effect('launches Copilot CLI and attributes its streamed answer to Copilot', () => {
-    const prompts: unknown[] = []
-    const connections: AcpConnectionOptions[] = []
-    return Effect.gen(function*() {
+  it.effect('launches Copilot CLI and attributes its streamed answer to Copilot', () =>
+    Effect.gen(function*() {
+      const connections = yield* ConnectionLog
       yield* sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'copilot', 'Summarize this run')
       const response = yield* waitForIdle('/repo', 'codex:chat-run')
 
       assert.strictEqual(response.agent, 'copilot')
-      assert.deepStrictEqual(connections.map(({ command, args, env, cwd }) => ({
+      const launched = yield* connections.all
+      assert.deepStrictEqual(launched.map(({ command, args, env, cwd }) => ({
         command,
         args,
         env,
@@ -324,7 +344,7 @@ describe('session chat', () => {
         agent: 'copilot',
         text: 'The tests failed in setup.',
       })
-      assert.strictEqual(connections[0]!.permission({
+      assert.strictEqual(launched[0]!.permission({
         sessionId: 'answer-session',
         toolCall: { toolCallId: 'edit-1', title: 'Edit file', kind: 'edit' },
         options: [
@@ -332,51 +352,49 @@ describe('session chat', () => {
           { optionId: 'no', kind: 'reject_once' },
         ],
       }), 'allow')
-    }).pipe(Effect.provide(chatLayer(prompts, connections)))
-  })
+    }).pipe(Effect.provide(chatLayer())))
 
-  it.effect('atomically rejects one of two concurrent sends', () => {
-    const prompts: unknown[] = []
-    let promptStarted!: Deferred.Deferred<void>
-    let releasePrompt!: Deferred.Deferred<void>
-    const connector = AcpConnector.of({
-      connect: () => Effect.succeed({
-        request: (method, params) => Effect.gen(function*() {
-          if (method === 'initialize') return { protocolVersion: 1 }
-          if (method === 'session/new') return { sessionId: 'concurrent-session' }
-          if (method === 'session/prompt') {
-            prompts.push(params)
-            yield* Deferred.succeed(promptStarted, undefined)
-            yield* Deferred.await(releasePrompt)
-            return { stopReason: 'end_turn' }
-          }
-          return {}
+  it.effect('atomically rejects one of two concurrent sends', () =>
+    Effect.gen(function*() {
+      const prompts = yield* makeCallLog<unknown>()
+      const promptStarted = yield* Deferred.make<void>()
+      const releasePrompt = yield* Deferred.make<void>()
+      const connector = AcpConnector.of({
+        connect: () => Effect.succeed({
+          request: (method, params) => Effect.gen(function*() {
+            if (method === 'initialize') return { protocolVersion: 1 }
+            if (method === 'session/new') return { sessionId: 'concurrent-session' }
+            if (method === 'session/prompt') {
+              yield* prompts.record(params)
+              yield* Deferred.succeed(promptStarted, undefined)
+              yield* Deferred.await(releasePrompt)
+              return { stopReason: 'end_turn' }
+            }
+            return {}
+          }),
+          notify: () => Effect.void,
+          updates: Stream.empty,
         }),
-        notify: () => Effect.void,
-        updates: Stream.empty,
-      }),
-    })
-    return Effect.gen(function*() {
-      promptStarted = yield* Deferred.make<void>()
-      releasePrompt = yield* Deferred.make<void>()
+      })
 
-      const sends = yield* Effect.all([
-        Effect.result(sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'First')),
-        Effect.result(sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Second')),
-      ], { concurrency: 2 })
-      yield* Deferred.await(promptStarted)
+      yield* Effect.gen(function*() {
+        const sends = yield* Effect.all([
+          Effect.result(sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'First')),
+          Effect.result(sendChatMessage('', 999_999, '/repo', 'codex:chat-run', 'codex', 'Second')),
+        ], { concurrency: 2 })
+        yield* Deferred.await(promptStarted)
 
-      assert.strictEqual(sends.filter(Result.isSuccess).length, 1)
-      const rejected = sends.find(Result.isFailure)
-      assert.isTrue(Result.isFailure(rejected!))
-      if (Result.isFailure(rejected!)) assert.strictEqual(rejected.failure._tag, 'ChatBusy')
+        assert.strictEqual(sends.filter(Result.isSuccess).length, 1)
+        const rejected = sends.find(Result.isFailure)
+        assert.isTrue(Result.isFailure(rejected!))
+        if (Result.isFailure(rejected!)) assert.strictEqual(rejected.failure._tag, 'ChatBusy')
 
-      yield* Deferred.succeed(releasePrompt, undefined)
-      const response = yield* waitForIdle('/repo', 'codex:chat-run')
-      assert.strictEqual(response.events.filter(event => event.kind === 'user').length, 1)
-      assert.strictEqual(prompts.length, 1)
-    }).pipe(Effect.provide(chatLayer(prompts, [], connector)))
-  })
+        yield* Deferred.succeed(releasePrompt, undefined)
+        const response = yield* waitForIdle('/repo', 'codex:chat-run')
+        assert.strictEqual(response.events.filter(event => event.kind === 'user').length, 1)
+        assert.strictEqual(yield* prompts.count, 1)
+      }).pipe(Effect.provide(chatLayer(connector)))
+    }))
 
   it.effect('interrupts a starting turn before resetting its chat', () => {
     let interrupted = false
@@ -409,7 +427,7 @@ describe('session chat', () => {
       assert.strictEqual(response.status, 'idle')
       assert.deepStrictEqual(response.events, [])
       assert.isTrue(response.reset)
-    }).pipe(Effect.provide(chatLayer([], [], connector)))
+    }).pipe(Effect.provide(chatLayer(connector)))
   })
 
   it.effect('cancels and cleans up an agent that is still starting', () => {
@@ -436,7 +454,7 @@ describe('session chat', () => {
         response.events.find(isTurnEnd)?.stopReason,
         'cancelled',
       )
-    }).pipe(Effect.provide(chatLayer([], [], connector)))
+    }).pipe(Effect.provide(chatLayer(connector)))
   })
 
   it.effect('claims concurrent cancellations only once', () => {
@@ -473,7 +491,7 @@ describe('session chat', () => {
       const terminalEvents = response.events.filter(isTurnEnd)
       assert.strictEqual(terminalEvents.length, 1)
       assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
-    }).pipe(Effect.provide(chatLayer([], [], connector)))
+    }).pipe(Effect.provide(chatLayer(connector)))
   })
 
   it.effect('suppresses prompt completion after cancellation is claimed', () => {
@@ -522,7 +540,7 @@ describe('session chat', () => {
       assert.strictEqual(response.status, 'idle')
       assert.strictEqual(terminalEvents.length, 1)
       assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
-    }).pipe(Effect.provide(chatLayer([], [], connector)))
+    }).pipe(Effect.provide(chatLayer(connector)))
   })
 
   it.effect('keeps a cancelling turn owned so concurrent reset can interrupt it', () => {
@@ -571,7 +589,7 @@ describe('session chat', () => {
       const response = yield* pollChatEvents('/repo', 'codex:chat-run', 1, 1)
       assert.deepStrictEqual(response.events, [])
       assert.isTrue(response.reset)
-    }).pipe(Effect.provide(chatLayer([], [], connector)))
+    }).pipe(Effect.provide(chatLayer(connector)))
   })
 
   it.effect('finishes cancellation cleanup when the cancel action is interrupted', () => {
@@ -616,7 +634,7 @@ describe('session chat', () => {
       assert.strictEqual(response.status, 'idle')
       assert.strictEqual(terminalEvents.length, 1)
       assert.strictEqual(terminalEvents[0]!.stopReason, 'cancelled')
-    }).pipe(Effect.provide(chatLayer([], [], connector)))
+    }).pipe(Effect.provide(chatLayer(connector)))
   })
 
   it.effect('finishes reset cleanup when the reset action is interrupted', () => {
@@ -666,6 +684,6 @@ describe('session chat', () => {
       assert.strictEqual(response.status, 'idle')
       assert.deepStrictEqual(response.events, [])
       assert.isTrue(response.reset)
-    }).pipe(Effect.provide(chatLayer([], [], connector)))
+    }).pipe(Effect.provide(chatLayer(connector)))
   })
 })

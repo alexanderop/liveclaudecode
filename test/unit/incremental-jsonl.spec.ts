@@ -5,6 +5,7 @@ import {
   readHead,
   type IncrementalScanState,
 } from '../../server/utils/incremental-jsonl'
+import { makeCallLog } from '../fixtures/call-log'
 import { testFileSystem, type FakeEntry } from '../fixtures/filesystem'
 
 const PATH = '/p/s.jsonl'
@@ -54,15 +55,15 @@ describe('consumeNewRecords', () => {
 
   it.effect('does not read again when size and mtime are unchanged', () =>
     Effect.gen(function*() {
-      const reads: string[] = []
+      const reads = yield* makeCallLog<string>()
       const layer = testFileSystem(
         { [PATH]: { content: '{"n":1}\n', mtime: 100 } },
-        { onRead: path => reads.push(path) },
+        { onRead: reads.record },
       )
       const first = yield* consumeNewRecords(PATH, initialState).pipe(Effect.provide(layer))
       const second = yield* consumeNewRecords(PATH, first.next).pipe(Effect.provide(layer))
       assert.deepStrictEqual(second.records, [])
-      assert.strictEqual(reads.length, 1)
+      assert.strictEqual(yield* reads.count, 1)
     }))
 
   it.effect('leaves a trailing partial line for the next call', () =>

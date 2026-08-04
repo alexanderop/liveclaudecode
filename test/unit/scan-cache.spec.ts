@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Option } from 'effect'
 import { TestClock } from 'effect/testing'
 import { PromptCache, ScanCache, ScanCacheCapacity } from '#server/utils/services'
 import * as claude from '../fixtures/transcripts'
+import { makeCallLog } from '../fixtures/call-log'
 import { testFileSystem } from '../fixtures/filesystem'
 
 const PATH = '/claude/projects/repo/session.jsonl'
@@ -21,41 +22,42 @@ const transcriptTree = (count: number) => Object.fromEntries(
 )
 
 describe('transcript scan cache', () => {
-  it.effect('serializes concurrent refreshes for one transcript path', () => {
-    let activeReads = 0
-    let maximumActiveReads = 0
-    let reads = 0
+  it.effect('serializes concurrent refreshes for one transcript path', () =>
+    Effect.gen(function*() {
+      const reads = yield* makeCallLog<string>()
+      let activeReads = 0
+      let maximumActiveReads = 0
 
-    const beforeRead = () => Effect.gen(function*() {
-      activeReads += 1
-      maximumActiveReads = Math.max(maximumActiveReads, activeReads)
-      yield* Effect.yieldNow
-      activeReads -= 1
-    })
+      const beforeRead = () => Effect.gen(function*() {
+        activeReads += 1
+        maximumActiveReads = Math.max(maximumActiveReads, activeReads)
+        yield* Effect.yieldNow
+        activeReads -= 1
+      })
 
-    return Effect.gen(function*() {
-      const cache = yield* ScanCache
-      const scans = yield* Effect.all(
-        [cache.get(PATH), cache.get(PATH)],
-        { concurrency: 2 },
-      )
+      yield* Effect.gen(function*() {
+        const cache = yield* ScanCache
+        const scans = yield* Effect.all(
+          [cache.get(PATH), cache.get(PATH)],
+          { concurrency: 2 },
+        )
 
-      assert.strictEqual(scans[0], scans[1])
-      assert.strictEqual(reads, 1)
-      assert.strictEqual(maximumActiveReads, 1)
-      assert.strictEqual(scans[0]?.events.length, 1)
-    }).pipe(Effect.provide(Layer.mergeAll(
-      ScanCache.layer,
-      testFileSystem({
-        [PATH]: claude.transcript([
-          claude.userText('One prompt'),
-        ]),
-      }, {
-        beforeRead,
-        onRead: () => { reads += 1 },
-      }),
-    )))
-  })
+        assert.strictEqual(scans[0], scans[1])
+        assert.strictEqual(yield* reads.count, 1)
+        assert.strictEqual(maximumActiveReads, 1)
+        assert.strictEqual(scans[0]?.events.length, 1)
+      }).pipe(Effect.provide(Layer.mergeAll(
+        ScanCache.layer,
+        testFileSystem({
+          [PATH]: claude.transcript([
+            claude.userText('One prompt'),
+          ]),
+        }, {
+          beforeRead,
+          onRead: reads.record,
+        }),
+      )))
+    }))
 
   it.effect('evicts the least recently used idle scan at capacity', () =>
     Effect.gen(function*() {
@@ -222,58 +224,63 @@ describe('prompt cache', () => {
     ]),
   )
 
-  it.effect('retains only the 256 most recently used prompts', () => {
-    const reads = new Map<string, number>()
-    const onRead = (path: string) => reads.set(path, (reads.get(path) ?? 0) + 1)
+  it.effect('retains only the 256 most recently used prompts', () =>
+    Effect.gen(function*() {
+      const reads = yield* makeCallLog<string>()
+      const timesRead = (path: string) =>
+        Effect.map(reads.all, all => all.filter(candidate => candidate === path).length)
 
-    return Effect.gen(function*() {
-      const cache = yield* PromptCache
-      for (let index = 0; index < 256; index += 1) {
-        assert.strictEqual(yield* cache.get(promptPath(index)), `Prompt ${index}`)
-      }
+      yield* Effect.gen(function*() {
+        const cache = yield* PromptCache
+        for (let index = 0; index < 256; index += 1) {
+          assert.strictEqual(yield* cache.get(promptPath(index)), `Prompt ${index}`)
+        }
 
-      // Touch prompt-0 again so it becomes the most recently used entry.
-      assert.strictEqual(yield* cache.get(promptPath(0)), 'Prompt 0')
-      assert.strictEqual(reads.get(promptPath(0)), 1)
+        // Touch prompt-0 again so it becomes the most recently used entry.
+        assert.strictEqual(yield* cache.get(promptPath(0)), 'Prompt 0')
+        assert.strictEqual(yield* timesRead(promptPath(0)), 1)
 
-      // Filling one more slot evicts the least recently used entry, prompt-1,
-      // but prompt-0 survives because it was just promoted.
-      yield* cache.get(promptPath(256))
-      yield* cache.get(promptPath(0))
-      assert.strictEqual(reads.get(promptPath(0)), 1)
+        // Filling one more slot evicts the least recently used entry, prompt-1,
+        // but prompt-0 survives because it was just promoted.
+        yield* cache.get(promptPath(256))
+        yield* cache.get(promptPath(0))
+        assert.strictEqual(yield* timesRead(promptPath(0)), 1)
 
-      yield* cache.get(promptPath(1))
-      assert.strictEqual(reads.get(promptPath(1)), 2)
-    }).pipe(Effect.provide(
-      PromptCache.layer.pipe(Layer.provideMerge(testFileSystem(promptTree(257), { onRead }))),
-    ))
-  })
+        yield* cache.get(promptPath(1))
+        assert.strictEqual(yield* timesRead(promptPath(1)), 2)
+      }).pipe(Effect.provide(
+        PromptCache.layer.pipe(
+          Layer.provideMerge(testFileSystem(promptTree(257), { onRead: reads.record })),
+        ),
+      ))
+    }))
 
-  it.effect('coalesces concurrent lookups for the same path', () => {
-    let activeReads = 0
-    let maximumActiveReads = 0
-    let reads = 0
-    const beforeRead = () => Effect.gen(function*() {
-      activeReads += 1
-      maximumActiveReads = Math.max(maximumActiveReads, activeReads)
-      yield* Effect.yieldNow
-      activeReads -= 1
-    })
+  it.effect('coalesces concurrent lookups for the same path', () =>
+    Effect.gen(function*() {
+      const reads = yield* makeCallLog<string>()
+      let activeReads = 0
+      let maximumActiveReads = 0
+      const beforeRead = () => Effect.gen(function*() {
+        activeReads += 1
+        maximumActiveReads = Math.max(maximumActiveReads, activeReads)
+        yield* Effect.yieldNow
+        activeReads -= 1
+      })
 
-    return Effect.gen(function*() {
-      const cache = yield* PromptCache
-      const results = yield* Effect.all([cache.get(PATH), cache.get(PATH)], { concurrency: 2 })
+      yield* Effect.gen(function*() {
+        const cache = yield* PromptCache
+        const results = yield* Effect.all([cache.get(PATH), cache.get(PATH)], { concurrency: 2 })
 
-      assert.deepStrictEqual(results, ['One prompt', 'One prompt'])
-      assert.strictEqual(reads, 1)
-      assert.strictEqual(maximumActiveReads, 1)
-    }).pipe(Effect.provide(
-      PromptCache.layer.pipe(Layer.provideMerge(testFileSystem({
-        [PATH]: claude.transcript([claude.userText('One prompt')]),
-      }, {
-        beforeRead,
-        onRead: () => { reads += 1 },
-      }))),
-    ))
-  })
+        assert.deepStrictEqual(results, ['One prompt', 'One prompt'])
+        assert.strictEqual(yield* reads.count, 1)
+        assert.strictEqual(maximumActiveReads, 1)
+      }).pipe(Effect.provide(
+        PromptCache.layer.pipe(Layer.provideMerge(testFileSystem({
+          [PATH]: claude.transcript([claude.userText('One prompt')]),
+        }, {
+          beforeRead,
+          onRead: reads.record,
+        }))),
+      ))
+    }))
 })

@@ -29,6 +29,7 @@ import * as claude from '../fixtures/transcripts'
 import * as codex from '../fixtures/codex'
 import * as copilot from '../fixtures/copilot'
 import * as copilotCli from '../fixtures/copilot-cli'
+import { makeCallLog, type CallLog } from '../fixtures/call-log'
 import {
   operationConcurrencyProbe,
   testFileSystem,
@@ -41,14 +42,14 @@ const VSCODE = '/Library/Application Support/Code/User'
 const COPILOT_CLI = '/copilot/session-state'
 type FileSystemOptions = NonNullable<Parameters<typeof testFileSystem>[1]>
 
-function recordingCopilotCache(locations: CopilotSessionLocation[]) {
+function recordingCopilotCache(locations: CallLog<CopilotSessionLocation>) {
   return Layer.effect(
     CopilotScanCache,
     Effect.sync(() => {
       const scans = new Map<string, CopilotSessionScan>()
       return CopilotScanCache.of({
         get: Effect.fn('recordingCopilotCache.get')(function*(location) {
-          locations.push({ ...location })
+          yield* locations.record({ ...location })
           let scan = scans.get(location.path)
           if (!scan) {
             scan = location.format === 'cli'
@@ -71,7 +72,7 @@ function recordingCopilotCache(locations: CopilotSessionLocation[]) {
 function layer(
   tree: FakeTree,
   denied: ReadonlyArray<string> = [],
-  copilotLocations?: CopilotSessionLocation[],
+  copilotLocations?: CallLog<CopilotSessionLocation>,
   beforeRead?: (path: string) => Effect.Effect<void>,
   fileSystemOptions: FileSystemOptions = {},
 ) {
@@ -478,15 +479,17 @@ describe('unified session catalog', () => {
   })
 
   it.effect('preserves exact Copilot storage metadata for targeted event refreshes', () =>
-    {
-      const locations: CopilotSessionLocation[] = []
-      return Effect.gen(function*() {
+    Effect.gen(function*() {
+      const locations = yield* makeCallLog<CopilotSessionLocation>()
+      yield* Effect.gen(function*() {
         yield* loadSessionCatalog('', 999_999)
-        locations.length = 0
+        // Only the lookups the targeted refreshes drive are the assertion; the
+        // catalog load ahead of them is setup.
+        const afterCatalogLoad = yield* locations.count
         yield* getSessionEvents('', 999_999, '/repo', 'copilot:vscode-location', 0, 0)
         yield* getSessionEvents('', 999_999, '/repo', 'copilot:cli-location', 0, 0)
 
-        assert.deepStrictEqual(locations, [
+        assert.deepStrictEqual((yield* locations.all).slice(afterCatalogLoad), [
           {
             path: `${VSCODE}/profiles/team/workspaceStorage/repo/chatSessions/vscode-location.jsonl`,
             application: 'VS Code profile',
@@ -509,8 +512,7 @@ describe('unified session catalog', () => {
           copilotCli.sessionStart('cli-location'),
         ]),
       }, [], locations)))
-    },
-  )
+    }))
 
   it.effect('merges only bounded per-agent tails from large session histories', () => {
     const rootRecords = [

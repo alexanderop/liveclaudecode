@@ -12,6 +12,7 @@ import {
 } from '#server/utils/transcript-content'
 import { TranscriptScan } from '#server/utils/transcript'
 import * as fixture from '../fixtures/transcripts'
+import { makeCallLog } from '../fixtures/call-log'
 import { testFileSystem, type FakeTree } from '../fixtures/filesystem'
 
 const PATH = '/p/s.jsonl'
@@ -168,17 +169,17 @@ describe('TranscriptScan', () => {
 
   it.effect('does not read at all when size and mtime are unchanged', () =>
     Effect.gen(function*() {
-      const reads: string[] = []
+      const reads = yield* makeCallLog<string>()
       const entry = { content: fixture.transcript([fixture.assistant([fixture.text('one')])]), mtime: 100 }
-      const layer = testFileSystem({ [PATH]: entry }, { onRead: path => reads.push(path) })
+      const layer = testFileSystem({ [PATH]: entry }, { onRead: reads.record })
 
       const scan = new TranscriptScan(PATH)
       yield* scan.refresh().pipe(Effect.provide(layer))
-      assert.strictEqual(reads.length, 1)
+      assert.strictEqual(yield* reads.count, 1)
 
       yield* scan.refresh().pipe(Effect.provide(layer))
       yield* scan.refresh().pipe(Effect.provide(layer))
-      assert.strictEqual(reads.length, 1)
+      assert.strictEqual(yield* reads.count, 1)
       assert.strictEqual(scan.events.length, 1)
     }))
 

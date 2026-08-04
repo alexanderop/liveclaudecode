@@ -3,10 +3,11 @@ import { type Cause, Deferred, Effect, Fiber, Layer, Queue, Sink, Stream } from 
 import * as PlatformError from 'effect/PlatformError'
 import { ChildProcessSpawner } from 'effect/unstable/process'
 import { AcpConnector } from '#server/utils/acp-connection'
+import { makeCallLog, type CallLog } from '../fixtures/call-log'
 
 const encoder = new TextEncoder()
 
-function fakeSpawner(writes: Array<Record<string, unknown>>) {
+function fakeSpawner(writes: CallLog<Record<string, unknown>>) {
   return Layer.effect(
     ChildProcessSpawner.ChildProcessSpawner,
     Effect.gen(function*() {
@@ -23,7 +24,7 @@ function fakeSpawner(writes: Array<Record<string, unknown>>) {
         for (const line of lines) {
           if (!line) continue
           const message = JSON.parse(line) as Record<string, unknown>
-          writes.push(message)
+          yield* writes.record(message)
           switch (message.method) {
             case 'initialize':
               yield* emit({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1 } })
@@ -94,7 +95,7 @@ interface AgentControls {
  * happy-path script above. `onWrite` runs for each line the connection sends.
  */
 function scriptedSpawner(options: {
-  readonly writes?: Array<Record<string, unknown>>
+  readonly writes?: CallLog<Record<string, unknown>>
   readonly onWrite?: (
     message: Record<string, unknown>,
     agent: AgentControls,
@@ -126,7 +127,7 @@ function scriptedSpawner(options: {
         for (const line of lines) {
           if (!line) continue
           const message = JSON.parse(line) as Record<string, unknown>
-          options.writes?.push(message)
+          if (options.writes) yield* options.writes.record(message)
           yield* options.onWrite?.(message, controls) ?? Effect.void
         }
       })
@@ -165,57 +166,59 @@ const connect = (permission: 'allow' | 'reject' = 'allow') =>
   }))
 
 describe('ACP connection', () => {
-  it.effect('multiplexes responses, updates, and agent permission requests over NDJSON', () => {
-    const writes: Array<Record<string, unknown>> = []
-    const layer = AcpConnector.layer.pipe(Layer.provide(fakeSpawner(writes)))
+  it.effect('multiplexes responses, updates, and agent permission requests over NDJSON', () =>
+    Effect.gen(function*() {
+      const writes = yield* makeCallLog<Record<string, unknown>>()
+      const updates = yield* makeCallLog<string>()
+      const layer = AcpConnector.layer.pipe(Layer.provide(fakeSpawner(writes)))
 
-    return Effect.gen(function*() {
-      const connector = yield* AcpConnector
-      const updates: string[] = []
-      const connection = yield* connector.connect({
-        command: 'fake-acp',
-        args: [],
-        env: {},
-        cwd: '/repo',
-        permission: () => 'reject',
-      })
-      // The connection no longer takes a callback — updates arrive on a
-      // Stream fed by a Queue, so the test forks its own consumer, same as
-      // the chat feature does.
-      yield* Effect.forkScoped(Stream.runForEach(connection.updates, notification => Effect.sync(() => {
-        const update = notification.update
-        if (update.kind !== 'known') return
-        if ('content' in update.data && typeof update.data.content.text === 'string') {
-          updates.push(update.data.content.text)
-        }
-      })))
+      yield* Effect.gen(function*() {
+        const connector = yield* AcpConnector
+        const connection = yield* connector.connect({
+          command: 'fake-acp',
+          args: [],
+          env: {},
+          cwd: '/repo',
+          permission: () => 'reject',
+        })
+        // The connection no longer takes a callback — updates arrive on a
+        // Stream fed by a Queue, so the test forks its own consumer, same as
+        // the chat feature does.
+        yield* Effect.forkScoped(Stream.runForEach(connection.updates, (notification) => {
+          const update = notification.update
+          if (update.kind !== 'known') return Effect.void
+          if ('content' in update.data && typeof update.data.content.text === 'string') {
+            return updates.record(update.data.content.text)
+          }
+          return Effect.void
+        }))
 
-      assert.deepStrictEqual(
-        yield* connection.request('initialize', { protocolVersion: 1 }),
-        { protocolVersion: 1 },
-      )
-      assert.deepStrictEqual(
-        yield* connection.request('session/new', { cwd: '/repo', mcpServers: [] }),
-        { sessionId: 'chat-session' },
-      )
-      assert.deepStrictEqual(
-        yield* connection.request('session/prompt', { sessionId: 'chat-session', prompt: [] }),
-        { stopReason: 'end_turn' },
-      )
-      yield* Effect.yieldNow
-      yield* Effect.yieldNow
+        assert.deepStrictEqual(
+          yield* connection.request('initialize', { protocolVersion: 1 }),
+          { protocolVersion: 1 },
+        )
+        assert.deepStrictEqual(
+          yield* connection.request('session/new', { cwd: '/repo', mcpServers: [] }),
+          { sessionId: 'chat-session' },
+        )
+        assert.deepStrictEqual(
+          yield* connection.request('session/prompt', { sessionId: 'chat-session', prompt: [] }),
+          { stopReason: 'end_turn' },
+        )
+        yield* Effect.yieldNow
+        yield* Effect.yieldNow
 
-      assert.deepStrictEqual(updates, ['Answer'])
-      assert.deepStrictEqual(
-        writes.find(message => message.id === 'agent-request-7'),
-        {
-          jsonrpc: '2.0',
-          id: 'agent-request-7',
-          result: { outcome: { outcome: 'selected', optionId: 'no' } },
-        },
-      )
-    }).pipe(Effect.scoped, Effect.provide(layer))
-  })
+        assert.deepStrictEqual(yield* updates.all, ['Answer'])
+        assert.deepStrictEqual(
+          (yield* writes.all).find(message => message.id === 'agent-request-7'),
+          {
+            jsonrpc: '2.0',
+            id: 'agent-request-7',
+            result: { outcome: { outcome: 'selected', optionId: 'no' } },
+          },
+        )
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }))
 
   it.effect('reports a spawn that never produced a process', () =>
     Effect.gen(function*() {

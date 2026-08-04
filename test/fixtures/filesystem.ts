@@ -51,8 +51,11 @@ export function testFileSystem(tree: FakeTree, options: {
   readonly denied?: ReadonlyArray<string>
   /** Effect run immediately before file content is returned or streamed. */
   readonly beforeRead?: (path: string) => Effect.Effect<void>
-  /** Called with the path each time file content is read (not stat'd). */
-  readonly onRead?: (path: string) => void
+  /**
+   * Run with the path each time file content is read (not stat'd). Effectful
+   * so a `CallLog` can be handed straight to it.
+   */
+  readonly onRead?: (path: string) => Effect.Effect<void>
   /** Effects bracketing each read-only filesystem operation. */
   readonly beforeOperation?: (method: string, path: string) => Effect.Effect<void>
   readonly afterOperation?: (method: string, path: string) => Effect.Effect<void>
@@ -60,7 +63,7 @@ export function testFileSystem(tree: FakeTree, options: {
   const files = new Map(Object.entries(tree).map(([path, value]) => [path, entryOf(value)]))
   const denied = new Set(options.denied ?? [])
   const beforeRead = options.beforeRead ?? (() => Effect.void)
-  const onRead = options.onRead ?? (() => {})
+  const onRead = options.onRead ?? (() => Effect.void)
   const beforeOperation = options.beforeOperation ?? (() => Effect.void)
   const afterOperation = options.afterOperation ?? (() => Effect.void)
 
@@ -117,7 +120,7 @@ export function testFileSystem(tree: FakeTree, options: {
       const file = files.get(path)
       if (!file) return Effect.fail(notFound('readFileString', path))
       return readOperation('readFileString', path, beforeRead(path).pipe(
-        Effect.tap(() => Effect.sync(() => onRead(path))),
+        Effect.tap(() => onRead(path)),
         Effect.as(file.content),
       ))
     },
@@ -128,7 +131,7 @@ export function testFileSystem(tree: FakeTree, options: {
       const file = files.get(path)
       if (!file) return Effect.fail(notFound('readFile', path))
       return readOperation('readFile', path, beforeRead(path).pipe(
-        Effect.tap(() => Effect.sync(() => onRead(path))),
+        Effect.tap(() => onRead(path)),
         Effect.map(() => encoder.encode(file.content)),
       ))
     },
@@ -144,7 +147,7 @@ export function testFileSystem(tree: FakeTree, options: {
         ? bytes.length
         : Math.min(bytes.length, offset + Number(streamOptions.bytesToRead))
       const contents = Stream.fromEffect(beforeRead(path).pipe(
-        Effect.tap(() => Effect.sync(() => onRead(path))),
+        Effect.tap(() => onRead(path)),
       )).pipe(
         Stream.flatMap(() => Stream.make(bytes.subarray(offset, end))),
       )
