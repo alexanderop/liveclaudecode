@@ -18,12 +18,15 @@ files. It must remain useful without telemetry or runtime network access. See
 - `shared/schemas/` — Effect `Schema` definitions for external data.
 - `shared/types/` — contracts shared by client and server.
 - `bin/liveclaudecode` — CLI launcher.
+- `electron/` — desktop shell. `main.js` is the Electron entry; `desktop.js`
+  holds the Electron-free logic it is assembled from.
 - `test/{unit,nuxt,e2e}/` — Node units, mounted Nuxt components, and built API
   integration tests; `test/fixtures/` contains synthetic data and test services.
 - `repos/effect/` — vendored Effect source-of-truth. It is read-only reference
   material; never edit anything under `repos/`.
 
-Generated directories such as `.nuxt/` and `.output/` are not source code.
+Generated directories such as `.nuxt/`, `.output/`, and `dist-desktop/` are not
+source code.
 
 ## Working in this repository
 
@@ -34,15 +37,21 @@ Generated directories such as `.nuxt/` and `.output/` are not source code.
   run `pnpm check` when practical; it runs linting, tests, typechecking, and
   the build.
 - Useful narrower commands are `pnpm lint`, `pnpm test:unit`, `pnpm test:nuxt`,
-  `pnpm test:e2e`, `pnpm test:types`, and `pnpm build`.
+  `pnpm test:e2e`, `pnpm test:desktop`, `pnpm test:types`, and `pnpm build`.
 - `pnpm test:types` checks the Nuxt projects and, via `tsconfig.test.json`,
   the plain-node test sources (`test/unit`, `test/e2e`, `test/fixtures`,
-  `test/browser`, Playwright config). Keep test code typecheck-clean too.
+  `test/browser`, `test/desktop`, and the Playwright configs). Keep test code
+  typecheck-clean too.
 
 ## Architecture boundaries
 
 - Keep `app/**` in plain TypeScript. Do not introduce Effect into Vue
   components or composables.
+- Keep `electron/**` in plain JavaScript with hand-written `.d.ts` siblings, the
+  way `bin/` does; Electron loads it with no build step, and Effect has no place
+  there. Electron APIs stay in `electron/main.js`; anything worth asserting on
+  goes in `electron/desktop.js` behind injected dependencies. Do not add a
+  preload bridge or otherwise hand the renderer access to Node.
 - Use Effect at data and I/O boundaries in `shared/schemas/**` and
   `server/utils/**`.
 - Keep `server/api/**` limited to reading request context, running an Effect,

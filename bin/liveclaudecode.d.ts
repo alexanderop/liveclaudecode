@@ -10,6 +10,10 @@ export interface CliOptions {
   host: string
   hours: number
   open: boolean
+  /** Launch the Electron desktop shell instead of a server plus browser tab. */
+  desktop: boolean
+  /** Whether `port` came from the command line rather than the default. */
+  portExplicit: boolean
   version?: boolean
   help?: boolean
 }

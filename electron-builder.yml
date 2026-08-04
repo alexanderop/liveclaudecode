@@ -1,0 +1,44 @@
+# Packaging config for the desktop shell. The shipped app is the Electron
+# runtime, `electron/`, and the prebuilt Nitro output — nothing else. `.output`
+# already carries its own `node_modules`, so the repository's dependency tree
+# (Nuxt, Vite, the toolchain) stays out of the bundle.
+appId: dev.liveclaudecode.app
+productName: liveclaudecode
+directories:
+  output: dist-desktop
+files:
+  - package.json
+  - electron/**/*
+  - .output/**/*
+  - '!node_modules/**/*'
+  - '!**/*.map'
+asar: true
+# Nitro's entry is imported by the main process at runtime; keeping the built
+# server outside the archive avoids relying on ESM resolution inside asar.
+asarUnpack:
+  - .output/**
+npmRebuild: false
+# Recommendation 19 of the Electron security checklist: turn off the runtime
+# escape hatches this app never uses. Asar integrity fuses are left alone
+# because they require a signed build to launch.
+electronFuses:
+  # Flipping fuses rewrites the binary, which invalidates the signature macOS
+  # requires on Apple Silicon. Unsigned local builds need the ad-hoc signature
+  # put back or the app is killed at launch; a real identity overwrites it.
+  resetAdHocDarwinSignature: true
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  grantFileProtocolExtraPrivileges: false
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+linux:
+  category: Development
+  target:
+    - AppImage
+win:
+  target:
+    - nsis

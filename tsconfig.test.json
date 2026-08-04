@@ -12,7 +12,10 @@
     "test/e2e/**/*.ts",
     "test/fixtures/**/*.ts",
     "test/browser/**/*.ts",
+    "test/desktop/**/*.ts",
+    "electron/**/*.d.ts",
     "playwright.config.ts",
+    "playwright.desktop.config.ts",
     "vitest.config.ts"
   ]
 }

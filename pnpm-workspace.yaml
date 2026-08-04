@@ -1,4 +1,9 @@
 allowBuilds:
+  # Downloads the Electron runtime the desktop shell runs on.
+  electron: true
+  # Squirrel.Windows packaging vendor bundle. The desktop shell targets NSIS on
+  # Windows, which electron-builder handles without this download.
+  electron-winstaller: false
   esbuild: true
   # Native accelerator for msgpackr, pulled in by effect. We do not use
   # effect's Msgpack module; msgpackr falls back to its pure-JS path.

@@ -48,6 +48,7 @@ liveclaudecode --open
 | `--host` | `127.0.0.1` | Host to bind |
 | `--hours` | `168` (7 days) | Ignore transcripts older than this |
 | `--open` | off | Open the viewer in a browser |
+| `--desktop` | off | Open the viewer in the Electron desktop shell |
 
 Examples:
 
@@ -69,6 +70,44 @@ LCC_VSCODE_USER_DATA='/path/to/Code/User:/path/to/Code - Insiders/User' \
 
 `LCC_PROJECT` can separately hold a repository path or Claude project-storage
 slug to restrict all providers to one project.
+
+### Desktop app
+
+The same dashboard runs as an Electron window. The desktop shell starts the
+built Nitro server inside its own process on a free loopback port, so there is
+no second process to manage and nothing to open in a browser.
+
+```bash
+pnpm desktop                 # build, then open the desktop window
+pnpm desktop:start           # open the window against an existing build
+./bin/liveclaudecode --desktop
+```
+
+It reads the same `LCC_*` variables as the CLI. `LCC_PORT` pins the port
+instead of reserving a free one, and `LCC_DEV_SERVER_URL` points the window at
+a running `pnpm dev` instead of starting Nitro:
+
+```bash
+pnpm dev &
+LCC_DEV_SERVER_URL=http://127.0.0.1:3000 pnpm desktop:start
+```
+
+Installers are built with electron-builder; `electron-builder.yml` ships only
+`electron/` and the Nitro output, not the repository's toolchain:
+
+```bash
+pnpm desktop:pack            # unpacked app in dist-desktop/, for local checks
+pnpm desktop:dist            # dmg/zip, AppImage, or NSIS installer
+```
+
+The window is locked down along the lines of the Electron security checklist:
+the renderer is sandboxed and context isolated with Node integration off, there
+is no preload bridge, `<webview>` is disabled, permission requests other than
+clipboard writes are denied, popups and off-origin navigation are handed to the
+system browser rather than loaded, and every response carries a
+`default-src 'none'` content security policy whose `script-src` names Nuxt's
+inline bootstrap by SHA-256 hash. Packaged builds additionally flip off the
+`runAsNode`, `NODE_OPTIONS`, `--inspect`, and `file://`-privilege fuses.
 
 ### Ask a local agent about a session
 
@@ -198,8 +237,10 @@ test/
   nuxt/             mounted component behavior
   e2e/              built server/API integration tests with synthetic JSONL
   browser/          production hydration, accessibility, and keyboard smoke tests
+  desktop/          Electron window, sandboxing, CSP, and navigation guards
   fixtures/         synthetic Claude, Codex, and Copilot transcript builders
 bin/                CLI launcher
+electron/           desktop shell: main process and its host-agnostic logic
 docs/               design and discovery notes
 repos/              vendored read-only reference sources (Effect)
 ```
@@ -235,9 +276,11 @@ pnpm test:nuxt             # Nuxt-mounted component behavior
 pnpm test:e2e              # real Nitro endpoints with synthetic JSONL fixtures
 pnpm test:browser          # production Chromium smoke test with synthetic JSONL
 pnpm test:browser:prebuilt # browser smoke test against an existing build
+pnpm test:desktop          # Electron shell smoke test with synthetic JSONL
+pnpm test:desktop:prebuilt # desktop smoke test against an existing build
 pnpm test:types            # strict Nuxt/Vue TypeScript checks, incl. test sources
 pnpm build                 # production Node server build
-pnpm check                 # lint, tests, typecheck, build, and browser smoke test
+pnpm check                 # lint, tests, typecheck, build, browser and desktop smoke tests
 ```
 
 Automated tests never depend on private real sessions. They construct synthetic
@@ -245,7 +288,9 @@ Claude, Codex, and Copilot logs and cover complete and partial lines, malformed 
 unknown records, tool/result pairing, active updates, spawn hierarchy, project
 grouping, deduplication, combined filters, diagnostics, pagination, and source
 failure isolation. The production-browser smoke test blocks external requests and
-fails on Vue hydration mismatches.
+fails on Vue hydration mismatches. The desktop smoke test launches the real
+Electron shell against those fixtures and asserts the window's sandboxing,
+content security policy, permission denials, and navigation guards.
 
 ## Limitations and privacy
 

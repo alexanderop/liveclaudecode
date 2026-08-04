@@ -1,5 +1,6 @@
 .nuxt/
 .output/
+dist-desktop/
 tmp/
 *.tsbuildinfo
 *.log
