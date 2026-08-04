@@ -43,11 +43,13 @@ const COPILOT_CLI = '/copilot/session-state'
 type FileSystemOptions = NonNullable<Parameters<typeof testFileSystem>[1]>
 
 function recordingCopilotCache(locations: CallLog<CopilotSessionLocation>) {
-  return Layer.effect(
-    CopilotScanCache,
+  return Layer.unwrap(
     Effect.sync(() => {
       const scans = new Map<string, CopilotSessionScan>()
-      return CopilotScanCache.of({
+      // `peek` is deliberately unimplemented: the catalog and targeted-refresh
+      // paths under test go through `get`, and a mock turns a stray `peek`
+      // into a named defect instead of a plausible-looking answer.
+      return Layer.mock(CopilotScanCache, {
         get: Effect.fn('recordingCopilotCache.get')(function*(location) {
           yield* locations.record({ ...location })
           let scan = scans.get(location.path)
@@ -63,7 +65,6 @@ function recordingCopilotCache(locations: CallLog<CopilotSessionLocation>) {
             ? scan.refresh()
             : scan.refresh())
         }),
-        peek: path => Effect.sync(() => Option.fromUndefinedOr(scans.get(path))),
       })
     }),
   )

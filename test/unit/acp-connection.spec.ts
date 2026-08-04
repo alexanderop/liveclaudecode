@@ -8,8 +8,7 @@ import { makeCallLog, type CallLog } from '../fixtures/call-log'
 const encoder = new TextEncoder()
 
 function fakeSpawner(writes: CallLog<Record<string, unknown>>) {
-  return Layer.effect(
-    ChildProcessSpawner.ChildProcessSpawner,
+  return Layer.unwrap(
     Effect.gen(function*() {
       const stdout = yield* Queue.make<Uint8Array>()
       let buffered = ''
@@ -63,19 +62,24 @@ function fakeSpawner(writes: CallLog<Record<string, unknown>>) {
         }
       })
 
-      return ChildProcessSpawner.make(() => Effect.succeed(ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(42),
-        stdin: Sink.forEach(receive),
-        stdout: Stream.fromQueue(stdout),
-        stderr: Stream.empty,
-        all: Stream.fromQueue(stdout),
-        exitCode: Effect.never,
-        isRunning: Effect.succeed(true),
-        kill: () => Effect.void,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-        unref: Effect.succeed(Effect.void),
-      })))
+      // Only `spawn` is implemented: the connection has no business calling
+      // `exitCode`, `lines`, or the streaming helpers, and a mock says so at
+      // the call rather than quietly deriving them from this handle.
+      return Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {
+        spawn: () => Effect.succeed(ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(42),
+          stdin: Sink.forEach(receive),
+          stdout: Stream.fromQueue(stdout),
+          stderr: Stream.empty,
+          all: Stream.fromQueue(stdout),
+          exitCode: Effect.never,
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        })),
+      })
     }),
   )
 }
@@ -103,8 +107,7 @@ function scriptedSpawner(options: {
   /** Fail every write, as a closed stdin pipe does. */
   readonly stdinFails?: boolean
 }) {
-  return Layer.effect(
-    ChildProcessSpawner.ChildProcessSpawner,
+  return Layer.unwrap(
     Effect.gen(function*() {
       // `Done` in the error channel is what lets the test end stdout the way
       // an exiting process does, rather than only failing it.
@@ -132,26 +135,28 @@ function scriptedSpawner(options: {
         }
       })
 
-      return ChildProcessSpawner.make(() => Effect.succeed(ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(43),
-        stdin: options.stdinFails
-          ? Sink.forEach(() => Effect.fail(PlatformError.systemError({
-              _tag: 'BadResource',
-              module: 'Command',
-              method: 'stdin',
-              pathOrDescriptor: 'stdin',
-            })))
-          : Sink.forEach(receive),
-        stdout: Stream.fromQueue(stdout),
-        stderr: Stream.empty,
-        all: Stream.fromQueue(stdout),
-        exitCode: Effect.never,
-        isRunning: Effect.succeed(true),
-        kill: () => Effect.void,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-        unref: Effect.succeed(Effect.void),
-      })))
+      return Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {
+        spawn: () => Effect.succeed(ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(43),
+          stdin: options.stdinFails
+            ? Sink.forEach(() => Effect.fail(PlatformError.systemError({
+                _tag: 'BadResource',
+                module: 'Command',
+                method: 'stdin',
+                pathOrDescriptor: 'stdin',
+              })))
+            : Sink.forEach(receive),
+          stdout: Stream.fromQueue(stdout),
+          stderr: Stream.empty,
+          all: Stream.fromQueue(stdout),
+          exitCode: Effect.never,
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        })),
+      })
     }),
   )
 }
@@ -227,15 +232,16 @@ describe('ACP connection', () => {
       assert.include(error.message, 'spawn failed')
     }).pipe(
       Effect.scoped,
-      Effect.provide(AcpConnector.layer.pipe(Layer.provide(Layer.succeed(
-        ChildProcessSpawner.ChildProcessSpawner,
-        ChildProcessSpawner.make(() => Effect.fail(PlatformError.systemError({
-          _tag: 'NotFound',
-          module: 'Command',
-          method: 'spawn',
-          pathOrDescriptor: 'fake-acp',
-        }))),
-      )))),
+      Effect.provide(AcpConnector.layer.pipe(Layer.provide(
+        Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {
+          spawn: () => Effect.fail(PlatformError.systemError({
+            _tag: 'NotFound',
+            module: 'Command',
+            method: 'spawn',
+            pathOrDescriptor: 'fake-acp',
+          })),
+        }),
+      ))),
     ))
 
   it.effect('fails the in-flight request when the agent exits, and every request after it', () =>
