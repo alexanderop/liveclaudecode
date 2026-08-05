@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "copilot/vscode-chat-basic",
+  "source": [
+    "copilot"
+  ],
+  "producer": {
+    "tool": "vscode-copilot-chat",
+    "version": "1.125.1",
+    "platform": "darwin"
+  },
+  "capturedAt": "2026-08-05T06:27:19.123Z",
+  "clockAnchor": "2026-01-01T12:00:00.000Z",
+  "scenario": "vscode-chat-basic",
+  "provenance": "sandbox",
+  "notes": "VS Code Copilot Chat agent turn: read the failing test, fixed the rounding bug, re-ran npm test.",
+  "e2e": true,
+  "browser": true,
+  "redaction": {
+    "version": 1,
+    "rules": "copilot@2",
+    "identities": 25,
+    "clippedValues": 0,
+    "droppedValues": 31
+  },
+  "truncation": {
+    "keptRecords": 8,
+    "droppedRecords": 0,
+    "clipLimitBytes": 4096
+  },
+  "entries": [
+    {
+      "path": "vscode-user/workspaceStorage/dda2ae7c1736844447381935283d1e9d/chatSessions/d1aa73fc-b149-4e37-955d-56a4b1b69a66.jsonl",
+      "bytes": 56534,
+      "records": 8,
+      "mtime": 1767268500,
+      "sha256": "41c728b0783ba1bac19378fa0c91a610e744bf1035389d7a76bd9217a3019997"
+    },
+    {
+      "path": "vscode-user/workspaceStorage/dda2ae7c1736844447381935283d1e9d/workspace.json",
+      "bytes": 55,
+      "records": 1,
+      "mtime": 1767268271,
+      "sha256": "27b6d8100654ef955bb2b18ca39cb69f2efbd43312aa665c7e2cffb37a9e4a20"
+    }
+  ],
+  "expectedParseIssues": []
+}

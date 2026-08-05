@@ -1,0 +1,104 @@
+{
+  "files": [
+    {
+      "path": "vscode-user/workspaceStorage/dda2ae7c1736844447381935283d1e9d/chatSessions/d1aa73fc-b149-4e37-955d-56a4b1b69a66.jsonl",
+      "records": 41,
+      "size": 56534,
+      "counts": {
+        "copilot_applyPatch": 1,
+        "copilot_readFile": 3,
+        "manage_todo_list": 2,
+        "run_in_terminal": 2
+      },
+      "tools": 8,
+      "reads": 5,
+      "errors": 1,
+      "malformed": 0,
+      "parseIssues": {
+        "total": 0,
+        "byKind": {
+          "invalid-json": 0,
+          "schema-mismatch": 0,
+          "unsupported-shape": 0
+        }
+      },
+      "firstTs": "2026-01-01T11:53:54.047Z",
+      "lastTs": "2026-01-01T11:55:00.000Z",
+      "tokensOut": 278,
+      "live": false,
+      "agoMs": 1765501531500,
+      "environment": {
+        "cwd": "",
+        "gitBranch": "",
+        "version": "VS Code chat schema 3",
+        "entrypoint": "VS Code",
+        "permissionMode": "default",
+        "mode": "agent"
+      },
+      "titles": {
+        "display": "Fix rounding bug in invoice.ts",
+        "ai": "",
+        "custom": "Fix rounding bug in invoice.ts"
+      },
+      "files": [
+        {
+          "path": "repo-1/src/invoice.ts",
+          "ops": 1,
+          "tools": [
+            "textEditGroup"
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "cmd": "npm test",
+          "ok": false
+        },
+        {
+          "cmd": "npm test",
+          "ok": true
+        }
+      ],
+      "milestones": [],
+      "incidents": [
+        {
+          "id": "copilot-tool:call_wCEK8DpCY4AGfjUMMD1WNFmy",
+          "category": "tool",
+          "severity": "error",
+          "tool": "run_in_terminal"
+        }
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "durationMs": 28970,
+          "messageCount": 2
+        }
+      ],
+      "context": [],
+      "compactions": 0,
+      "skills": [],
+      "outcomes": [],
+      "todos": [
+        {
+          "content": "Fix the rounding bug in src/invoice.ts",
+          "status": "in-progress"
+        },
+        {
+          "content": "Run tests to validate the fix",
+          "status": "not-started"
+        }
+      ],
+      "current": null,
+      "finalText": ".",
+      "budget": null,
+      "causal": {
+        "records": 1,
+        "recordsWithUuid": 0,
+        "branchPoints": 0,
+        "sidechainRecords": 0,
+        "interruptions": 0
+      }
+    }
+  ]
+}

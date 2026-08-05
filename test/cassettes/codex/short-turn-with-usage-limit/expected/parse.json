@@ -1,0 +1,10 @@
+{
+  "byFile": {
+    "sessions/2026/01/01/rollout-2026-01-01T13-54-56-f25f4d2a-068c-474f-a861-ab66e15d598e.jsonl": {
+      "records": 12,
+      "invalid-json": 0,
+      "schema-mismatch": 0,
+      "unsupported-shape": 0
+    }
+  }
+}

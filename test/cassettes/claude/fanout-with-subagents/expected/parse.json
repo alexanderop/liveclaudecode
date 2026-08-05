@@ -1,0 +1,28 @@
+{
+  "byFile": {
+    "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4.jsonl": {
+      "records": 66,
+      "invalid-json": 0,
+      "schema-mismatch": 0,
+      "unsupported-shape": 0
+    },
+    "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01655de762b71730.jsonl": {
+      "records": 59,
+      "invalid-json": 0,
+      "schema-mismatch": 0,
+      "unsupported-shape": 0
+    },
+    "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01e3909be0ba8e53.jsonl": {
+      "records": 48,
+      "invalid-json": 0,
+      "schema-mismatch": 0,
+      "unsupported-shape": 0
+    },
+    "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-aa4c4e096254f5d4f.jsonl": {
+      "records": 23,
+      "invalid-json": 0,
+      "schema-mismatch": 0,
+      "unsupported-shape": 0
+    }
+  }
+}

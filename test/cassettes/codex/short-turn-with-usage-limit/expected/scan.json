@@ -1,0 +1,60 @@
+{
+  "files": [
+    {
+      "path": "sessions/2026/01/01/rollout-2026-01-01T13-54-56-f25f4d2a-068c-474f-a861-ab66e15d598e.jsonl",
+      "records": 12,
+      "size": 19611,
+      "counts": {},
+      "tools": 0,
+      "reads": 0,
+      "errors": 0,
+      "malformed": 0,
+      "parseIssues": {
+        "total": 0,
+        "byKind": {
+          "invalid-json": 0,
+          "schema-mismatch": 0,
+          "unsupported-shape": 0
+        }
+      },
+      "firstTs": "2026-01-01T11:54:56.869Z",
+      "lastTs": "2026-01-01T11:55:00.000Z",
+      "tokensOut": 0,
+      "live": false,
+      "agoMs": 1765501531500,
+      "environment": {
+        "cwd": "/Users/user-1/Projects/repo-1",
+        "gitBranch": "main",
+        "version": "0.146.0",
+        "entrypoint": "codex_exec",
+        "permissionMode": "never",
+        "mode": ""
+      },
+      "titles": {
+        "display": "",
+        "ai": "",
+        "custom": ""
+      },
+      "files": [],
+      "commands": [],
+      "milestones": [],
+      "incidents": [],
+      "turns": [],
+      "context": [],
+      "compactions": 0,
+      "skills": [],
+      "outcomes": [],
+      "todos": [],
+      "current": null,
+      "finalText": "",
+      "budget": null,
+      "causal": {
+        "records": 12,
+        "recordsWithUuid": 0,
+        "branchPoints": 0,
+        "sidechainRecords": 0,
+        "interruptions": 0
+      }
+    }
+  ]
+}

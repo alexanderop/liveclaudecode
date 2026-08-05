@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "id": "claude/fanout-with-subagents",
+  "source": [
+    "claude"
+  ],
+  "producer": {
+    "tool": "claude-code",
+    "version": "2.1.221",
+    "platform": "darwin"
+  },
+  "capturedAt": "2026-08-05T06:27:37.054Z",
+  "clockAnchor": "2026-01-01T12:00:00.000Z",
+  "scenario": "fanout-with-subagents",
+  "provenance": "sandbox",
+  "notes": "Three-way subagent fan-out against the invoice sandbox, then a deliberately missing npm script so the run carries a failed Bash.",
+  "e2e": true,
+  "browser": true,
+  "redaction": {
+    "version": 1,
+    "rules": "claude@1",
+    "identities": 20,
+    "clippedValues": 3,
+    "droppedValues": 712
+  },
+  "truncation": {
+    "keptRecords": 196,
+    "droppedRecords": 0,
+    "clipLimitBytes": 4096
+  },
+  "entries": [
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4.jsonl",
+      "bytes": 114580,
+      "records": 66,
+      "mtime": 1767268499,
+      "sha256": "41d31e3ba667c25cfc589a66697540c6c47af5a6695db1bc632bdc3d5afff847"
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01655de762b71730.jsonl",
+      "bytes": 95561,
+      "records": 59,
+      "mtime": 1767268442,
+      "sha256": "13b330faba02cc843fa8d9c5a0b82b52906f7ebb5869b0b7c882ae48adbd6bc2"
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01655de762b71730.meta.json",
+      "bytes": 142,
+      "records": 1,
+      "mtime": 1767268090,
+      "sha256": "287ba383065e846f8af7ca171d93177642ff9d30d9915bb26a444af4664b9363"
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01e3909be0ba8e53.jsonl",
+      "bytes": 64397,
+      "records": 48,
+      "mtime": 1767268215,
+      "sha256": "32f3e1fe7b4478d6392c4792391f52bda48e3d2ce7758aefb7236517295707bb"
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01e3909be0ba8e53.meta.json",
+      "bytes": 139,
+      "records": 1,
+      "mtime": 1767268105,
+      "sha256": "e594e1b1dc149e704eff9bfef25ceb6de75f0e72b5f27abc3e4980a692dbcbc7"
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-aa4c4e096254f5d4f.jsonl",
+      "bytes": 35371,
+      "records": 23,
+      "mtime": 1767268145,
+      "sha256": "3fab6c377ec7c063e3c7f2c92cb585c017ca1abad9c4182078368c04acbe8533"
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-aa4c4e096254f5d4f.meta.json",
+      "bytes": 148,
+      "records": 1,
+      "mtime": 1767268098,
+      "sha256": "95f87b89d51faa2eaaf79445b395cf35c888a66d6c79ceff732f486c3e80ff70"
+    }
+  ],
+  "expectedParseIssues": []
+}

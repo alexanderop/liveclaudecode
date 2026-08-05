@@ -13,3 +13,6 @@ test-results/
 .data/
 *.egg-info/
 .DS_Store
+
+# Cassette pseudonym decode tables: they map back to real values.
+test/cassettes/**/.identities.local.json

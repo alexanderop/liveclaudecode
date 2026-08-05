@@ -136,3 +136,28 @@ silently caught.
 - Prefer `assert.strictEqual` and `assert.deepStrictEqual` from
   `@effect/vitest`. Use bounded property tests for invariants where examples
   are insufficient.
+
+## Cassettes
+
+`test/cassettes/` holds recorded, redacted sessions captured from real runs of
+each supported tool. They answer a question synthetic fixtures cannot: *does
+this still work against what the tools actually emit?* Synthetic fixtures stay
+exactly as they are and remain the right tool for edge cases — a malformed
+line, a zero-token turn, the exact boundary of `LIVE_WINDOW`.
+
+- **Never hand-edit a cassette.** They are recordings. To change one, re-record
+  it with `pnpm cassette:record`; to add a variation, add a new cassette.
+  `pnpm cassette:verify` checks every file against its recorded hash.
+- **Add one** when a supported tool ships a format change, or when a transcript
+  shape the dashboard depends on is not represented. Write the scenario into
+  `docs/cassette-scenarios.md` *before* recording it, and record against the
+  generated sandbox — never against real work.
+- **Blessing is explicit.** `pnpm cassette:bless` rewrites the committed
+  `expected/*.json`, and `pnpm cassette:bless:api` the e2e projection. Neither
+  runs in CI. A pull request that changes a blessed file must explain the change
+  in its description; that diff is the point of the system.
+- The recorder names every key no classification table covers. Classify new keys
+  in `test/cassettes/redaction/rules.ts` before committing, or the alarm stops
+  meaning anything.
+
+See `docs/transcript-cassettes-spec.md` for the design.

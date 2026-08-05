@@ -282,17 +282,32 @@ pnpm test:desktop          # Electron shell smoke test with synthetic JSONL
 pnpm test:desktop:prebuilt # desktop smoke test against an existing build
 pnpm test:types            # strict Nuxt/Vue TypeScript checks, incl. test sources
 pnpm build                 # production Node server build
-pnpm check                 # lint, tests, typecheck, build, browser and desktop smoke tests
+pnpm check                 # verify, lint, tests, typecheck, build, browser and desktop smoke tests
+
+pnpm cassette:sandbox      # materialize the capture sandbox repository
+pnpm cassette:record       # record a real session into test/cassettes
+pnpm cassette:bless        # recompute the committed expectations
+pnpm cassette:verify       # cassette coverage, hygiene, budget, and integrity gates
 ```
 
 Automated tests never depend on private real sessions. They construct synthetic
 Claude, Codex, and Copilot logs and cover complete and partial lines, malformed and
 unknown records, tool/result pairing, active updates, spawn hierarchy, project
 grouping, deduplication, combined filters, diagnostics, pagination, and source
-failure isolation. The production-browser smoke test blocks external requests and
-fails on Vue hydration mismatches. The desktop smoke test launches the real
-Electron shell against those fixtures and asserts the window's sandboxing,
-content security policy, permission denials, and navigation guards.
+failure isolation.
+
+Alongside those, `test/cassettes/` holds *cassettes*: recorded, redacted sessions
+captured from real runs of each supported tool against a throwaway sandbox
+repository. Synthetic fixtures answer "is this branch correct?"; cassettes answer
+"is this still true of what the tools actually emit?" — a vendor format change
+fails a test with a reviewable diff instead of silently degrading the dashboard.
+See `docs/transcript-cassettes-spec.md` for the design and
+`docs/cassette-scenarios.md` for the capture protocol.
+
+The production-browser smoke test blocks external requests and fails on Vue
+hydration mismatches. The desktop smoke test launches the real Electron shell
+against those fixtures and asserts the window's sandboxing, content security
+policy, permission denials, and navigation guards.
 
 ## Limitations and privacy
 
@@ -305,6 +320,12 @@ content security policy, permission denials, and navigation guards.
   no result is treated as unknown, not success.
 - Local transcripts can contain prompts, tool arguments, file paths, and outputs.
   Run the server on a trusted machine and keep its default localhost binding.
+- `test/cassettes/` contains recorded third-party output — real records written by
+  Claude Code, Codex, Copilot CLI, and VS Code Copilot Chat. The record shapes are
+  already on every user's disk and are read by this project by design, so this is
+  not a new disclosure, but it is worth knowing the directory is what it is. The
+  sessions were run against a generated sandbox repository, and paths, identities,
+  and machine inventory are pseudonymized or dropped before commit.
 - Asking a question starts the selected ACP adapter and can send the question,
   transcript evidence, and referenced file contents to that agent's configured
   model provider. Ask agents can also modify local files and run commands with

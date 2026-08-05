@@ -1,0 +1,196 @@
+{
+  "projects": [
+    {
+      "name": "repo-1",
+      "roots": [
+        "2678828b-e260-4418-9433-d4bcb5e1f6e4[2678828b-e260-4418-9433-d4bcb5e1f6e4/agent-a01655de762b71730,2678828b-e260-4418-9433-d4bcb5e1f6e4/agent-a01e3909be0ba8e53,2678828b-e260-4418-9433-d4bcb5e1f6e4/agent-aa4c4e096254f5d4f]",
+        "codex:f25f4d2a-068c-474f-a861-ab66e15d598e[]",
+        "copilot:7ebbfc86-c03c-493d-8b4f-f8b72239a1a0[]",
+        "copilot:d1aa73fc-b149-4e37-955d-56a4b1b69a66[]"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "source": "claude",
+      "state": "ready",
+      "sessions": 1,
+      "malformed": 0
+    },
+    {
+      "source": "codex",
+      "state": "ready",
+      "sessions": 1,
+      "malformed": 0
+    },
+    {
+      "source": "copilot",
+      "state": "ready",
+      "sessions": 2,
+      "malformed": 0
+    }
+  ],
+  "costs": {
+    "sessions": 4,
+    "pricedRequests": 47,
+    "unpricedRequests": 0
+  },
+  "parseHealth": {
+    "skipped": 0,
+    "sessions": []
+  },
+  "runs": [
+    {
+      "key": "2678828b-e260-4418-9433-d4bcb5e1f6e4",
+      "source": "claude",
+      "kind": "session",
+      "label": "Read src/invoice.ts and test/invoice.test.ts, then run `npm test` and tell me what fails.",
+      "files": [
+        [
+          "src/invoice.ts",
+          4
+        ],
+        [
+          "/tmp/check-invoice.mjs",
+          2
+        ],
+        [
+          "test/invoice.test.ts",
+          1
+        ]
+      ],
+      "lanes": [
+        {
+          "key": "2678828b-e260-4418-9433-d4bcb5e1f6e4",
+          "depth": 0,
+          "kind": "session",
+          "agentType": ""
+        },
+        {
+          "key": "2678828b-e260-4418-9433-d4bcb5e1f6e4/agent-a01655de762b71730",
+          "depth": 1,
+          "kind": "subagent",
+          "agentType": "general-purpose"
+        },
+        {
+          "key": "2678828b-e260-4418-9433-d4bcb5e1f6e4/agent-a01e3909be0ba8e53",
+          "depth": 1,
+          "kind": "subagent",
+          "agentType": "Explore"
+        },
+        {
+          "key": "2678828b-e260-4418-9433-d4bcb5e1f6e4/agent-aa4c4e096254f5d4f",
+          "depth": 1,
+          "kind": "subagent",
+          "agentType": "general-purpose"
+        }
+      ],
+      "usage": {
+        "in": 14477,
+        "out": 56799,
+        "cr": 2687826,
+        "cw": 376113
+      },
+      "incidents": [
+        "permission/error",
+        "permission/error",
+        "permission/error",
+        "permission/error",
+        "permission/error",
+        "permission/error",
+        "tool/error",
+        "tool/error",
+        "tool/error",
+        "tool/error",
+        "tool/error",
+        "tool/error"
+      ],
+      "turns": 0,
+      "environmentCwd": "/Users/user-1/Projects/repo-1"
+    },
+    {
+      "key": "codex:f25f4d2a-068c-474f-a861-ab66e15d598e",
+      "source": "codex",
+      "kind": "session",
+      "label": "[dropped 2344 bytes of environment inventory]",
+      "files": [],
+      "lanes": [
+        {
+          "key": "codex:f25f4d2a-068c-474f-a861-ab66e15d598e",
+          "depth": 0,
+          "kind": "session",
+          "agentType": ""
+        }
+      ],
+      "usage": {
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0
+      },
+      "incidents": [],
+      "turns": 0,
+      "environmentCwd": "/Users/user-1/Projects/repo-1"
+    },
+    {
+      "key": "copilot:7ebbfc86-c03c-493d-8b4f-f8b72239a1a0",
+      "source": "copilot",
+      "kind": "session",
+      "label": "Run `npm test` and summarize the failure.",
+      "files": [
+        [
+          "src/invoice.ts",
+          1
+        ]
+      ],
+      "lanes": [
+        {
+          "key": "copilot:7ebbfc86-c03c-493d-8b4f-f8b72239a1a0",
+          "depth": 0,
+          "kind": "session",
+          "agentType": ""
+        }
+      ],
+      "usage": {
+        "in": 0,
+        "out": 1837,
+        "cr": 0,
+        "cw": 0
+      },
+      "incidents": [],
+      "turns": 9,
+      "environmentCwd": "/Users/user-1/Projects/repo-1"
+    },
+    {
+      "key": "copilot:d1aa73fc-b149-4e37-955d-56a4b1b69a66",
+      "source": "copilot",
+      "kind": "session",
+      "label": "Fix rounding bug in invoice.ts",
+      "files": [
+        [
+          "src/invoice.ts",
+          1
+        ]
+      ],
+      "lanes": [
+        {
+          "key": "copilot:d1aa73fc-b149-4e37-955d-56a4b1b69a66",
+          "depth": 0,
+          "kind": "session",
+          "agentType": ""
+        }
+      ],
+      "usage": {
+        "in": 21098,
+        "out": 278,
+        "cr": 0,
+        "cw": 0
+      },
+      "incidents": [
+        "tool/error"
+      ],
+      "turns": 1,
+      "environmentCwd": "/Users/user-1/Projects/repo-1"
+    }
+  ]
+}

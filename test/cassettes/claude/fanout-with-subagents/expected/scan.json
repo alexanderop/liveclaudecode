@@ -1,0 +1,1471 @@
+{
+  "files": [
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4.jsonl",
+      "records": 66,
+      "size": 114580,
+      "counts": {
+        "Agent": 3,
+        "Bash": 6,
+        "Glob": 1,
+        "Read": 4
+      },
+      "tools": 14,
+      "reads": 5,
+      "errors": 2,
+      "malformed": 0,
+      "parseIssues": {
+        "total": 0,
+        "byKind": {
+          "invalid-json": 0,
+          "schema-mismatch": 0,
+          "unsupported-shape": 0
+        }
+      },
+      "firstTs": "2026-01-01T11:47:25.100Z",
+      "lastTs": "2026-01-01T11:55:00.000Z",
+      "tokensOut": 20271,
+      "live": false,
+      "agoMs": 1765501531501,
+      "environment": {
+        "cwd": "/Users/user-1/Projects/repo-1",
+        "gitBranch": "main",
+        "version": "2.1.221",
+        "entrypoint": "sdk-cli",
+        "permissionMode": "acceptEdits",
+        "mode": "normal"
+      },
+      "titles": {
+        "display": "",
+        "ai": "",
+        "custom": ""
+      },
+      "files": [],
+      "commands": [
+        {
+          "cmd": "npm test 2>&1 | head -80",
+          "ok": false
+        },
+        {
+          "cmd": "npm test 2>&1 | tail -20 && echo \"--- git status ---\" && git status --short",
+          "ok": true
+        },
+        {
+          "cmd": "npm run typecheck 2>&1 | head -40; echo \"--- exit: $? ---\"; echo \"--- package.json ---\"; cat package.json",
+          "ok": false
+        },
+        {
+          "cmd": "npm run typecheck 2>&1 | head -40",
+          "ok": true
+        },
+        {
+          "cmd": "ls -a && npx tsc --version 2>&1 | head -3",
+          "ok": false
+        },
+        {
+          "cmd": "ls -a",
+          "ok": true
+        }
+      ],
+      "milestones": [
+        {
+          "title": "3 pass, 1 fails.",
+          "ts": "2026-01-01T11:47:47.630Z",
+          "strong": false
+        },
+        {
+          "title": "Agent 1 — rounding fix (`src/invoice.ts`)",
+          "ts": "2026-01-01T11:54:26.908Z",
+          "strong": false
+        },
+        {
+          "title": "Agent 2 — zero-quantity tests (`test/invoice.test.ts`)",
+          "ts": "2026-01-01T11:54:26.908Z",
+          "strong": false
+        },
+        {
+          "title": "Agent 3 — README audit (read-only)",
+          "ts": "2026-01-01T11:54:26.908Z",
+          "strong": false
+        }
+      ],
+      "incidents": [
+        {
+          "id": "50:permission:0",
+          "category": "permission",
+          "severity": "error",
+          "tool": ""
+        },
+        {
+          "id": "50:tool:1",
+          "category": "tool",
+          "severity": "error",
+          "tool": "Bash"
+        },
+        {
+          "id": "58:permission:2",
+          "category": "permission",
+          "severity": "error",
+          "tool": ""
+        },
+        {
+          "id": "58:tool:3",
+          "category": "tool",
+          "severity": "error",
+          "tool": "Bash"
+        }
+      ],
+      "turns": [],
+      "context": [
+        {
+          "ts": "2026-01-01T11:47:29.316Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 278,
+          "cr": 16787,
+          "cw": 12091,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:47:31.231Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 278,
+          "cr": 16787,
+          "cw": 12091,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:47:32.197Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 278,
+          "cr": 16787,
+          "cw": 12091,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:47:35.461Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 164,
+          "cr": 28878,
+          "cw": 1327,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:47:47.630Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 357,
+          "cr": 30205,
+          "cw": 759,
+          "stopReason": "end_turn"
+        },
+        {
+          "ts": "2026-01-01T11:47:59.798Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2561,
+          "cr": 30964,
+          "cw": 906,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:47:59.802Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2561,
+          "cr": 30964,
+          "cw": 906,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:10.618Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2561,
+          "cr": 30964,
+          "cw": 906,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:18.921Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2561,
+          "cr": 30964,
+          "cw": 906,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:25.756Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2561,
+          "cr": 30964,
+          "cw": 906,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:05.774Z",
+          "model": "claude-opus-5",
+          "in": 3570,
+          "out": 467,
+          "cr": 31870,
+          "cw": 4400,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:06.253Z",
+          "model": "claude-opus-5",
+          "in": 3570,
+          "out": 467,
+          "cr": 31870,
+          "cw": 4400,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:09.604Z",
+          "model": "claude-opus-5",
+          "in": 3570,
+          "out": 467,
+          "cr": 31870,
+          "cw": 4400,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:10.117Z",
+          "model": "claude-opus-5",
+          "in": 3570,
+          "out": 467,
+          "cr": 31870,
+          "cw": 4400,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:26.908Z",
+          "model": "claude-opus-5",
+          "in": 1,
+          "out": 1252,
+          "cr": 36270,
+          "cw": 5922,
+          "stopReason": "end_turn"
+        },
+        {
+          "ts": "2026-01-01T11:54:32.795Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 144,
+          "cr": 16787,
+          "cw": 27299,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:33.589Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 144,
+          "cr": 16787,
+          "cw": 27299,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:36.467Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 217,
+          "cr": 44086,
+          "cw": 211,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:38.603Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 217,
+          "cr": 44086,
+          "cw": 211,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:42.107Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 187,
+          "cr": 44297,
+          "cw": 748,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:42.780Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 187,
+          "cr": 44297,
+          "cw": 748,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:44.596Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 76,
+          "cr": 45045,
+          "cw": 236,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:46.963Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 51,
+          "cr": 45281,
+          "cw": 91,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:54:53.856Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 884,
+          "cr": 45372,
+          "cw": 722,
+          "stopReason": "end_turn"
+        },
+        {
+          "ts": "2026-01-01T11:55:00.000Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 884,
+          "cr": 45372,
+          "cw": 722,
+          "stopReason": "end_turn"
+        }
+      ],
+      "compactions": 0,
+      "skills": [],
+      "outcomes": [
+        {
+          "toolUseId": "toolu_01AdFuQN7yb4JQAzc4s5DYPS",
+          "status": "completed",
+          "childKey": ""
+        },
+        {
+          "toolUseId": "toolu_01JkohdrG2gVAnBQE4XwJxZC",
+          "status": "completed",
+          "childKey": ""
+        },
+        {
+          "toolUseId": "toolu_01AiUZSEJUeqScQFW9gkmCRm",
+          "status": "completed",
+          "childKey": ""
+        }
+      ],
+      "todos": [],
+      "current": null,
+      "finalText": "`npm run typecheck` doesn't exist — it fails immediately:\n\n```\nnpm error Missing script: \"typecheck\"\n```\n\n`package.json` has exactly one script, `test`. And there's no typechecker to run even manually",
+      "budget": null,
+      "causal": {
+        "records": 66,
+        "recordsWithUuid": 53,
+        "branchPoints": 4,
+        "sidechainRecords": 0,
+        "interruptions": 0
+      }
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01655de762b71730.jsonl",
+      "records": 59,
+      "size": 95561,
+      "counts": {
+        "Bash": 8,
+        "Edit": 4,
+        "Read": 5,
+        "Write": 2
+      },
+      "tools": 19,
+      "reads": 5,
+      "errors": 2,
+      "malformed": 0,
+      "parseIssues": {
+        "total": 0,
+        "byKind": {
+          "invalid-json": 0,
+          "schema-mismatch": 0,
+          "unsupported-shape": 0
+        }
+      },
+      "firstTs": "2026-01-01T11:48:10.627Z",
+      "lastTs": "2026-01-01T11:54:02.634Z",
+      "tokensOut": 26715,
+      "live": false,
+      "agoMs": 1765501531558,
+      "environment": {
+        "cwd": "/Users/user-1/Projects/repo-1",
+        "gitBranch": "main",
+        "version": "2.1.221",
+        "entrypoint": "sdk-cli",
+        "permissionMode": "",
+        "mode": ""
+      },
+      "titles": {
+        "display": "",
+        "ai": "",
+        "custom": ""
+      },
+      "files": [
+        {
+          "path": "/tmp/check-invoice.mjs",
+          "ops": 2,
+          "tools": [
+            "Write"
+          ]
+        },
+        {
+          "path": "src/invoice.ts",
+          "ops": 4,
+          "tools": [
+            "Edit"
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "cmd": "ls -a && cat package.json && cat README.md 2>/dev/null | head -50",
+          "ok": true
+        },
+        {
+          "cmd": "cat > /tmp/check-invoice.mjs <<'EOF' import { invoiceTotal } from '/Users/user-1/Projects/repo-1/src/invoice.ts' const i = (p, q = 1) => ({ description: 'x', un",
+          "ok": false
+        },
+        {
+          "cmd": "node /tmp/check-invoice.mjs",
+          "ok": true
+        },
+        {
+          "cmd": "ls -R . | head -40 && node --version",
+          "ok": true
+        },
+        {
+          "cmd": "node /tmp/check-invoice.mjs",
+          "ok": true
+        },
+        {
+          "cmd": "npm test 2>&1 | tail -30",
+          "ok": true
+        },
+        {
+          "cmd": "git status --short && git diff",
+          "ok": true
+        },
+        {
+          "cmd": "rm -f /tmp/check-invoice.mjs",
+          "ok": false
+        }
+      ],
+      "milestones": [
+        {
+          "title": "What changed",
+          "ts": "2026-01-01T11:54:02.634Z",
+          "strong": false
+        },
+        {
+          "title": "Why this approach",
+          "ts": "2026-01-01T11:54:02.634Z",
+          "strong": false
+        },
+        {
+          "title": "Test results",
+          "ts": "2026-01-01T11:54:02.634Z",
+          "strong": false
+        }
+      ],
+      "incidents": [
+        {
+          "id": "22:permission:0",
+          "category": "permission",
+          "severity": "error",
+          "tool": ""
+        },
+        {
+          "id": "22:tool:1",
+          "category": "tool",
+          "severity": "error",
+          "tool": "Bash"
+        },
+        {
+          "id": "56:permission:2",
+          "category": "permission",
+          "severity": "error",
+          "tool": ""
+        },
+        {
+          "id": "56:tool:3",
+          "category": "tool",
+          "severity": "error",
+          "tool": "Bash"
+        }
+      ],
+      "turns": [],
+      "context": [
+        {
+          "ts": "2026-01-01T11:48:12.681Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 0,
+          "cw": 17345,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:14.831Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 0,
+          "cw": 17345,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:15.375Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 0,
+          "cw": 17345,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:52.211Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 5,
+          "cr": 17345,
+          "cw": 2146,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:55.040Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 5,
+          "cr": 17345,
+          "cw": 2146,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:55.859Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3053,
+          "cr": 17345,
+          "cw": 2146,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:59.106Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 19491,
+          "cw": 4872,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:59.304Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 19491,
+          "cw": 4872,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:07.518Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 872,
+          "cr": 19491,
+          "cw": 4872,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:20.437Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 24363,
+          "cw": 1014,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:23.080Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1346,
+          "cr": 24363,
+          "cw": 1014,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:24.764Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 4,
+          "cr": 25377,
+          "cw": 1464,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:35.696Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1105,
+          "cr": 25377,
+          "cw": 1464,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:37.647Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 26841,
+          "cw": 1135,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:46.417Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1150,
+          "cr": 26841,
+          "cw": 1135,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:48.495Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 91,
+          "cr": 27976,
+          "cw": 1193,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:51:05.600Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 29169,
+          "cw": 906,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:51:06.017Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 29169,
+          "cw": 906,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:51:08.820Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 5619,
+          "cr": 29169,
+          "cw": 906,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:51:19.493Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 914,
+          "cr": 30075,
+          "cw": 6069,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:52:50.061Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 36144,
+          "cw": 1032,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:52:50.533Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 36144,
+          "cw": 1032,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:52:52.804Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 7021,
+          "cr": 36144,
+          "cw": 1032,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:52:54.997Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 37176,
+          "cw": 6993,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:52:57.353Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 171,
+          "cr": 37176,
+          "cw": 6993,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:53:09.244Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1254,
+          "cr": 44169,
+          "cw": 990,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:53:12.490Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 45159,
+          "cw": 1372,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:53:25.667Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1637,
+          "cr": 45159,
+          "cw": 1372,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:53:27.843Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 97,
+          "cr": 46531,
+          "cw": 1683,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:53:31.390Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 48214,
+          "cw": 676,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:53:31.440Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 48214,
+          "cw": 676,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:53:33.992Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 280,
+          "cr": 48214,
+          "cw": 676,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:53:38.712Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 161,
+          "cr": 48890,
+          "cw": 552,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:53:40.617Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 49442,
+          "cw": 1749,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:53:41.193Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 154,
+          "cr": 49442,
+          "cw": 1749,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:53:42.855Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 51191,
+          "cw": 296,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:54:02.634Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1738,
+          "cr": 51191,
+          "cw": 296,
+          "stopReason": "end_turn"
+        }
+      ],
+      "compactions": 0,
+      "skills": [],
+      "outcomes": [],
+      "todos": [],
+      "current": null,
+      "finalText": "Done. Only `/Users/user-1/Projects/repo-1/src/invoice.ts` was modified; `src/format.ts`, `test/invoice.test.ts`, and `README.md` are untouched (the test-file diff in git is the other agent's work).\n\n#",
+      "budget": null,
+      "causal": {
+        "records": 59,
+        "recordsWithUuid": 59,
+        "branchPoints": 0,
+        "sidechainRecords": 59,
+        "interruptions": 0
+      }
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-a01e3909be0ba8e53.jsonl",
+      "records": 48,
+      "size": 64397,
+      "counts": {
+        "Bash": 10,
+        "Read": 7
+      },
+      "tools": 17,
+      "reads": 7,
+      "errors": 2,
+      "malformed": 0,
+      "parseIssues": {
+        "total": 0,
+        "byKind": {
+          "invalid-json": 0,
+          "schema-mismatch": 0,
+          "unsupported-shape": 0
+        }
+      },
+      "firstTs": "2026-01-01T11:48:25.759Z",
+      "lastTs": "2026-01-01T11:50:16.022Z",
+      "tokensOut": 6368,
+      "live": false,
+      "agoMs": 1765501531785,
+      "environment": {
+        "cwd": "/Users/user-1/Projects/repo-1",
+        "gitBranch": "main",
+        "version": "2.1.221",
+        "entrypoint": "sdk-cli",
+        "permissionMode": "",
+        "mode": ""
+      },
+      "titles": {
+        "display": "",
+        "ai": "",
+        "custom": ""
+      },
+      "files": [],
+      "commands": [
+        {
+          "cmd": "ls -la /Users/user-1/Projects/repo-1/",
+          "ok": true
+        },
+        {
+          "cmd": "find /Users/user-1/Projects/repo-1 -type f -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" | head -50",
+          "ok": true
+        },
+        {
+          "cmd": "node --version && npm --version && git log --oneline -5 && git status --short",
+          "ok": false
+        },
+        {
+          "cmd": "node -e \"console.log('1.005*100 =', 1.005*100); console.log('Math.round(1.005*100)/100 =', Math.round(1.005*100)/100); console.log('240 formatted:', (240).toFix",
+          "ok": true
+        },
+        {
+          "cmd": "node --version; git -C /Users/user-1/Projects/repo-1 log --oneline -5; git -C /Users/user-1/Projects/repo-1 status --short",
+          "ok": false
+        },
+        {
+          "cmd": "node --version",
+          "ok": true
+        },
+        {
+          "cmd": "node --test /Users/user-1/Projects/repo-1/test/invoice.test.ts 2>&1 | tail -30",
+          "ok": true
+        },
+        {
+          "cmd": "node --test /Users/user-1/Projects/repo-1/test/invoice.test.ts 2>&1 | tail -12",
+          "ok": true
+        },
+        {
+          "cmd": "node -e \" const s=await import('./src/invoice.ts'); console.log('example 240:', s.invoiceTotal([{description:'Consulting',unitPriceUsd:120,quantity:2}])); conso",
+          "ok": true
+        },
+        {
+          "cmd": "git status --short",
+          "ok": true
+        }
+      ],
+      "milestones": [
+        {
+          "title": "Mismatches",
+          "ts": "2026-01-01T11:50:16.022Z",
+          "strong": false
+        },
+        {
+          "title": "4. Undocumented public API (coverage gap, not an error)",
+          "ts": "2026-01-01T11:50:16.022Z",
+          "strong": false
+        },
+        {
+          "title": "What I chec…[clipped 1664 bytes]",
+          "ts": "2026-01-01T11:50:16.022Z",
+          "strong": false
+        }
+      ],
+      "incidents": [
+        {
+          "id": "21:permission:0",
+          "category": "permission",
+          "severity": "error",
+          "tool": ""
+        },
+        {
+          "id": "21:tool:1",
+          "category": "tool",
+          "severity": "error",
+          "tool": "Bash"
+        },
+        {
+          "id": "26:permission:2",
+          "category": "permission",
+          "severity": "error",
+          "tool": ""
+        },
+        {
+          "id": "26:tool:3",
+          "category": "tool",
+          "severity": "error",
+          "tool": "Bash"
+        }
+      ],
+      "turns": [],
+      "context": [
+        {
+          "ts": "2026-01-01T11:48:27.940Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 0,
+          "cw": 15075,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:30.289Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 0,
+          "cw": 15075,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:31.392Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 352,
+          "cr": 0,
+          "cw": 15075,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:37.919Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 73,
+          "cr": 15075,
+          "cw": 1315,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:38.861Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 73,
+          "cr": 15075,
+          "cw": 1315,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:39.988Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 73,
+          "cr": 15075,
+          "cw": 1315,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:40.807Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 73,
+          "cr": 15075,
+          "cw": 1315,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:41.462Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 643,
+          "cr": 15075,
+          "cw": 1315,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:50.448Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 5,
+          "cr": 16390,
+          "cw": 2762,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:50.739Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 5,
+          "cr": 16390,
+          "cw": 2762,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:53.573Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 5,
+          "cr": 16390,
+          "cw": 2762,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:55.415Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 978,
+          "cr": 16390,
+          "cw": 2762,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:57.127Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 19152,
+          "cw": 943,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:00.165Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 270,
+          "cr": 19152,
+          "cw": 943,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:02.882Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 69,
+          "cr": 20095,
+          "cw": 473,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:03.951Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 254,
+          "cr": 20095,
+          "cw": 473,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:08.584Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 20568,
+          "cw": 834,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:09.055Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 20568,
+          "cw": 834,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:10.001Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 20568,
+          "cw": 834,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:10.769Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 497,
+          "cr": 20568,
+          "cw": 834,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:13.699Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 21402,
+          "cw": 2337,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:14.178Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 21402,
+          "cw": 2337,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:17.937Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 21402,
+          "cw": 2337,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:21.199Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 744,
+          "cr": 21402,
+          "cw": 2337,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:45.600Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 23739,
+          "cw": 981,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:47.042Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 23739,
+          "cw": 981,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:49:49.383Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 7,
+          "cr": 24720,
+          "cw": 1815,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:50:16.022Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2223,
+          "cr": 24720,
+          "cw": 1815,
+          "stopReason": "end_turn"
+        }
+      ],
+      "compactions": 0,
+      "skills": [],
+      "outcomes": [],
+      "todos": [],
+      "current": null,
+      "finalText": "Audit complete. The README is **mostly accurate**, but one claim is now factually wrong because the concurrent agent's fix has already landed.\n\n## Mismatches\n\n### 1. README lines 24-25 — \"One test cur",
+      "budget": null,
+      "causal": {
+        "records": 48,
+        "recordsWithUuid": 48,
+        "branchPoints": 1,
+        "sidechainRecords": 48,
+        "interruptions": 0
+      }
+    },
+    {
+      "path": "projects/-Users-user-1-Projects-repo-1/2678828b-e260-4418-9433-d4bcb5e1f6e4/subagents/agent-aa4c4e096254f5d4f.jsonl",
+      "records": 23,
+      "size": 35371,
+      "counts": {
+        "Bash": 3,
+        "Edit": 1,
+        "Read": 3
+      },
+      "tools": 7,
+      "reads": 3,
+      "errors": 0,
+      "malformed": 0,
+      "parseIssues": {
+        "total": 0,
+        "byKind": {
+          "invalid-json": 0,
+          "schema-mismatch": 0,
+          "unsupported-shape": 0
+        }
+      },
+      "firstTs": "2026-01-01T11:48:18.924Z",
+      "lastTs": "2026-01-01T11:49:05.524Z",
+      "tokensOut": 3445,
+      "live": false,
+      "agoMs": 1765501531855,
+      "environment": {
+        "cwd": "/Users/user-1/Projects/repo-1",
+        "gitBranch": "main",
+        "version": "2.1.221",
+        "entrypoint": "sdk-cli",
+        "permissionMode": "",
+        "mode": ""
+      },
+      "titles": {
+        "display": "",
+        "ai": "",
+        "custom": ""
+      },
+      "files": [
+        {
+          "path": "test/invoice.test.ts",
+          "ops": 1,
+          "tools": [
+            "Edit"
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "cmd": "cat package.json && node --experimental-strip-types -e \" import('./src/invoice.ts').then(m => { const zero = { description: 'Onboarding', unitPriceUsd: 250, qua",
+          "ok": true
+        },
+        {
+          "cmd": "npm test 2>&1 | tail -40",
+          "ok": false
+        },
+        {
+          "cmd": "git status --short",
+          "ok": true
+        }
+      ],
+      "milestones": [
+        {
+          "title": "Actual behavior verified",
+          "ts": "2026-01-01T11:49:05.524Z",
+          "strong": false
+        },
+        {
+          "title": "Test code added",
+          "ts": "2026-01-01T11:49:05.524Z",
+          "strong": false
+        },
+        {
+          "title": "`npm test` status",
+          "ts": "2026-01-01T11:49:05.524Z",
+          "strong": false
+        }
+      ],
+      "incidents": [],
+      "turns": [],
+      "context": [
+        {
+          "ts": "2026-01-01T11:48:20.857Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 8210,
+          "cw": 9088,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:22.739Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 8210,
+          "cw": 9088,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:23.766Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1,
+          "cr": 8210,
+          "cw": 9088,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:24.649Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 405,
+          "cr": 8210,
+          "cw": 9088,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:28.385Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 5,
+          "cr": 17298,
+          "cw": 2806,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:33.004Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 553,
+          "cr": 17298,
+          "cw": 2806,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:37.865Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 20104,
+          "cw": 1071,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:38.370Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 3,
+          "cr": 20104,
+          "cw": 1071,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:45.604Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 880,
+          "cr": 20104,
+          "cw": 1071,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:48.229Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 140,
+          "cr": 21175,
+          "cw": 1024,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:48:51.262Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 2,
+          "cr": 22199,
+          "cw": 827,
+          "stopReason": null
+        },
+        {
+          "ts": "2026-01-01T11:48:51.891Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 203,
+          "cr": 22199,
+          "cw": 827,
+          "stopReason": "tool_use"
+        },
+        {
+          "ts": "2026-01-01T11:49:05.524Z",
+          "model": "claude-opus-5",
+          "in": 2,
+          "out": 1248,
+          "cr": 23026,
+          "cw": 140,
+          "stopReason": "end_turn"
+        }
+      ],
+      "compactions": 0,
+      "skills": [],
+      "outcomes": [],
+      "todos": [],
+      "current": null,
+      "finalText": "All four new tests pass. Only `test/invoice.test.ts` was modified.\n\n## Actual behavior verified\n\nRead `src/invoice.ts` and probed it with a node one-liner before writing any assertions:\n\n- `lineTotal(",
+      "budget": null,
+      "causal": {
+        "records": 23,
+        "recordsWithUuid": 23,
+        "branchPoints": 0,
+        "sidechainRecords": 23,
+        "interruptions": 0
+      }
+    }
+  ]
+}

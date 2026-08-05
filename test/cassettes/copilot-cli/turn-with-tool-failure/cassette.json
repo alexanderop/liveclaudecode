@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "copilot-cli/turn-with-tool-failure",
+  "source": [
+    "copilot-cli"
+  ],
+  "producer": {
+    "tool": "copilot-cli",
+    "version": "1.0.78",
+    "platform": "darwin"
+  },
+  "capturedAt": "2026-08-05T06:27:39.649Z",
+  "clockAnchor": "2026-01-01T12:00:00.000Z",
+  "scenario": "turn-with-tool-failure",
+  "provenance": "sandbox",
+  "notes": "Copilot CLI turn loop against the invoice sandbox: a failing npm run typecheck between two successful turns.",
+  "e2e": true,
+  "browser": true,
+  "redaction": {
+    "version": 1,
+    "rules": "copilot-cli@1",
+    "identities": 22,
+    "clippedValues": 3,
+    "droppedValues": 6
+  },
+  "truncation": {
+    "keptRecords": 75,
+    "droppedRecords": 0,
+    "clipLimitBytes": 4096
+  },
+  "entries": [
+    {
+      "path": "session-state/7ebbfc86-c03c-493d-8b4f-f8b72239a1a0/events.jsonl",
+      "bytes": 62132,
+      "records": 75,
+      "mtime": 1767268201,
+      "sha256": "ae147dc087a67af1f51cdbbc685a9c511c7e90acaf260c2e64fed3531914e7f1"
+    }
+  ],
+  "expectedParseIssues": []
+}

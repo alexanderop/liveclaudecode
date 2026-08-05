@@ -3,8 +3,15 @@
   "compilerOptions": {
     "noEmit": true,
     "composite": false,
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": ["node"]
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "allowImportingTsExtensions": true
   },
   "include": [
     ".nuxt/types/nitro-imports.d.ts",
@@ -12,6 +19,8 @@
     "test/e2e/**/*.ts",
     "test/gate/**/*.ts",
     "test/fixtures/**/*.ts",
+    "test/cassettes/redaction/**/*.ts",
+    "script/cassette/**/*.ts",
     "test/browser/**/*.ts",
     "test/desktop/**/*.ts",
     "electron/**/*.d.ts",

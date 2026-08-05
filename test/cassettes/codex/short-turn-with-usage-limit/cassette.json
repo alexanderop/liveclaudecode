@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "codex/short-turn-with-usage-limit",
+  "source": [
+    "codex"
+  ],
+  "producer": {
+    "tool": "codex-cli",
+    "version": "0.146.0",
+    "platform": "darwin"
+  },
+  "capturedAt": "2026-08-05T06:27:38.391Z",
+  "clockAnchor": "2026-01-01T12:00:00.000Z",
+  "scenario": "short-turn-with-usage-limit",
+  "provenance": "sandbox",
+  "notes": "Codex rollout against the invoice sandbox. The account hit its usage limit mid-turn, so this carries the session envelope, turn context, world state, and token accounting without a tool loop.",
+  "e2e": true,
+  "browser": true,
+  "redaction": {
+    "version": 1,
+    "rules": "codex@1",
+    "identities": 44,
+    "clippedValues": 2,
+    "droppedValues": 6
+  },
+  "truncation": {
+    "keptRecords": 12,
+    "droppedRecords": 0,
+    "clipLimitBytes": 4096
+  },
+  "entries": [
+    {
+      "path": "sessions/2026/01/01/rollout-2026-01-01T13-54-56-f25f4d2a-068c-474f-a861-ab66e15d598e.jsonl",
+      "bytes": 19611,
+      "records": 12,
+      "mtime": 1767268500,
+      "sha256": "8173539211d905ec0c85a0112e16096b37a8d82b83473caec9e90fcb0c8bc8ba"
+    }
+  ],
+  "expectedParseIssues": []
+}

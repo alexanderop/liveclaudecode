@@ -1,0 +1,10 @@
+{
+  "byFile": {
+    "session-state/7ebbfc86-c03c-493d-8b4f-f8b72239a1a0/events.jsonl": {
+      "records": 75,
+      "invalid-json": 0,
+      "schema-mismatch": 0,
+      "unsupported-shape": 0
+    }
+  }
+}
