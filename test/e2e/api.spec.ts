@@ -185,14 +185,19 @@ describe('read-only API', async () => {
     rmSync(copilotCliDirectory, { recursive: true, force: true })
   })
 
-  it('serves the dashboard shell with its document language and primary navigation', async () => {
+  it('serves the dashboard shell with its document language and client entry', async () => {
     const html = await $fetch<string>('/')
 
     expect(html).toMatch(/<html\s+lang="en"/)
     expect(html).toContain('<title>Claude + Codex + Copilot Sessions — Live</title>')
-    expect(html).toContain('<main class="main-content">')
-    expect(html).toContain('aria-label="Overview workspace"')
-    expect(html).toContain('aria-label="Session views"')
+    // The app runs as an SPA (`ssr: false` in nuxt.config.ts), because atom
+    // evaluation on the server would share a module-level registry and memo map
+    // across concurrent requests. The server's job is the shell and the entry
+    // script; the navigation landmarks this used to assert are rendered on the
+    // client and covered by test/browser/dashboard.spec.ts.
+    expect(html).toContain('data-ssr="false"')
+    expect(html).toContain('<div id="__nuxt"')
+    expect(html).toMatch(/<script type="module" src="\/_nuxt\/[^"]+\.js"/)
   })
 
   it('prevents caching of every live read endpoint', async () => {
