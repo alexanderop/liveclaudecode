@@ -14,6 +14,9 @@ importers:
       '@dagrejs/dagre':
         specifier: ^1.1.8
         version: 1.1.8
+      '@effect/atom-vue':
+        specifier: 4.0.0-beta.101
+        version: 4.0.0-beta.101(effect@4.0.0-beta.101)(vue@3.5.39(typescript@6.0.3))
       '@effect/platform-node':
         specifier: 4.0.0-beta.101
         version: 4.0.0-beta.101(effect@4.0.0-beta.101)(ioredis@5.11.1(supports-color@10.2.2))
@@ -351,6 +354,12 @@ packages:
 
   '@dxup/unimport@0.1.2':
     resolution: {integrity: sha512-/B8YJGPzaYq1NbsQmwgP8EZqg40NpTw4ZB3suuI0TplbxKHeK94jeaawLmVhCv+YwUnOpiWEz9U6SeThku/8JQ==}
+
+  '@effect/atom-vue@4.0.0-beta.101':
+    resolution: {integrity: sha512-e/UujoHpW45Tyaukc1Uh21Z0KiyV4QGDHdhvElhL7YN/Q3sQDoJRUmzgbowZ/K1qGUeAF0CgiaZUJmVGN7YhYA==}
+    peerDependencies:
+      effect: ^4.0.0-beta.101
+      vue: ^3.5.0
 
   '@effect/platform-node-shared@4.0.0-beta.101':
     resolution: {integrity: sha512-g4L7XiyJSNJLJVhlslyg2zBCQsoKQf1y1gd+Yfd+3wD9ymC+m7ymbd/5FGqnT1aXV6E2AwRr4D/R1eyRUikvWQ==}
@@ -6972,6 +6981,11 @@ snapshots:
       - magicast
 
   '@dxup/unimport@0.1.2': {}
+
+  '@effect/atom-vue@4.0.0-beta.101(effect@4.0.0-beta.101)(vue@3.5.39(typescript@6.0.3))':
+    dependencies:
+      effect: 4.0.0-beta.101
+      vue: 3.5.39(typescript@6.0.3)
 
   '@effect/platform-node-shared@4.0.0-beta.101(effect@4.0.0-beta.101)':
     dependencies:

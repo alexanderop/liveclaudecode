@@ -482,25 +482,6 @@ describe('useLiveRuns', () => {
     expect(fetch.mock.calls.some(([url]) => String(url).startsWith('/api/tree'))).toBe(true)
   })
 
-  it('pause suspends polling until resume', async () => {
-    vi.useFakeTimers()
-    const fetch = mockLiveApi(runNode({}))
-
-    const live = await mountLive()
-    live.pause()
-    fetch.mockClear()
-    await vi.advanceTimersByTimeAsync(12_000)
-    await flushPromises()
-
-    expect(fetch).not.toHaveBeenCalled()
-
-    live.resume()
-    await vi.advanceTimersByTimeAsync(4_000)
-    await flushPromises()
-
-    expect(fetch.mock.calls.some(([url]) => String(url).startsWith('/api/tree'))).toBe(true)
-  })
-
   it('aborts pending requests and drops queued tree work on unmount', async () => {
     vi.useFakeTimers()
     const pendingTree = deferred<TreeResponse>()

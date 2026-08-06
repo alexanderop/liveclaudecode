@@ -118,10 +118,6 @@ export interface UseLiveRunsReturn {
   readonly inspect: (key: string) => Promise<void>
   /** Close the inspector overlay and drop its stream. */
   readonly clearInspection: () => void
-  /** Suspend all polling, e.g. while the tab is hidden. */
-  readonly pause: () => void
-  /** Resume polling after {@link UseLiveRunsReturn.pause}. */
-  readonly resume: () => void
 }
 
 /**
@@ -393,12 +389,9 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     useIntervalFn(pollSessionEvents, sessionEventsIntervalMs, { immediate: false }),
   ]
 
-  const pause = () => pollers.forEach(poller => poller.pause())
-  const resume = () => pollers.forEach(poller => poller.resume())
-
   onMounted(() => {
     void loadTree()
-    resume()
+    pollers.forEach(poller => poller.resume())
   })
 
   tryOnScopeDispose(() => {
@@ -447,7 +440,5 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     select,
     inspect,
     clearInspection,
-    pause,
-    resume,
   }
 }
