@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TranscriptEvent } from '#shared/types/run'
-import type { FeedDensity } from '~/composables/useLiveRuns'
+import type { FeedDensity } from '~/atoms/preferences'
 import { parseTimestamp } from '~/utils/format'
 import { toolUseIcon, toolUseLabel } from '~/utils/tool-display'
 

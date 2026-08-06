@@ -7,6 +7,7 @@ import IndexPage from '~/pages/index.vue'
 import RunChanges from '~/components/RunChanges.vue'
 import RunOverview from '~/components/RunOverview.vue'
 import { mockLiveApi } from '../fixtures/live-api'
+import { mountWithAtoms } from '../fixtures/mount-atoms'
 import { runNode, runResponse, treeResponse } from '../fixtures/runs'
 
 const axeOptions: RunOptions = {
@@ -28,10 +29,14 @@ async function expectNoViolations(element: Element, disabledRules: string[] = []
 
 /** These views are attached to `document.body`, so several may be live at once. */
 let mounted: VueWrapper[] = []
+/** One per `mountWithAtoms`, disposed with the mount that owns it. */
+let registries: Array<() => void> = []
 
 afterEach(() => {
   for (const component of mounted) component.unmount()
+  for (const dispose of registries) dispose()
   mounted = []
+  registries = []
   document.body.innerHTML = ''
 })
 
@@ -40,7 +45,7 @@ describe('accessibility', () => {
     mockLiveApi(runNode(), {
       tree: () => ({ ...treeResponse([]), projects: [] }),
     })
-    const component = await mountSuspended(IndexPage, {
+    const dashboard = await mountWithAtoms(IndexPage, {
       attachTo: document.body,
       global: {
         stubs: {
@@ -48,7 +53,9 @@ describe('accessibility', () => {
         },
       },
     })
+    const component = dashboard.wrapper
     mounted.push(component)
+    registries.push(() => dashboard.registry.dispose())
 
     await flushPromises()
     expect(component.get('[data-workspace-heading]').text()).toBe('No local sessions found')
@@ -59,7 +66,7 @@ describe('accessibility', () => {
     const root = runNode()
     const run = runResponse()
     mockLiveApi(root, { run: () => run })
-    const component = await mountSuspended(IndexPage, {
+    const dashboard = await mountWithAtoms(IndexPage, {
       attachTo: document.body,
       global: {
         stubs: {
@@ -67,7 +74,9 @@ describe('accessibility', () => {
         },
       },
     })
+    const component = dashboard.wrapper
     mounted.push(component)
+    registries.push(() => dashboard.registry.dispose())
 
     await flushPromises()
     await expectNoViolations(component.element)

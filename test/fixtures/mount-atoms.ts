@@ -17,6 +17,8 @@ export interface MountWithAtomsOptions {
   /** Route to mount at, e.g. `/costs?hours=24`. */
   readonly route?: string
   readonly props?: Record<string, unknown>
+  /** Mount into a real element, for assertions that need a document tree. */
+  readonly attachTo?: Element | string
   /** Forwarded as-is, except that `provide` also carries the registry. */
   readonly global?: GlobalMountOptions
 }
@@ -55,6 +57,7 @@ export const mountWithAtoms = async (
   const wrapper = await mountSuspended(component, {
     props: options.props,
     route: options.route,
+    attachTo: options.attachTo,
     global: {
       ...options.global,
       provide: { ...options.global?.provide, [registryKey]: registry },

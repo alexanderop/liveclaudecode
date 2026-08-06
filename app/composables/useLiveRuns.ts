@@ -1,4 +1,4 @@
-import type { ComputedRef, ShallowRef } from 'vue'
+import type { ComputedRef, ShallowRef, WritableComputedRef } from 'vue'
 import type {
   CostSummary,
   ProjectRuns,
@@ -10,12 +10,15 @@ import type {
   TreeResponse,
 } from '#shared/types/run'
 import type { SessionSort } from '~/utils/session-filter'
-import type { ProjectOption, SessionSourceFilter } from '~/composables/useSessionFilters'
+import type { ProjectOption, SessionSourceFilter } from '~/atoms/filters'
+import type { FeedDensity } from '~/atoms/preferences'
+import type { SessionRangeHours } from '~/atoms/range'
+import { filtersAtoms } from '~/atoms/filters'
+import { preferencesAtoms } from '~/atoms/preferences'
+import { rangeAtoms } from '~/atoms/range'
+import { useAtomModel } from '~/composables/atom'
 import { createLatestRequestGate } from '~/utils/latest-request-gate'
 import { deepestLiveNode, flattenRunTree } from '~/utils/execution-analysis'
-
-export type FeedDensity = 'compact' | 'normal' | 'raw'
-export type SessionRangeHours = number
 
 export interface UseLiveRunsOptions {
   /**
@@ -87,31 +90,31 @@ export interface UseLiveRunsReturn {
   /** True while the first inspector poll for a new target is in flight. */
   readonly inspectedEventsLoading: Readonly<ShallowRef<boolean>>
   /** Free-text search across projects, session labels, and agents. */
-  readonly query: ShallowRef<string>
+  readonly query: WritableComputedRef<string>
   /** Restrict sessions to one transcript source. */
-  readonly sourceFilter: ShallowRef<SessionSourceFilter>
+  readonly sourceFilter: WritableComputedRef<SessionSourceFilter>
   /** Restrict sessions to one project id, or `'all'`. */
-  readonly projectFilter: ShallowRef<string>
+  readonly projectFilter: WritableComputedRef<string>
   /** Show only sessions with live activity. */
-  readonly liveOnly: ShallowRef<boolean>
+  readonly liveOnly: WritableComputedRef<boolean>
   /** Show only finished sessions that ended with errors. */
-  readonly attentionOnly: ShallowRef<boolean>
+  readonly attentionOnly: WritableComputedRef<boolean>
   /** Hide empty sessions that never recorded any activity. */
-  readonly hideIdle: ShallowRef<boolean>
+  readonly hideIdle: WritableComputedRef<boolean>
   /** Minimum number of subagents a session must have spawned. */
-  readonly minimumSubagents: ShallowRef<number>
+  readonly minimumSubagents: WritableComputedRef<number>
   /** Session ordering within a project. */
-  readonly sessionSort: ShallowRef<SessionSort>
+  readonly sessionSort: WritableComputedRef<SessionSort>
   /** Automatically follow the most recently active live agent. */
-  readonly followActive: ShallowRef<boolean>
+  readonly followActive: WritableComputedRef<boolean>
   /** Keep the event feed scrolled to the newest output. */
-  readonly followOutput: ShallowRef<boolean>
+  readonly followOutput: WritableComputedRef<boolean>
   /** Show only error events in the feed. */
-  readonly errorsOnly: ShallowRef<boolean>
+  readonly errorsOnly: WritableComputedRef<boolean>
   /** Rendering density of the event feed. */
-  readonly density: ShallowRef<FeedDensity>
+  readonly density: WritableComputedRef<FeedDensity>
   /** Time range of sessions to show, in hours; `0` means all time. */
-  readonly hours: ShallowRef<SessionRangeHours>
+  readonly hours: WritableComputedRef<SessionRangeHours>
   /** Select an agent (and optionally another project) and load its detail. */
   readonly select: (key: string, project?: string | null) => Promise<void>
   /** Open an agent of the selected session in the inspector overlay. */
@@ -122,9 +125,13 @@ export interface UseLiveRunsReturn {
 
 /**
  * Client state for the live dashboard: polls the session tree, the selected
- * run's detail and transcript streams, exposes sidebar filters, and keeps
- * every response guarded against stale delivery when the selection or time
- * range changes mid-flight.
+ * run's detail and transcript streams, and keeps every response guarded against
+ * stale delivery when the selection or time range changes mid-flight.
+ *
+ * The filters, the display preferences, and the range are no longer owned here
+ * — they are atoms, and what is left of them in the return value is a set of
+ * `v-model` bindings `index.vue` still reads through. That indirection goes with
+ * this composable in Stage 7.
  */
 export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn {
   const {
@@ -147,11 +154,23 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
   const sessionEventsTruncated = shallowRef(false)
   const inspectedKey = shallowRef<string | null>(null)
   const inspectedEventsLoading = shallowRef(false)
-  const followActive = shallowRef(false)
-  const followOutput = shallowRef(true)
-  const errorsOnly = shallowRef(false)
-  const density = shallowRef<FeedDensity>('normal')
-  const hours = shallowRef<SessionRangeHours>(168)
+  // Filters, display preferences, and the range are app-wide state held in the
+  // atom registry. Every one of these bindings has to be created here, during
+  // `setup()`: `injectRegistry` falls back to a module-level singleton instead
+  // of throwing, so a late call binds to shared global state without a warning.
+  const query = useAtomModel(() => filtersAtoms.query)
+  const sourceFilter = useAtomModel(() => filtersAtoms.source)
+  const projectFilter = useAtomModel(() => filtersAtoms.project)
+  const liveOnly = useAtomModel(() => filtersAtoms.liveOnly)
+  const attentionOnly = useAtomModel(() => filtersAtoms.attentionOnly)
+  const hideIdle = useAtomModel(() => filtersAtoms.hideIdle)
+  const minimumSubagents = useAtomModel(() => filtersAtoms.minimumSubagents)
+  const sessionSort = useAtomModel(() => filtersAtoms.sort)
+  const followActive = useAtomModel(() => preferencesAtoms.followActive)
+  const followOutput = useAtomModel(() => preferencesAtoms.followOutput)
+  const errorsOnly = useAtomModel(() => preferencesAtoms.errorsOnly)
+  const density = useAtomModel(() => preferencesAtoms.density)
+  const hours = useAtomModel(() => rangeAtoms.hours)
   let treePending = false
   let treeReloadQueued = false
   let treeGeneration = 0
@@ -161,7 +180,21 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
   const runRequests = createLatestRequestGate()
   const sessionEventRequests = createLatestRequestGate()
 
-  const filters = useSessionFilters(projects)
+  // Both projections move to `app/atoms/filters.ts` in Stage 5, when the tree
+  // they read stops being a `shallowRef` here and becomes an atom.
+  const visibleProjects = computed(() => filterSessionProjects(projects.value, {
+    query: query.value,
+    source: sourceFilter.value,
+    project: projectFilter.value,
+    liveOnly: liveOnly.value,
+    attentionOnly: attentionOnly.value,
+    hideIdle: hideIdle.value,
+    minimumSubagents: minimumSubagents.value,
+    sort: sessionSort.value,
+  }))
+  const projectOptions = computed((): ProjectOption[] => projects.value
+    .map(project => ({ id: project.id, name: project.name }))
+    .sort((a, b) => a.name.localeCompare(b.name)))
 
   const nodeIndex = computed(() => {
     const map = new Map<string, { node: RunNode, parent: string | null }>()
@@ -244,7 +277,7 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
       loading.value = false
 
       if (!selectedKey.value) {
-        const firstProject = filters.visibleProjects.value.find(project => project.roots.length)
+        const firstProject = visibleProjects.value.find(project => project.roots.length)
         if (firstProject) void select(deepestLiveNode(firstProject.roots[0]!).key, firstProject.id)
         return
       }
@@ -412,8 +445,8 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     costs: shallowReadonly(costs),
     loading: shallowReadonly(loading),
     offline: shallowReadonly(offline),
-    visibleProjects: filters.visibleProjects,
-    projectOptions: filters.projectOptions,
+    visibleProjects,
+    projectOptions,
     selectedProject: shallowReadonly(selectedProject),
     selectedKey: shallowReadonly(selectedKey),
     selectedNode,
@@ -424,14 +457,14 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     sessionEventsTruncated: shallowReadonly(sessionEventsTruncated),
     inspectedEvents: shallowReadonly(inspectedStream.events),
     inspectedEventsLoading: shallowReadonly(inspectedEventsLoading),
-    query: filters.query,
-    sourceFilter: filters.sourceFilter,
-    projectFilter: filters.projectFilter,
-    liveOnly: filters.liveOnly,
-    attentionOnly: filters.attentionOnly,
-    hideIdle: filters.hideIdle,
-    minimumSubagents: filters.minimumSubagents,
-    sessionSort: filters.sessionSort,
+    query,
+    sourceFilter,
+    projectFilter,
+    liveOnly,
+    attentionOnly,
+    hideIdle,
+    minimumSubagents,
+    sessionSort,
     followActive,
     followOutput,
     errorsOnly,

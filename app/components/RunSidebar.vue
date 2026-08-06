@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CostSummary, ProjectRuns, SessionSourceStatus } from '#shared/types/run'
-import type { SessionSourceFilter } from '~/composables/useSessionFilters'
+import type { SessionSourceFilter } from '~/atoms/filters'
 import { sessionSourceLabel } from '~/utils/format'
 import { compareRoots, type SessionSort } from '~/utils/session-filter'
 

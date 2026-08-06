@@ -1,4 +1,3 @@
-import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { defineComponent } from 'vue'
@@ -14,6 +13,7 @@ import type { ShallowRef } from 'vue'
 import type { UseLiveRunsOptions, UseLiveRunsReturn } from '~/composables/useLiveRuns'
 import { deferred } from '../fixtures/deferred'
 import { mockLiveApi, urlParam } from '../fixtures/live-api'
+import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
 import {
   eventsResponse,
   runNode,
@@ -23,7 +23,14 @@ import {
 } from '../fixtures/runs'
 
 let component: VueWrapper | null = null
+let mounted: MountedAtoms | null = null
 
+/**
+ * The filters, the preferences, and the range are atoms now, so the harness
+ * needs a registry of its own. Without one `injectRegistry` falls back to a
+ * module-level singleton and these cases share filter state with every other
+ * mounted spec in the worker.
+ */
 async function mountLive(options: UseLiveRunsOptions = {}): Promise<UseLiveRunsReturn> {
   const Harness = defineComponent({
     setup() {
@@ -31,7 +38,8 @@ async function mountLive(options: UseLiveRunsOptions = {}): Promise<UseLiveRunsR
     },
     template: '<div />',
   })
-  component = await mountSuspended(Harness)
+  mounted = await mountWithAtoms(Harness)
+  component = mounted.wrapper
   await flushPromises()
   return (component.vm as unknown as { live: UseLiveRunsReturn }).live
 }
@@ -43,6 +51,8 @@ function bodies(events: Readonly<ShallowRef<TranscriptEvent[]>>): Array<string |
 afterEach(() => {
   component?.unmount()
   component = null
+  mounted?.registry.dispose()
+  mounted = null
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })

@@ -1,22 +1,23 @@
-import { mountSuspended } from '@nuxt/test-utils/runtime'
 import type { VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import { mockLiveApi } from '../fixtures/live-api'
+import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
 import { runNode } from '../fixtures/runs'
 
-let component: VueWrapper | null = null
+let mounted: MountedAtoms | null = null
 
 afterEach(() => {
-  component?.unmount()
-  component = null
+  mounted?.wrapper.unmount()
+  mounted?.registry.dispose()
+  mounted = null
 })
 
 describe('session view controls', () => {
   it('exposes and updates the selected event density', async () => {
     const root = runNode({ subErrors: 0, errors: 0 })
     mockLiveApi(root)
-    const wrapper = component = await mountSuspended(IndexPage, {
+    mounted = await mountWithAtoms(IndexPage, {
       global: {
         stubs: {
           EventFeed: true,
@@ -29,6 +30,7 @@ describe('session view controls', () => {
         },
       },
     })
+    const wrapper = mounted.wrapper
     await vi.waitFor(() => expect(wrapper.get('[data-destination="activity"]').attributes('disabled')).toBeUndefined())
     await wrapper.get('[data-destination="activity"]').trigger('click')
     const density = wrapper.get('[role="group"][aria-label="Event detail"]')
@@ -55,7 +57,7 @@ describe('session view controls', () => {
 describe('focus view', () => {
   async function mountDashboard(): Promise<VueWrapper> {
     mockLiveApi(runNode({ subErrors: 0, errors: 0 }))
-    const wrapper = component = await mountSuspended(IndexPage, {
+    mounted = await mountWithAtoms(IndexPage, {
       global: {
         stubs: {
           EventFeed: true,
@@ -68,6 +70,7 @@ describe('focus view', () => {
         },
       },
     })
+    const wrapper = mounted.wrapper
     await vi.waitFor(() => expect(wrapper.get('[data-destination="activity"]').attributes('disabled')).toBeUndefined())
     return wrapper
   }

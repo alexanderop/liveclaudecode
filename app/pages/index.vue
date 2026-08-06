@@ -665,9 +665,6 @@ onMounted(() => {
               :hours="live.hours.value"
               :events="live.inspectedEvents.value"
               :events-loading="live.inspectedEventsLoading.value"
-              :density="live.density.value"
-              :errors-only="live.errorsOnly.value"
-              :follow-output="live.followOutput.value"
               :current-time="canvasTime"
               :focused-line="focusedLine"
               :focused-file="focusedFile"
@@ -675,8 +672,6 @@ onMounted(() => {
               @close="closeContextPanel"
               @focus-time="focusTime"
               @focus-file="focusFile"
-              @update:density="live.density.value = $event"
-              @update:errors-only="live.errorsOnly.value = $event"
             />
 
             <aside v-else class="session-panel ask-context" aria-label="Ask about this session">

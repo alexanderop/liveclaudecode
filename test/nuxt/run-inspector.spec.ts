@@ -1,9 +1,8 @@
-import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
-import type { VueWrapper } from '@vue/test-utils'
 import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chatAtoms, chatTarget } from '~/atoms/chat'
+import { preferencesAtoms } from '~/atoms/preferences'
 import RunInspector from '~/components/RunInspector.vue'
 import type { RunNode, RunResponse } from '#shared/types/run'
 import { chatActionResponse, chatEventsResponse } from '../fixtures/chat'
@@ -12,12 +11,9 @@ import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
 import { runNode, runResponse, timelineLane, transcriptEvent } from '../fixtures/runs'
 import { recordedCalls, type StubApiHandlers } from '../fixtures/stub-api'
 
-let component: VueWrapper | null = null
 let mounted: MountedAtoms | null = null
 
 afterEach(() => {
-  component?.unmount()
-  component = null
   mounted?.wrapper.unmount()
   // The registry owns the chat poll loop; unmounting only drops the subscription.
   mounted?.registry.dispose()
@@ -107,7 +103,7 @@ describe('run inspector', () => {
       firstTs: '2026-07-28T10:00:00.000Z',
     })
     const root = inspectorNode('root', { children: [child] })
-    const wrapper = component = await mountSuspended(RunInspector, {
+    mounted = await mountWithAtoms(RunInspector, {
       props: {
         run: inspectorRun(root, child),
         root,
@@ -119,11 +115,9 @@ describe('run inspector', () => {
           ts: '2026-07-28T10:00:01.000Z',
         })],
         eventsLoading: false,
-        density: 'normal',
-        errorsOnly: false,
-        followOutput: false,
       },
     })
+    const wrapper = mounted.wrapper
 
     expect(wrapper.get('.inspector-title').text()).toContain('Review accessibility')
     expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('Summary')
@@ -144,13 +138,49 @@ describe('run inspector', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
+  it('drives the shared feed preferences from its own activity controls', async () => {
+    const child = inspectorNode('review', { label: 'Review accessibility' })
+    const root = inspectorNode('root', { children: [child] })
+    mounted = await mountWithAtoms(RunInspector, {
+      props: {
+        run: inspectorRun(root, child),
+        root,
+        selected: child,
+        selectedKey: child.key,
+        project: '/repo',
+        hours: 720,
+        events: [],
+        eventsLoading: false,
+      },
+    })
+    const wrapper = mounted.wrapper
+    const registry = mounted.registry
+
+    await wrapper.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
+
+    // The panel starts on whatever the dashboard is already set to rather than
+    // on a prop somebody remembered to pass down.
+    const [compact, normal] = wrapper.findAll('.segments button')
+    expect(normal!.attributes('aria-pressed')).toBe('true')
+
+    await compact!.trigger('click')
+    await wrapper.get('.quiet-action').trigger('click')
+
+    // Both controls write the app-wide setting, which is what deleted the two
+    // `update:` emits and the two handlers in `index.vue` that fed them back.
+    expect(registry.get(preferencesAtoms.density)).toBe('compact')
+    expect(registry.get(preferencesAtoms.errorsOnly)).toBe(true)
+    expect(wrapper.findComponent({ name: 'EventFeed' }).props('density')).toBe('compact')
+  })
+
   it('renders the subagent prompt and result as highlighted Markdown', async () => {
     const child = inspectorNode('review', {
       label: 'Review accessibility',
       finalText: '## Findings\n\nUse the helper:\n\n```ts\nconst answer = 42\n```\n',
     })
     const root = inspectorNode('root', { children: [child] })
-    const wrapper = component = await mountSuspended(RunInspector, {
+    mounted = await mountWithAtoms(RunInspector, {
       props: {
         run: inspectorRun(root, child),
         root,
@@ -160,11 +190,9 @@ describe('run inspector', () => {
         hours: 720,
         events: [transcriptEvent('Audit the **focus order**', { role: 'user', kind: 'prompt' })],
         eventsLoading: false,
-        density: 'normal',
-        errorsOnly: false,
-        followOutput: false,
       },
     })
+    const wrapper = mounted.wrapper
 
     await wrapper.findAll('[role="tab"]')[4]!.trigger('mousedown', { button: 0 })
     await flushPromises()
@@ -185,7 +213,7 @@ describe('run inspector', () => {
   it('falls back to plain copy when the result tab has nothing recorded', async () => {
     const child = inspectorNode('review', { label: 'Review accessibility' })
     const root = inspectorNode('root', { children: [child] })
-    const wrapper = component = await mountSuspended(RunInspector, {
+    mounted = await mountWithAtoms(RunInspector, {
       props: {
         run: inspectorRun(root, child),
         root,
@@ -195,11 +223,9 @@ describe('run inspector', () => {
         hours: 720,
         events: [],
         eventsLoading: false,
-        density: 'normal',
-        errorsOnly: false,
-        followOutput: false,
       },
     })
+    const wrapper = mounted.wrapper
 
     await wrapper.findAll('[role="tab"]')[4]!.trigger('mousedown', { button: 0 })
     await flushPromises()
@@ -213,7 +239,7 @@ describe('run inspector', () => {
   it('shows a loading state while switching to another agent activity stream', async () => {
     const child = inspectorNode('review', { label: 'Review accessibility' })
     const root = inspectorNode('root', { children: [child] })
-    const wrapper = component = await mountSuspended(RunInspector, {
+    mounted = await mountWithAtoms(RunInspector, {
       props: {
         run: inspectorRun(root, child),
         root,
@@ -223,11 +249,9 @@ describe('run inspector', () => {
         hours: 720,
         events: [],
         eventsLoading: true,
-        density: 'compact',
-        errorsOnly: false,
-        followOutput: false,
       },
     })
+    const wrapper = mounted.wrapper
     await flushPromises()
 
     await wrapper.findAll('[role="tab"]')[1]!.trigger('mousedown', { button: 0 })
@@ -251,9 +275,6 @@ describe('run inspector', () => {
         hours: 720,
         events: [],
         eventsLoading: false,
-        density: 'normal',
-        errorsOnly: false,
-        followOutput: false,
       },
     })
     const wrapper = mounted.wrapper
@@ -299,9 +320,6 @@ describe('run inspector', () => {
         hours: 720,
         events: [],
         eventsLoading: false,
-        density: 'normal',
-        errorsOnly: false,
-        followOutput: false,
       },
     })
     const wrapper = mounted.wrapper
@@ -339,9 +357,6 @@ describe('run inspector', () => {
         hours: 720,
         events: [],
         eventsLoading: false,
-        density: 'normal',
-        errorsOnly: false,
-        followOutput: false,
       },
     })
     const wrapper = mounted.wrapper

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { RunNode, RunResponse, TranscriptEvent } from '#shared/types/run'
-import type { FeedDensity } from '~/composables/useLiveRuns'
+import { useAtomValue } from '@effect/atom-vue'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
+import { preferencesAtoms } from '~/atoms/preferences'
+import { useAtomModel } from '~/composables/atom'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import { mergeAgentFileChanges } from '~/utils/file-changes'
 import { parseTimestamp } from '~/utils/format'
@@ -16,9 +18,6 @@ const props = defineProps<{
   project: string
   events: TranscriptEvent[]
   eventsLoading: boolean
-  density: FeedDensity
-  errorsOnly: boolean
-  followOutput: boolean
   /** Active time range, forwarded to the chat API so it resolves the same catalog. */
   hours: number
   currentTime?: number | null
@@ -29,11 +28,20 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [key: string]
   close: []
-  'update:density': [density: FeedDensity]
-  'update:errorsOnly': [errorsOnly: boolean]
   'focus-time': [timestamp: number | null, line: number | null]
   'focus-file': [path: string | null]
 }>()
+/**
+ * The feed's display settings are app-wide, not this panel's.
+ *
+ * They used to arrive as three props and leave as two `update:` emits, which
+ * `index.vue` handed straight back to the same state its own activity toolbar
+ * wrote — a round trip whose only purpose was that the two toolbars had no
+ * shared owner. `followOutput` has no control here, so it is read-only.
+ */
+const density = useAtomModel(() => preferencesAtoms.density)
+const errorsOnly = useAtomModel(() => preferencesAtoms.errorsOnly)
+const followOutput = useAtomValue(() => preferencesAtoms.followOutput)
 type InspectorTab = 'summary' | 'activity' | 'incidents' | 'files' | 'result' | 'ask'
 const activeTab = ref<InspectorTab>('summary')
 
@@ -122,9 +130,9 @@ watch(() => props.focusedFile, file => { if (file) activeTab.value = 'files' })
     <div v-if="run && root && selected && activeTab === 'activity'" class="inspector-activity">
       <div class="session-panel-controls">
         <div class="segments" role="group" aria-label="Agent event detail">
-          <button v-for="option in (['compact', 'normal', 'raw'] as const)" :key="option" type="button" :class="{ selected: density === option }" :aria-pressed="density === option" @click="emit('update:density', option)">{{ option }}</button>
+          <button v-for="option in (['compact', 'normal', 'raw'] as const)" :key="option" type="button" :class="{ selected: density === option }" :aria-pressed="density === option" @click="density = option">{{ option }}</button>
         </div>
-        <button type="button" class="quiet-action" :class="{ active: errorsOnly }" :aria-pressed="errorsOnly" @click="emit('update:errorsOnly', !errorsOnly)"><UIcon name="i-lucide-circle-alert" />Errors</button>
+        <button type="button" class="quiet-action" :class="{ active: errorsOnly }" :aria-pressed="errorsOnly" @click="errorsOnly = !errorsOnly"><UIcon name="i-lucide-circle-alert" />Errors</button>
       </div>
       <UEmpty
         v-if="eventsLoading"
