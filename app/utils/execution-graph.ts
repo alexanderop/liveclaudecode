@@ -1,7 +1,6 @@
 import dagre from '@dagrejs/dagre'
 import { MarkerType, type Edge, type Node, type XYPosition } from '@vue-flow/core'
-import type { DiagnosticIncident, RunDiagnostics, TimelineLane } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { DiagnosticIncidentWire, RunDiagnosticsWire, RunNodeWire, TimelineLaneWire } from '#shared/schemas/api'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import type { CoordinationAnalysis } from '~/utils/execution-analysis'
 import { flattenRunTree } from '~/utils/execution-analysis'
@@ -14,7 +13,7 @@ export type ExecutionLens = 'all' | 'active' | 'problems' | 'files' | 'coordinat
 export const DEFAULT_EXECUTION_DETAIL: ExecutionDetail = 'all-agents'
 export const DENSE_NESTED_GRAPH_THRESHOLD = 12
 
-export function defaultExecutionDetail(lanes: TimelineLane[]): ExecutionDetail {
+export function defaultExecutionDetail(lanes: ReadonlyArray<TimelineLaneWire>): ExecutionDetail {
   return lanes.length > DENSE_NESTED_GRAPH_THRESHOLD && lanes.some(lane => lane.depth > 1)
     ? 'overview'
     : DEFAULT_EXECUTION_DETAIL
@@ -26,8 +25,8 @@ export interface ExecutionNodeData {
   tools: number
   files: number
   tokens: number
-  firstTs: TimelineLane['firstTs']
-  lastTs: TimelineLane['lastTs']
+  firstTs: TimelineLaneWire['firstTs']
+  lastTs: TimelineLaneWire['lastTs']
   depth: number
   root: boolean
   state: ExecutionNodeState
@@ -68,7 +67,7 @@ export interface ExecutionGraph {
 
 export interface ExecutionGraphContext {
   root?: RunNodeWire | null
-  diagnostics?: RunDiagnostics | null
+  diagnostics?: RunDiagnosticsWire | null
   lens?: ExecutionLens
   asOf?: number | null
   now?: number
@@ -81,7 +80,7 @@ export interface ExecutionGraphContext {
 }
 
 interface LayoutEntry {
-  lane: TimelineLane
+  lane: TimelineLaneWire
   children: LayoutEntry[]
   parent: LayoutEntry | null
 }
@@ -95,8 +94,8 @@ interface AggregateStats {
   issues: number
   changes: number
   files: number
-  firstTs: TimelineLane['firstTs']
-  lastTs: TimelineLane['lastTs']
+  firstTs: TimelineLaneWire['firstTs']
+  lastTs: TimelineLaneWire['lastTs']
   live: boolean
   failed: boolean
   memberKeys: string[]
@@ -204,16 +203,16 @@ function duration(first: string | null, last: string | null, end: number): numbe
 
 function relevantIncidents(
   key: string,
-  incidents: DiagnosticIncident[],
+  incidents: ReadonlyArray<DiagnosticIncidentWire>,
   asOf: number | null,
-): DiagnosticIncident[] {
+): DiagnosticIncidentWire[] {
   return incidents.filter(incident => incident.key === key
     && (asOf === null || time(incident.ts) === null || time(incident.ts)! <= asOf))
 }
 
 function stateFor(
-  lane: TimelineLane,
-  incidents: DiagnosticIncident[] = [],
+  lane: TimelineLaneWire,
+  incidents: ReadonlyArray<DiagnosticIncidentWire> = [],
   asOf: number | null = null,
   node?: RunNodeWire,
 ): ExecutionNodeState {
@@ -246,7 +245,7 @@ export function executionStateLabel(state: ExecutionNodeState): string {
   }[state]
 }
 
-function buildTree(lanes: TimelineLane[]): LayoutEntry[] {
+function buildTree(lanes: ReadonlyArray<TimelineLaneWire>): LayoutEntry[] {
   const roots: LayoutEntry[] = []
   const stack: LayoutEntry[] = []
   for (const lane of lanes) {
@@ -338,7 +337,7 @@ function compactDuration(milliseconds: number): string {
 function summaryFor(
   node: RunNodeWire | undefined,
   state: ExecutionNodeState,
-  incident: DiagnosticIncident | undefined,
+  incident: DiagnosticIncidentWire | undefined,
   pendingChildren: number,
   replaying: boolean,
 ): { summary: string, tool: string } {
@@ -365,7 +364,7 @@ function summaryFor(
 }
 
 export function buildExecutionGraph(
-  lanes: TimelineLane[],
+  lanes: ReadonlyArray<TimelineLaneWire>,
   previousPositions: ReadonlyMap<string, XYPosition> = new Map(),
   direction: ExecutionDirection = 'left-to-right',
   detail: ExecutionDetail = DEFAULT_EXECUTION_DETAIL,

@@ -1,11 +1,10 @@
-import type { DiagnosticIncident, TranscriptEvent } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { DiagnosticIncidentWire, RunNodeWire, TranscriptEventWire } from '#shared/schemas/api'
 
 export interface MergeActivityEventsOptions {
   /** Session-wide transcript events already attributed to their agents. */
-  base: readonly TranscriptEvent[]
+  base: readonly TranscriptEventWire[]
   /** Diagnostic incidents to synthesize into system events. */
-  incidents: readonly DiagnosticIncident[]
+  incidents: readonly DiagnosticIncidentWire[]
   /** Flattened session agents, used to label synthesized incident events. */
   agents: readonly Pick<RunNodeWire, 'key' | 'label' | 'agentType'>[]
   /**
@@ -22,13 +21,13 @@ export interface MergeActivityEventsOptions {
  * have no matching error event (deduplicated by `agentKey:line`), filters by
  * agent, and sorts chronologically with the line number as tiebreaker.
  */
-export function mergeActivityEvents(options: MergeActivityEventsOptions): TranscriptEvent[] {
+export function mergeActivityEvents(options: MergeActivityEventsOptions): TranscriptEventWire[] {
   const { base, incidents, agents, agentKey = 'all' } = options
   const agentByKey = new Map(agents.map(agent => [agent.key, agent]))
   const eventKeys = new Set(
     base.filter(event => event.error).map(event => `${event.agentKey || ''}:${event.line}`),
   )
-  const incidentEvents: TranscriptEvent[] = incidents
+  const incidentEvents: TranscriptEventWire[] = incidents
     .filter(incident => incident.severity !== 'info' && !eventKeys.has(`${incident.key || ''}:${incident.line}`))
     .map(incident => ({
       role: 'system',

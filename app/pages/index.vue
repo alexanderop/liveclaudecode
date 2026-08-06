@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DiagnosticIncident, TranscriptEvent } from '#shared/types/run'
+import type { DiagnosticIncidentWire, TranscriptEventWire } from '#shared/schemas/api'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { mergeActivityEvents } from '~/utils/activity-feed'
 import { findNode, flattenRunTree } from '~/utils/execution-analysis'
@@ -151,7 +151,7 @@ const activityAgentOptions = computed(() => [
   { label: 'Whole session', value: 'all' },
   ...activityAgents.value.map(agent => ({ label: agent.label, value: agent.key })),
 ])
-const activityEvents = structuralComputed<TranscriptEvent[]>(() => {
+const activityEvents = structuralComputed<TranscriptEventWire[]>(() => {
   const root = live.selectedRoot.value
   const base = live.sessionEvents.value.length
     ? live.sessionEvents.value
@@ -227,7 +227,7 @@ function inspectAgent(key: string): void {
     nextTick(() => document.querySelector<HTMLElement>('.inspector-title strong, .inspector-close')?.focus())
   }
 }
-function inspectIncident(incident: DiagnosticIncident): void {
+function inspectIncident(incident: DiagnosticIncidentWire): void {
   if (incident.key) inspectAgent(incident.key)
   focusedLine.value = incident.line
   canvasTime.value = parseTimestamp(incident.ts)

@@ -8,6 +8,12 @@ import {
   type ChatEventsResponseWire,
   CostOverviewResponseSchema,
   type CostOverviewResponseWire,
+  EventsResponseSchema,
+  type EventsResponseWire,
+  RunResponseSchema,
+  type RunResponseWire,
+  SessionEventsResponseSchema,
+  type SessionEventsResponseWire,
   TreeResponseSchema,
   type TreeResponseWire,
 } from '#shared/schemas/api'
@@ -73,6 +79,25 @@ export interface ChatCursorQuery {
   readonly revision: number
 }
 
+/** One agent, in one range. */
+export interface AgentQuery extends RangeQuery {
+  readonly project: string
+  readonly key: string
+}
+
+/** One agent's transcript, after a cursor. */
+export interface EventsQuery extends AgentQuery {
+  /** Index of the first event not yet seen. */
+  readonly since: number
+  /** Transcript revision the cursor belongs to; a mismatch makes the server reset. */
+  readonly revision: number
+}
+
+/** Every agent of one session, merged, capped at `limit` events. */
+export interface SessionEventsQuery extends AgentQuery {
+  readonly limit: number
+}
+
 /**
  * The dashboard's own `/api/**`, as a service.
  *
@@ -88,6 +113,11 @@ export interface ChatCursorQuery {
  */
 export class Api extends Context.Service<Api, {
   readonly tree: (query: RangeQuery) => Effect.Effect<TreeResponseWire, ApiError>
+  readonly run: (query: AgentQuery) => Effect.Effect<RunResponseWire, ApiError>
+  readonly events: (query: EventsQuery) => Effect.Effect<EventsResponseWire, ApiError>
+  readonly sessionEvents: (
+    query: SessionEventsQuery,
+  ) => Effect.Effect<SessionEventsResponseWire, ApiError>
   readonly costs: (query: RangeQuery) => Effect.Effect<CostOverviewResponseWire, ApiError>
   readonly chatEvents: (query: ChatCursorQuery) => Effect.Effect<ChatEventsResponseWire, ApiError>
   readonly chatAction: (
@@ -133,6 +163,9 @@ export class Api extends Context.Service<Api, {
       }
 
       const tree = route('/api/tree', TreeResponseSchema)
+      const run = route('/api/run', RunResponseSchema)
+      const events = route('/api/events', EventsResponseSchema)
+      const sessionEvents = route('/api/session-events', SessionEventsResponseSchema)
       const costs = route('/api/costs', CostOverviewResponseSchema)
       const chatEvents = route('/api/chat', ChatEventsResponseSchema)
 
@@ -176,6 +209,22 @@ export class Api extends Context.Service<Api, {
         // `hours` produces '/api/tree' rather than '/api/tree?hours=undefined'.
         // That is the range handshake's first request, with no branch.
         tree: query => tree({ hours: query.hours }),
+        run: query => run({ project: query.project, key: query.key, hours: query.hours }),
+        events: query =>
+          events({
+            project: query.project,
+            key: query.key,
+            since: query.since,
+            revision: query.revision,
+            hours: query.hours,
+          }),
+        sessionEvents: query =>
+          sessionEvents({
+            project: query.project,
+            key: query.key,
+            limit: query.limit,
+            hours: query.hours,
+          }),
         costs: query => costs({ hours: query.hours }),
         chatEvents: query =>
           chatEvents({

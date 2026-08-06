@@ -1,4 +1,4 @@
-import type { CompactionEvent, ContextUsageSample } from '#shared/types/run'
+import type { CompactionEventWire, ContextUsageSampleWire } from '#shared/schemas/api'
 import type { ChartMarker } from '~/components/charts/chart'
 import { parseTimestamp } from './format'
 
@@ -24,11 +24,11 @@ export interface ContextPoint extends Record<string, string | number | undefined
 export const MIN_CHART_POINTS = 2
 
 /** Total prompt tokens a request sent, which is what fills the context window. */
-export function promptTokens(sample: ContextUsageSample): number {
+export function promptTokens(sample: ContextUsageSampleWire): number {
   return sample.usage.in + sample.usage.cr + sample.usage.cw
 }
 
-export function contextPoints(samples: readonly ContextUsageSample[]): ContextPoint[] {
+export function contextPoints(samples: readonly ContextUsageSampleWire[]): ContextPoint[] {
   return samples.map((sample, index) => ({
     context: promptTokens(sample),
     cacheRead: sample.usage.cr,
@@ -45,8 +45,8 @@ export function contextPoints(samples: readonly ContextUsageSample[]): ContextPo
  * point to sit on and is dropped rather than pinned to the end.
  */
 export function compactionMarkers(
-  samples: readonly ContextUsageSample[],
-  compactions: readonly CompactionEvent[],
+  samples: readonly ContextUsageSampleWire[],
+  compactions: readonly CompactionEventWire[],
 ): ChartMarker[] {
   const markers: ChartMarker[] = []
   for (const compaction of compactions) {
@@ -87,7 +87,7 @@ export interface ContextSummary {
 
 const EXPECTED_STOP_REASONS = new Set(['end_turn', 'tool_use', null])
 
-export function contextSummary(samples: readonly ContextUsageSample[]): ContextSummary {
+export function contextSummary(samples: readonly ContextUsageSampleWire[]): ContextSummary {
   const tiers: string[] = []
   const speeds: string[] = []
   const stops = new Map<string, number>()

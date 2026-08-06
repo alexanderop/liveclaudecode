@@ -3,11 +3,20 @@ import type {
   ChatActionResponseWire,
   ChatEventsResponseWire,
   CostOverviewResponseWire,
+  EventsResponseWire,
+  RunResponseWire,
+  SessionEventsResponseWire,
   TreeResponseWire,
 } from '#shared/schemas/api'
 import type { ChatAction } from '#shared/types/chat'
 import type { TreeResponse } from '#shared/types/run'
-import type { ChatCursorQuery, RangeQuery } from '~/api/api'
+import type {
+  AgentQuery,
+  ChatCursorQuery,
+  EventsQuery,
+  RangeQuery,
+  SessionEventsQuery,
+} from '~/api/api'
 import { Api } from '~/api/api'
 import type { ApiError } from '~/api/errors'
 import { makeCallLog, type CallLog } from './call-log'
@@ -32,6 +41,12 @@ export type StubHandler<Query, A> = (query: Query) => Effect.Effect<A, ApiError>
 export interface StubApiHandlers {
   /** `GET /api/tree`. */
   readonly tree?: StubHandler<RangeQuery, TreeResponseWire>
+  /** `GET /api/run`. */
+  readonly run?: StubHandler<AgentQuery, RunResponseWire>
+  /** `GET /api/events`. */
+  readonly events?: StubHandler<EventsQuery, EventsResponseWire>
+  /** `GET /api/session-events`. */
+  readonly sessionEvents?: StubHandler<SessionEventsQuery, SessionEventsResponseWire>
   /** `GET /api/costs`. */
   readonly costs?: StubHandler<RangeQuery, CostOverviewResponseWire>
   /** `GET /api/chat`. */
@@ -66,6 +81,9 @@ export interface StubChatAction {
 /** What each stubbed endpoint was called with, oldest call first. */
 export interface StubApiCalls {
   readonly tree: CallLog<RangeQuery>
+  readonly run: CallLog<AgentQuery>
+  readonly events: CallLog<EventsQuery>
+  readonly sessionEvents: CallLog<SessionEventsQuery>
   readonly costs: CallLog<RangeQuery>
   readonly chatEvents: CallLog<ChatCursorQuery>
   readonly chatAction: CallLog<StubChatAction>
@@ -105,6 +123,9 @@ const recording = <Query, A>(log: CallLog<Query>, handler: StubHandler<Query, A>
 export const stubApi = (handlers: StubApiHandlers = {}): StubApi => {
   const calls: StubApiCalls = {
     tree: Effect.runSync(makeCallLog<RangeQuery>()),
+    run: Effect.runSync(makeCallLog<AgentQuery>()),
+    events: Effect.runSync(makeCallLog<EventsQuery>()),
+    sessionEvents: Effect.runSync(makeCallLog<SessionEventsQuery>()),
     costs: Effect.runSync(makeCallLog<RangeQuery>()),
     chatEvents: Effect.runSync(makeCallLog<ChatCursorQuery>()),
     chatAction: Effect.runSync(makeCallLog<StubChatAction>()),
@@ -114,6 +135,11 @@ export const stubApi = (handlers: StubApiHandlers = {}): StubApi => {
     calls,
     layer: Layer.mock(Api, {
       ...(handlers.tree && { tree: recording(calls.tree, handlers.tree) }),
+      ...(handlers.run && { run: recording(calls.run, handlers.run) }),
+      ...(handlers.events && { events: recording(calls.events, handlers.events) }),
+      ...(handlers.sessionEvents && {
+        sessionEvents: recording(calls.sessionEvents, handlers.sessionEvents),
+      }),
       ...(handlers.costs && { costs: recording(calls.costs, handlers.costs) }),
       ...(handlers.chatEvents && { chatEvents: recording(calls.chatEvents, handlers.chatEvents) }),
       ...(chatAction && {

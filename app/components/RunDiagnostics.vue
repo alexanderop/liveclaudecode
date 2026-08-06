@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DiagnosticIncident, RunResponse, TurnTiming } from '#shared/types/run'
+import type { DiagnosticIncidentWire, RunResponseWire, TurnTimingWire } from '#shared/schemas/api'
 import ChartArea from '~/components/charts/AreaChart.vue'
 import {
   compactionMarkers,
@@ -9,7 +9,7 @@ import {
 } from '~/utils/context-pressure'
 
 const props = defineProps<{
-  run: RunResponse | null
+  run: RunResponseWire | null
   selectedKey: string | null
 }>()
 
@@ -62,7 +62,7 @@ const health = computed(() => {
 /** Hooks the run recorded, slowest first as the server ordered them. */
 const hooks = computed(() => props.run?.diagnostics.hooks || [])
 
-function incidentIcon(incident: DiagnosticIncident): string {
+function incidentIcon(incident: DiagnosticIncidentWire): string {
   if (incident.category === 'lsp') return 'i-lucide-file-code-2'
   if (incident.category === 'permission') return 'i-lucide-shield-alert'
   if (incident.category === 'timeout') return 'i-lucide-timer-off'
@@ -73,7 +73,7 @@ function incidentIcon(incident: DiagnosticIncident): string {
   return incident.severity === 'error' ? 'i-lucide-circle-x' : 'i-lucide-triangle-alert'
 }
 
-function turnWidth(turn: TurnTiming): string {
+function turnWidth(turn: TurnTimingWire): string {
   return `${Math.max((turn.durationMs / longestTurn.value) * 100, 2)}%`
 }
 </script>

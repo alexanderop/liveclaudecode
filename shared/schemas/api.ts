@@ -1,7 +1,14 @@
 import { Schema } from 'effect'
 import { ChatAgentIdSchema } from '#shared/schemas/chat'
 import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
-import type { CostOverviewResponse, TreeResponse } from '#shared/types/run'
+import type {
+  CostOverviewResponse,
+  EventsResponse,
+  PublicRunNode,
+  RunResponse,
+  SessionEventsResponse,
+  TreeResponse,
+} from '#shared/types/run'
 
 /**
  * Decoders for what `server/api/**` returns.
@@ -267,6 +274,359 @@ export type SessionSourceStatusWire = typeof SessionSourceStatusSchema.Type
 
 const _treeWireAcceptsServerShape: TreeResponseWire = undefined as unknown as TreeResponse
 void _treeWireAcceptsServerShape
+
+/**
+ * `PublicRunNode` — a node as the detail routes return it, without the subtree.
+ *
+ * `RunResponse` and `EventsResponse` carry the selected agent and its session
+ * root this way, which is why the field records exist: the same fields, spread
+ * once with `children`/`subFiles` and once without.
+ */
+export const PublicRunNodeSchema = Schema.Struct({
+  ...TranscriptStatsFields,
+  ...RunNodeOwnFields,
+})
+
+export type PublicRunNodeWire = typeof PublicRunNodeSchema.Type
+
+export const TimelineLaneSchema = Schema.Struct({
+  key: Schema.String,
+  label: Schema.String,
+  agentType: Schema.String,
+  kind: Schema.Literals(['session', 'subagent']),
+  depth: Schema.Number,
+  firstTs: TimestampSchema,
+  lastTs: TimestampSchema,
+  live: Schema.Boolean,
+  errors: Schema.Number,
+  tools: Schema.Number,
+  spawnState: Schema.Literals(['', 'running', 'returned']),
+  files: Schema.Number,
+})
+
+export type TimelineLaneWire = typeof TimelineLaneSchema.Type
+
+/**
+ * One transcript record as the feed renders it.
+ *
+ * Almost every field is optional because one shape covers seven event kinds
+ * across four harnesses; the server omits what a record did not carry rather
+ * than filling in blanks. `optionalKey` rather than `optional`: the payload
+ * arrives as JSON, which cannot express an explicit `undefined`.
+ */
+export const TranscriptEventSchema = Schema.Struct({
+  role: Schema.Literals(['assistant', 'user', 'tool', 'system']),
+  kind: Schema.Literals([
+    'text',
+    'thinking',
+    'tool_use',
+    'tool_result',
+    'prompt',
+    'meta',
+    'system',
+  ]),
+  ts: TimestampSchema,
+  line: Schema.Number,
+  body: Schema.optionalKey(Schema.String),
+  full: Schema.optionalKey(Schema.Number),
+  tool: Schema.optionalKey(Schema.String),
+  id: Schema.optionalKey(Schema.String),
+  summary: Schema.optionalKey(Schema.String),
+  input: Schema.optionalKey(Schema.String),
+  spawn: Schema.optionalKey(Schema.Boolean),
+  write: Schema.optionalKey(Schema.Boolean),
+  error: Schema.optionalKey(Schema.Boolean),
+  model: Schema.optionalKey(Schema.String),
+  usage: Schema.optionalKey(UsageSchema),
+  childKey: Schema.optionalKey(Schema.String),
+  uuid: Schema.optionalKey(Schema.String),
+  parentUuid: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  requestId: Schema.optionalKey(Schema.String),
+  promptId: Schema.optionalKey(Schema.String),
+  sourceUuid: Schema.optionalKey(Schema.String),
+  sidechain: Schema.optionalKey(Schema.Boolean),
+  stopReason: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  effort: Schema.optionalKey(Schema.String),
+  /** Only on the merged, session-wide activity stream. */
+  agentKey: Schema.optionalKey(Schema.String),
+  agentLabel: Schema.optionalKey(Schema.String),
+  agentType: Schema.optionalKey(Schema.String),
+  agentDepth: Schema.optionalKey(Schema.Number),
+})
+
+export type TranscriptEventWire = typeof TranscriptEventSchema.Type
+
+const DiagnosticIncidentSchema = Schema.Struct({
+  id: Schema.String,
+  severity: Schema.Literals(['error', 'warning', 'info']),
+  category: Schema.Literals([
+    'api',
+    'tool',
+    'permission',
+    'hook',
+    'timeout',
+    'interruption',
+    'agent',
+    'truncation',
+    'workflow',
+    'lsp',
+  ]),
+  title: Schema.String,
+  detail: Schema.String,
+  ts: TimestampSchema,
+  line: Schema.Number,
+  tool: Schema.optionalKey(Schema.String),
+  code: Schema.optionalKey(Schema.String),
+  toolUseId: Schema.optionalKey(Schema.String),
+  who: Schema.optionalKey(Schema.String),
+  key: Schema.optionalKey(Schema.String),
+})
+
+export type DiagnosticIncidentWire = typeof DiagnosticIncidentSchema.Type
+
+export const TurnTimingSchema = Schema.Struct({
+  ts: TimestampSchema,
+  durationMs: Schema.Number,
+  messageCount: Schema.Number,
+  pendingAgents: Schema.Number,
+  pendingWorkflows: Schema.Number,
+  who: Schema.optionalKey(Schema.String),
+  key: Schema.optionalKey(Schema.String),
+})
+
+export type TurnTimingWire = typeof TurnTimingSchema.Type
+
+const ContextUsageSampleSchema = Schema.Struct({
+  ts: TimestampSchema,
+  model: Schema.String,
+  effort: Schema.String,
+  usage: UsageSchema,
+  stopReason: Schema.NullOr(Schema.String),
+  messageId: Schema.optionalKey(Schema.String),
+  requestId: Schema.optionalKey(Schema.String),
+  cacheWrite5m: Schema.optionalKey(Schema.Number),
+  cacheWrite1h: Schema.optionalKey(Schema.Number),
+  webSearchRequests: Schema.optionalKey(Schema.Number),
+  serviceTier: Schema.optionalKey(Schema.String),
+  inferenceGeo: Schema.optionalKey(Schema.String),
+  speed: Schema.optionalKey(Schema.String),
+  who: Schema.optionalKey(Schema.String),
+  key: Schema.optionalKey(Schema.String),
+})
+
+export type ContextUsageSampleWire = typeof ContextUsageSampleSchema.Type
+
+export const CompactionEventSchema = Schema.Struct({
+  ts: TimestampSchema,
+  durationMs: Schema.Number,
+  preTokens: Schema.Number,
+  postTokens: Schema.Number,
+  droppedTokens: Schema.Number,
+  preservedMessages: Schema.Number,
+  trigger: Schema.String,
+  who: Schema.optionalKey(Schema.String),
+  key: Schema.optionalKey(Schema.String),
+})
+
+export type CompactionEventWire = typeof CompactionEventSchema.Type
+
+const ToolStatsSchema = Schema.Struct({
+  reads: Schema.Number,
+  searches: Schema.Number,
+  commands: Schema.Number,
+  edits: Schema.Number,
+  linesAdded: Schema.Number,
+  linesRemoved: Schema.Number,
+  other: Schema.Number,
+})
+
+const AgentOutcomeSchema = Schema.Struct({
+  toolUseId: Schema.String,
+  ts: TimestampSchema,
+  status: Schema.String,
+  model: Schema.String,
+  durationMs: Schema.Number,
+  totalTokens: Schema.Number,
+  totalToolUseCount: Schema.Number,
+  stats: ToolStatsSchema,
+  childKey: Schema.optionalKey(Schema.String),
+  label: Schema.optionalKey(Schema.String),
+})
+
+const ChangeDetailSchema = Schema.Struct({
+  toolUseId: Schema.String,
+  ts: TimestampSchema,
+  tool: Schema.String,
+  path: Schema.String,
+  linesAdded: Schema.Number,
+  linesRemoved: Schema.Number,
+  userModified: Schema.Boolean,
+  staleRecovered: Schema.Boolean,
+  who: Schema.optionalKey(Schema.String),
+  key: Schema.optionalKey(Schema.String),
+})
+
+export type ChangeDetailWire = typeof ChangeDetailSchema.Type
+
+const GitEventSchema = Schema.Struct({
+  toolUseId: Schema.String,
+  ts: TimestampSchema,
+  kind: Schema.Literals(['commit', 'push', 'pr', 'branch']),
+  label: Schema.String,
+  url: Schema.optionalKey(Schema.String),
+  who: Schema.optionalKey(Schema.String),
+  key: Schema.optionalKey(Schema.String),
+})
+
+const AgentDiagnosticSummarySchema = Schema.Struct({
+  key: Schema.String,
+  label: Schema.String,
+  agentType: Schema.String,
+  models: Schema.Array(Schema.String),
+  efforts: Schema.Array(Schema.String),
+  usage: UsageSchema,
+  turns: Schema.Number,
+  turnDurationMs: Schema.Number,
+  compactions: Schema.Number,
+  branchPoints: Schema.Number,
+  sidechainRecords: Schema.Number,
+})
+
+const SessionEnvironmentSchema = Schema.Struct({
+  cwd: Schema.String,
+  gitBranch: Schema.String,
+  version: Schema.String,
+  entrypoint: Schema.String,
+  permissionMode: Schema.String,
+  mode: Schema.String,
+})
+
+const CausalSummarySchema = Schema.Struct({
+  records: Schema.Number,
+  recordsWithUuid: Schema.Number,
+  branchPoints: Schema.Number,
+  sidechainRecords: Schema.Number,
+  interruptions: Schema.Number,
+})
+
+const HookSummarySchema = Schema.Struct({
+  name: Schema.String,
+  event: Schema.String,
+  runs: Schema.Number,
+  failures: Schema.Number,
+  totalMs: Schema.Number,
+  maxMs: Schema.Number,
+  lastTs: TimestampSchema,
+})
+
+const BudgetReportSchema = Schema.Struct({
+  usedUsd: Schema.Number,
+  totalUsd: Schema.Number,
+  remainingUsd: Schema.Number,
+  ts: TimestampSchema,
+})
+
+const CostEstimateSchema = Schema.Struct({
+  usd: Schema.Number,
+  pricedRequests: Schema.Number,
+  unpricedRequests: Schema.Number,
+  estimated: Schema.Literal(true),
+})
+
+const SessionParseSummarySchema = Schema.Struct({
+  skipped: Schema.Number,
+  counts: Schema.Struct({
+    invalidJson: Schema.Number,
+    schemaMismatch: Schema.Number,
+    unsupportedShape: Schema.Number,
+  }),
+})
+
+/**
+ * Everything the inspector, the diagnostics view, and the context-pressure
+ * chart read. `hooks`, `budget`, and `cost` are absent for harnesses that do
+ * not report them, which is why they are optional here and nowhere else.
+ */
+const RunDiagnosticsSchema = Schema.Struct({
+  incidents: Schema.Array(DiagnosticIncidentSchema),
+  turns: Schema.Array(TurnTimingSchema),
+  context: Schema.Array(ContextUsageSampleSchema),
+  compactions: Schema.Array(CompactionEventSchema),
+  outcomes: Schema.Array(AgentOutcomeSchema),
+  changes: Schema.Array(ChangeDetailSchema),
+  git: Schema.Array(GitEventSchema),
+  agents: Schema.Array(AgentDiagnosticSummarySchema),
+  environment: SessionEnvironmentSchema,
+  causal: CausalSummarySchema,
+  usage: UsageSchema,
+  cost: Schema.optionalKey(CostEstimateSchema),
+  hooks: Schema.optionalKey(Schema.Array(HookSummarySchema)),
+  budget: Schema.optionalKey(BudgetReportSchema),
+  parse: SessionParseSummarySchema,
+})
+
+export type RunDiagnosticsWire = typeof RunDiagnosticsSchema.Type
+
+/** `GET /api/run`. */
+export const RunResponseSchema = Schema.Struct({
+  key: Schema.String,
+  transcriptPath: Schema.String,
+  lanes: Schema.Array(TimelineLaneSchema),
+  /** `[path, operations]` pairs, ordered by the server. */
+  files: Schema.Array(Schema.Tuple([Schema.String, Schema.Number])),
+  phases: Schema.Array(MilestoneSchema),
+  diagnostics: RunDiagnosticsSchema,
+  node: PublicRunNodeSchema,
+  root: PublicRunNodeSchema,
+})
+
+export type RunResponseWire = typeof RunResponseSchema.Type
+
+/**
+ * `GET /api/events` — one agent's transcript, after a cursor.
+ *
+ * `reset` means the provider rewrote the transcript: the client replaces its
+ * buffer instead of extending it.
+ */
+export const EventsResponseSchema = Schema.Struct({
+  key: Schema.String,
+  events: Schema.Array(TranscriptEventSchema),
+  next: Schema.Number,
+  revision: Schema.Number,
+  reset: Schema.Boolean,
+  node: PublicRunNodeSchema,
+})
+
+export type EventsResponseWire = typeof EventsResponseSchema.Type
+
+/**
+ * `GET /api/session-events` — every agent of one session, merged.
+ *
+ * A snapshot rather than a cursor: `truncated` says the merge hit the per-poll
+ * limit and dropped the oldest events.
+ */
+export const SessionEventsResponseSchema = Schema.Struct({
+  key: Schema.String,
+  events: Schema.Array(TranscriptEventSchema),
+  total: Schema.Number,
+  truncated: Schema.Boolean,
+})
+
+export type SessionEventsResponseWire = typeof SessionEventsResponseSchema.Type
+
+const _publicNodeWireAcceptsServerShape: PublicRunNodeWire =
+  undefined as unknown as PublicRunNode
+void _publicNodeWireAcceptsServerShape
+
+const _runWireAcceptsServerShape: RunResponseWire = undefined as unknown as RunResponse
+void _runWireAcceptsServerShape
+
+const _eventsWireAcceptsServerShape: EventsResponseWire = undefined as unknown as EventsResponse
+void _eventsWireAcceptsServerShape
+
+const _sessionEventsWireAcceptsServerShape: SessionEventsResponseWire =
+  undefined as unknown as SessionEventsResponse
+void _sessionEventsWireAcceptsServerShape
 
 export const ChatStatusSchema = Schema.Literals(['idle', 'starting', 'busy', 'error'])
 

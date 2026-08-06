@@ -34,5 +34,8 @@ export const makePreferencesAtoms = () => ({
   followActive: Atom.make(false).pipe(Atom.keepAlive),
 })
 
+/** The four preference atoms, as one bundle. */
+export type PreferencesAtoms = ReturnType<typeof makePreferencesAtoms>
+
 /** The live instance every component reads. Tests call the factory instead. */
-export const preferencesAtoms = makePreferencesAtoms()
+export const preferencesAtoms: PreferencesAtoms = makePreferencesAtoms()

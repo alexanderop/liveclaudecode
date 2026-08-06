@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import type { RunResponse } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { RunNodeWire, RunResponseWire } from '#shared/schemas/api'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import { splitPath } from '~/utils/file-changes'
 
-const props = defineProps<{ run: RunResponse | null, root?: RunNodeWire | null, selectedKey?: string | null }>()
+const props = defineProps<{ run: RunResponseWire | null, root?: RunNodeWire | null, selectedKey?: string | null }>()
 const scope = ref<'session' | 'agent'>('session')
 
 const sessionNodes = computed(() => {
@@ -15,7 +14,7 @@ const selectedNode = computed(() => sessionNodes.value.find(node => node.key ===
 const commands = computed(() => scope.value === 'session'
   ? sessionNodes.value.flatMap(node => node.commands)
   : selectedNode.value?.commands || [])
-const files = computed<Array<[string, number]>>(() => scope.value === 'session'
+const files = computed<ReadonlyArray<readonly [string, number]>>(() => scope.value === 'session'
   ? props.run?.files || []
   : (selectedNode.value?.files || []).map(file => [file.path, file.ops]))
 const successfulCommands = computed(() => commands.value.filter(command => command.ok === true).length)

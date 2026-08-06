@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import type { RunResponse } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { RunNodeWire, RunResponseWire } from '#shared/schemas/api'
 import { normalizeSessionLabel, normalizeSessionSummary } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import {
@@ -13,7 +12,7 @@ import type { PrimaryWorkspaceKind } from '~/utils/workspace-state'
 
 const props = withDefaults(defineProps<{
   root?: RunNodeWire | null
-  run: RunResponse | null
+  run: RunResponseWire | null
   loading?: boolean
   /** The provider's storage could not be read at all, so nothing loaded. */
   sourceUnavailable?: boolean

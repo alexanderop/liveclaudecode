@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { TranscriptEvent } from '#shared/types/run'
+import type { TranscriptEventWire } from '#shared/schemas/api'
 import type { FeedDensity } from '~/atoms/preferences'
 import { parseTimestamp } from '~/utils/format'
 import { toolUseIcon, toolUseLabel } from '~/utils/tool-display'
 
 const props = defineProps<{
-  events: TranscriptEvent[]
+  events: ReadonlyArray<TranscriptEventWire>
   density: FeedDensity
   errorsOnly: boolean
   followOutput: boolean
@@ -64,7 +64,7 @@ const emptyState = computed(() => {
   }
 })
 
-function isCompact(event: TranscriptEvent): boolean {
+function isCompact(event: TranscriptEventWire): boolean {
   return props.density === 'compact'
     && (event.kind === 'tool_use'
       || event.kind === 'text'
@@ -72,7 +72,7 @@ function isCompact(event: TranscriptEvent): boolean {
       || (event.kind === 'tool_result' && Boolean(event.error)))
 }
 
-function eventClass(event: TranscriptEvent): Record<string, boolean> {
+function eventClass(event: TranscriptEventWire): Record<string, boolean> {
   return {
     user: event.kind === 'prompt',
     assistant: event.kind === 'text',
@@ -85,7 +85,7 @@ function eventClass(event: TranscriptEvent): Record<string, boolean> {
   }
 }
 
-function labelFor(event: TranscriptEvent): string {
+function labelFor(event: TranscriptEventWire): string {
   if (event.spawn) return 'Delegated work'
   if (event.kind === 'prompt') return 'You'
   if (event.kind === 'text') return 'Assistant'
@@ -95,7 +95,7 @@ function labelFor(event: TranscriptEvent): string {
   return toolUseLabel(event.tool)
 }
 
-function iconFor(event: TranscriptEvent): string {
+function iconFor(event: TranscriptEventWire): string {
   if (event.kind === 'tool_result') return event.error ? 'i-lucide-circle-alert' : 'i-lucide-corner-down-right'
   if (event.spawn) return 'i-lucide-git-fork'
   if (event.error) return 'i-lucide-circle-alert'
@@ -123,18 +123,18 @@ const spawnToolIds = computed(() => {
  * tool output, system records, and error text are left verbatim, since markdown
  * rendering would swallow their indentation and punctuation.
  */
-function isProse(event: TranscriptEvent): boolean {
+function isProse(event: TranscriptEventWire): boolean {
   if (event.error) return false
   if (event.kind === 'tool_result') return Boolean(event.id && spawnToolIds.value.has(event.id))
   return event.kind === 'text' || event.kind === 'prompt' || event.kind === 'thinking'
 }
 
-function resultSummary(event: TranscriptEvent): string {
+function resultSummary(event: TranscriptEventWire): string {
   const first = (event.body || '').split('\n').slice(0, 3).join(' ⏎ ')
   return `${first.slice(0, 170) || '(empty)'} · ${formatCount(event.full || 0)} chars`
 }
 
-function focusEvent(event: TranscriptEvent): void {
+function focusEvent(event: TranscriptEventWire): void {
   if (event.agentKey) emit('select', event.agentKey)
   else if (event.childKey) emit('select', event.childKey)
   emit('focus-time', parseTimestamp(event.ts), event.line)

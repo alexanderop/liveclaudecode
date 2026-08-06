@@ -1,5 +1,4 @@
-import type { DiagnosticIncident } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { DiagnosticIncidentWire, RunNodeWire } from '#shared/schemas/api'
 import { parseTimestamp } from './format'
 
 export type AgentDisplayState =
@@ -45,14 +44,14 @@ export function agentDisplayStateLabel(state: AgentDisplayState): string {
 
 export function incidentsForAgent(
   key: string,
-  incidents: readonly DiagnosticIncident[] = [],
-): DiagnosticIncident[] {
+  incidents: readonly DiagnosticIncidentWire[] = [],
+): DiagnosticIncidentWire[] {
   return incidents.filter(incident => incident.key === key && incident.severity !== 'info')
 }
 
 export function canonicalIssueCount(
   nodeErrors: number,
-  incidents: readonly DiagnosticIncident[] = [],
+  incidents: readonly DiagnosticIncidentWire[] = [],
 ): number {
   const incidentErrors = incidents.filter(incident => incident.severity === 'error').length
   const warnings = incidents.filter(incident => incident.severity === 'warning').length
@@ -61,7 +60,7 @@ export function canonicalIssueCount(
 
 export function agentState(
   node: RunNodeWire | null | undefined,
-  incidents: readonly DiagnosticIncident[] = [],
+  incidents: readonly DiagnosticIncidentWire[] = [],
 ): AgentStateSummary {
   if (!node) return { state: 'inactive', label: 'Inactive', detail: 'No activity recorded', issueCount: 0 }
 

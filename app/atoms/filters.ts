@@ -77,5 +77,8 @@ export const makeFiltersAtoms = (tree: TreeAtoms = treeAtoms) => {
   }
 }
 
+/** The filter atoms and their two projections, as one bundle. */
+export type FiltersAtoms = ReturnType<typeof makeFiltersAtoms>
+
 /** The live instance every component reads. Tests call the factory instead. */
-export const filtersAtoms = makeFiltersAtoms()
+export const filtersAtoms: FiltersAtoms = makeFiltersAtoms()

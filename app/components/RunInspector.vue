@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import type { RunResponse, TranscriptEvent } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { RunNodeWire, RunResponseWire, TranscriptEventWire } from '#shared/schemas/api'
 import { useAtomValue } from '@effect/atom-vue'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { preferencesAtoms } from '~/atoms/preferences'
@@ -11,13 +10,13 @@ import { parseTimestamp } from '~/utils/format'
 import { agentState } from '~/utils/session-state'
 
 const props = defineProps<{
-  run: RunResponse | null
+  run: RunResponseWire | null
   root: RunNodeWire | null
   selected: RunNodeWire | null
   selectedKey: string | null
   /** Project of the observed session; scopes the Ask conversation with `selectedKey`. */
   project: string
-  events: TranscriptEvent[]
+  events: ReadonlyArray<TranscriptEventWire>
   eventsLoading: boolean
   /** Active time range, forwarded to the chat API so it resolves the same catalog. */
   hours: number

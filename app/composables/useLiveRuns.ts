@@ -1,55 +1,31 @@
-import type { ComputedRef, Ref, ShallowRef, WritableComputedRef } from 'vue'
-import type {
-  RunResponse,
-  SessionEventsResponse,
-  TranscriptEvent,
-} from '#shared/types/run'
+import type { Ref, WritableComputedRef } from 'vue'
 import type {
   CostSummaryWire,
   ProjectRunsWire,
   RunNodeWire,
+  RunResponseWire,
   SessionSourceStatusWire,
+  TranscriptEventWire,
 } from '#shared/schemas/api'
-import { useAtomValue } from '@effect/atom-vue'
+import { useAtomSet, useAtomValue } from '@effect/atom-vue'
+import { computed } from 'vue'
 import type { SessionSort } from '~/utils/session-filter'
 import type { ProjectOption, SessionSourceFilter } from '~/atoms/filters'
 import type { FeedDensity } from '~/atoms/preferences'
 import type { SessionRangeHours } from '~/atoms/range'
+import { eventsAtoms, eventsKey } from '~/atoms/events'
 import { filtersAtoms } from '~/atoms/filters'
 import { preferencesAtoms } from '~/atoms/preferences'
 import { rangeAtoms } from '~/atoms/range'
+import { runAtoms, runKey } from '~/atoms/run-detail'
+import { selectionAtoms } from '~/atoms/selection'
+import { sessionEventsAtoms, sessionEventsKey } from '~/atoms/session-events'
 import { treeAtoms } from '~/atoms/tree'
 import { useAtomModel } from '~/composables/atom'
-import { createLatestRequestGate } from '~/utils/latest-request-gate'
-import { deepestLiveNode, flattenRunTree } from '~/utils/execution-analysis'
+import { feedValue, toFeedView } from '~/utils/feed-view'
 
-export interface UseLiveRunsOptions {
-  /**
-   * Poll cadence for selected and inspected transcript events, in
-   * milliseconds.
-   *
-   * @default 2000
-   */
-  eventsIntervalMs?: number
-  /**
-   * Poll cadence for the selected run detail, in milliseconds.
-   *
-   * @default 6000
-   */
-  runIntervalMs?: number
-  /**
-   * Poll cadence for the merged session activity feed, in milliseconds.
-   *
-   * @default 4000
-   */
-  sessionEventsIntervalMs?: number
-  /**
-   * Maximum number of merged session events fetched per poll.
-   *
-   * @default 800
-   */
-  sessionEventsLimit?: number
-}
+/** Stable empty, so a feed with nothing in it does not publish a new array. */
+const NO_EVENTS: ReadonlyArray<TranscriptEventWire> = []
 
 export interface UseLiveRunsReturn {
   /** All discovered projects with their session trees, unfiltered. */
@@ -67,25 +43,25 @@ export interface UseLiveRunsReturn {
   /** All known projects as name-sorted select options, unfiltered. */
   readonly projectOptions: Readonly<Ref<ProjectOption[]>>
   /** Project id of the current selection, or `null` before the first load. */
-  readonly selectedProject: Readonly<ShallowRef<string | null>>
+  readonly selectedProject: Readonly<Ref<string | null>>
   /** Key of the selected agent, or `null` before the first load. */
-  readonly selectedKey: Readonly<ShallowRef<string | null>>
+  readonly selectedKey: Readonly<Ref<string | null>>
   /** Tree node of the selected agent, when it exists in the current tree. */
-  readonly selectedNode: ComputedRef<RunNodeWire | null>
+  readonly selectedNode: Readonly<Ref<RunNodeWire | null>>
   /** Root session node the selected agent belongs to. */
-  readonly selectedRoot: ComputedRef<RunNodeWire | null>
+  readonly selectedRoot: Readonly<Ref<RunNodeWire | null>>
   /** Detail payload for the selected agent (lanes, files, diagnostics). */
-  readonly run: Readonly<ShallowRef<RunResponse | null>>
+  readonly run: Readonly<Ref<RunResponseWire | null>>
   /** Transcript events of the selected agent. */
-  readonly events: Readonly<ShallowRef<TranscriptEvent[]>>
+  readonly events: Readonly<Ref<ReadonlyArray<TranscriptEventWire>>>
   /** Merged activity feed across every agent of the selected session. */
-  readonly sessionEvents: Readonly<ShallowRef<TranscriptEvent[]>>
+  readonly sessionEvents: Readonly<Ref<ReadonlyArray<TranscriptEventWire>>>
   /** True when the session feed hit the per-poll limit and dropped events. */
-  readonly sessionEventsTruncated: Readonly<ShallowRef<boolean>>
+  readonly sessionEventsTruncated: Readonly<Ref<boolean>>
   /** Transcript events of the agent opened in the inspector overlay. */
-  readonly inspectedEvents: Readonly<ShallowRef<TranscriptEvent[]>>
+  readonly inspectedEvents: Readonly<Ref<ReadonlyArray<TranscriptEventWire>>>
   /** True while the first inspector poll for a new target is in flight. */
-  readonly inspectedEventsLoading: Readonly<ShallowRef<boolean>>
+  readonly inspectedEventsLoading: Readonly<Ref<boolean>>
   /** Free-text search across projects, session labels, and agents. */
   readonly query: WritableComputedRef<string>
   /** Restrict sessions to one transcript source. */
@@ -121,25 +97,24 @@ export interface UseLiveRunsReturn {
 }
 
 /**
- * Client state for the live dashboard: polls the session tree, the selected
- * run's detail and transcript streams, and keeps every response guarded against
- * stale delivery when the selection or time range changes mid-flight.
+ * The dashboard's state, as `index.vue` still reads it.
  *
- * The filters, the display preferences, and the range are no longer owned here
- * — they are atoms, and what is left of them in the return value is a set of
- * `v-model` bindings `index.vue` still reads through. That indirection goes with
- * this composable in Stage 7.
+ * Nothing is owned here any more. Every member is a binding to an atom, and the
+ * only logic left is the shape of the object — which exists so `index.vue` did
+ * not have to change in the same step as the transport beneath it. Stage 7
+ * deletes this file and moves those bindings into the page.
+ *
+ * The four poll intervals, the `AbortController` pool, the two request gates,
+ * the generation counters, and the `disposed` flag are all gone: a different
+ * query is a different atom, an unobserved atom is interrupted, and an
+ * interrupted `HttpClient` request aborts its own `fetch`.
+ *
+ * Every `useAtom*` call below happens during `setup()`, which is not a style
+ * choice — `injectRegistry` falls back to a module-level singleton rather than
+ * throwing, so a call from `onMounted` or a watcher would silently bind to
+ * global state shared with every other component.
  */
-export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn {
-  const {
-    eventsIntervalMs = 2_000,
-    runIntervalMs = 6_000,
-    sessionEventsIntervalMs = 4_000,
-    sessionEventsLimit = 800,
-  } = options
-
-  // The tree is an atom now: one poll loop, its own cancellation, and a value
-  // that survives a failed refresh. Everything below it here is still a ref.
+export function useLiveRuns(): UseLiveRunsReturn {
   const projects = useAtomValue(() => treeAtoms.projects)
   const sources = useAtomValue(() => treeAtoms.sources)
   const costs = useAtomValue(() => treeAtoms.costs)
@@ -147,17 +122,15 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
   const offline = useAtomValue(() => treeAtoms.offline)
   const visibleProjects = useAtomValue(() => filtersAtoms.visibleProjects)
   const projectOptions = useAtomValue(() => filtersAtoms.projectOptions)
-  const selectedProject = shallowRef<string | null>(null)
-  const selectedKey = shallowRef<string | null>(null)
-  const run = shallowRef<RunResponse | null>(null)
-  const sessionEvents = shallowRef<TranscriptEvent[]>([])
-  const sessionEventsTruncated = shallowRef(false)
-  const inspectedKey = shallowRef<string | null>(null)
-  const inspectedEventsLoading = shallowRef(false)
-  // Filters, display preferences, and the range are app-wide state held in the
-  // atom registry. Every one of these bindings has to be created here, during
-  // `setup()`: `injectRegistry` falls back to a module-level singleton instead
-  // of throwing, so a late call binds to shared global state without a warning.
+
+  const selectedProject = useAtomValue(() => selectionAtoms.project)
+  const selectedKey = useAtomValue(() => selectionAtoms.key)
+  const selectedNode = useAtomValue(() => selectionAtoms.node)
+  const selectedRoot = useAtomValue(() => selectionAtoms.root)
+  const inspectedKey = useAtomValue(() => selectionAtoms.inspected)
+  const setSelection = useAtomSet(() => selectionAtoms.selection)
+  const setInspected = useAtomSet(() => selectionAtoms.inspected)
+
   const query = useAtomModel(() => filtersAtoms.query)
   const sourceFilter = useAtomModel(() => filtersAtoms.source)
   const projectFilter = useAtomModel(() => filtersAtoms.project)
@@ -171,254 +144,26 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
   const errorsOnly = useAtomModel(() => preferencesAtoms.errorsOnly)
   const density = useAtomModel(() => preferencesAtoms.density)
   const hours = useAtomModel(() => rangeAtoms.hours)
-  // The range the user picked, as opposed to the one in effect. Only a change
-  // to this one means "show me a different window".
-  const explicitHours = useAtomValue(() => rangeAtoms.explicit)
-  let disposed = false
-  const requestControllers = new Set<AbortController>()
-  const runRequests = createLatestRequestGate()
-  const sessionEventRequests = createLatestRequestGate()
 
-  const nodeIndex = computed(() => {
-    const map = new Map<string, { node: RunNodeWire, parent: string | null }>()
-    const visit = (
-      project: string,
-      nodes: ReadonlyArray<RunNodeWire>,
-      parent: string | null,
-    ): void => {
-      nodes.forEach((node) => {
-        map.set(`${project}\0${node.key}`, { node, parent })
-        visit(project, node.children, node.key)
-      })
-    }
-    projects.value.forEach(project => visit(project.id, project.roots, null))
-    return map
-  })
-
-  const selectedIndexKey = computed(() =>
-    selectedProject.value && selectedKey.value
-      ? `${selectedProject.value}\0${selectedKey.value}`
-      : null,
-  )
-
-  const selectedNode = computed(() =>
-    selectedIndexKey.value ? nodeIndex.value.get(selectedIndexKey.value)?.node || null : null,
-  )
-
-  const selectedRoot = computed(() => {
-    if (!selectedIndexKey.value || !selectedProject.value) return null
-    let current = nodeIndex.value.get(selectedIndexKey.value)
-    while (current?.parent) current = nodeIndex.value.get(`${selectedProject.value}\0${current.parent}`)
-    return current?.node || null
-  })
-
-  /**
-   * One detail request.
-   *
-   * No longer touches `offline`: that is the tree's poll now, which is the only
-   * one that runs unconditionally and therefore the only one that can tell
-   * "the server is gone" from "nothing is selected".
-   */
-  async function request<T>(url: string): Promise<T | null> {
-    if (disposed) return null
-    const controller = new AbortController()
-    requestControllers.add(controller)
-    try {
-      const result = await $fetch(url, { signal: controller.signal })
-      if (disposed) return null
-      return result as T
-    } catch {
-      return null
-    } finally {
-      requestControllers.delete(controller)
-    }
-  }
-
-  /**
-   * What the tree poll used to do with each response, now that it does not
-   * deliver one: pick something on first load, and follow the newest live agent.
-   *
-   * Both become atoms in Stage 6. Until then this watcher stands in for the tail
-   * of `loadTree`, and fires on the same cadence — every response is a fresh
-   * array, so `projects` changes identity on every poll.
-   */
-  function reconcileSelection(): void {
-    if (!selectedKey.value) {
-      const firstProject = visibleProjects.value.find(project => project.roots.length)
-      if (firstProject) void select(deepestLiveNode(firstProject.roots[0]!).key, firstProject.id)
-      return
-    }
-    if (followActive.value && selectedRoot.value) {
-      const live = flattenRunTree(selectedRoot.value)
-        .filter(node => node.live)
-        .sort((a, b) => b.mtime - a.mtime)[0]
-      if (live && live.key !== selectedKey.value) void select(live.key, selectedProject.value!)
-    }
-  }
-
-  async function loadRun(): Promise<void> {
-    const key = selectedKey.value
-    const project = selectedProject.value
-    if (!key || !project) return
-    const requestedHours = hours.value
-    const requestKey = `${project}\0${key}\0${requestedHours}`
-    const pending = runRequests.start(requestKey)
-    if (!pending) return
-    try {
-      const response = await request<RunResponse>(
-        `/api/run?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&hours=${requestedHours}`,
-      )
-      if (
-        response
-        && runRequests.isCurrent(pending)
-        && selectedKey.value === key
-        && selectedProject.value === project
-        && hours.value === requestedHours
-      ) run.value = response
-    } finally {
-      runRequests.settle(pending)
-    }
-  }
-
-  const selectedStream = useEventStream({
-    key: () => selectedKey.value,
-    project: () => selectedProject.value,
-    hours: () => hours.value,
-    request,
-  })
-
-  async function pollSessionEvents(): Promise<void> {
-    const key = selectedRoot.value?.key || selectedKey.value
-    const project = selectedProject.value
-    if (!key || !project) return
-    const requestedHours = hours.value
-    const requestKey = `${project}\0${key}\0${requestedHours}`
-    const pending = sessionEventRequests.start(requestKey)
-    if (!pending) return
-    try {
-      const response = await request<SessionEventsResponse>(
-        `/api/session-events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&limit=${sessionEventsLimit}&hours=${requestedHours}`,
-      )
-      if (
-        !response
-        || !sessionEventRequests.isCurrent(pending)
-        || (selectedRoot.value?.key || selectedKey.value) !== key
-        || selectedProject.value !== project
-        || hours.value !== requestedHours
-      ) return
-      sessionEvents.value = response.events
-      sessionEventsTruncated.value = response.truncated
-    } finally {
-      sessionEventRequests.settle(pending)
-    }
-  }
-
-  const inspectedStream = useEventStream({
-    key: () => inspectedKey.value,
-    project: () => selectedProject.value,
-    hours: () => hours.value,
-    request,
-    settled: (key) => {
-      if (inspectedKey.value === key) inspectedEventsLoading.value = false
-      else if (inspectedKey.value) void inspectedStream.poll()
-    },
-  })
-
-  async function inspect(key: string): Promise<void> {
-    if (!selectedProject.value) return
-    if (inspectedKey.value !== key) {
-      inspectedKey.value = key
-      inspectedStream.reset()
-      inspectedEventsLoading.value = true
-    }
-    await inspectedStream.poll()
-  }
-
-  function clearInspection(): void {
-    inspectedKey.value = null
-    inspectedStream.reset()
-    inspectedEventsLoading.value = false
-  }
-
-  async function select(key: string, project = selectedProject.value): Promise<void> {
-    if (!project) return
-    if (key === selectedKey.value && project === selectedProject.value && run.value) return
-    clearInspection()
-    selectedProject.value = project
-    selectedKey.value = key
-    selectedStream.reset()
-    sessionEvents.value = []
-    sessionEventsTruncated.value = false
-    run.value = null
-    await Promise.all([selectedStream.poll(), loadRun(), pollSessionEvents()])
-  }
-
-  /** A range the *user* chose invalidates everything scoped to the old one. */
-  function discardRangeScopedState(): void {
-    selectedProject.value = null
-    selectedKey.value = null
-    run.value = null
-    selectedStream.reset()
-    runRequests.invalidate()
-    sessionEventRequests.invalidate()
-    sessionEvents.value = []
-    sessionEventsTruncated.value = false
-    clearInspection()
-  }
-
-  /**
-   * One watcher for both, because the order between them is load-bearing: a
-   * range change discards the selection and then picks a new one, and two
-   * separate watchers would have that order decided by which was registered
-   * first.
-   *
-   * The tree itself is not reset here. It re-keys on the explicit range and
-   * rebuilds its own loop, which is why the sidebar keeps the previous range's
-   * sessions on screen for the moment the new ones take to arrive instead of
-   * blanking, and why this fires again when they do — every response is a fresh
-   * array, so `projects` changes identity on every poll.
-   *
-   * Watching the *explicit* choice rather than the effective range is what the
-   * `rangeInitialized` flag used to do: adopting the server's range on first
-   * load changes what the sidebar displays but is not a change of range, and
-   * must not throw away the selection the same response just produced.
-   *
-   * `immediate` because the feed can already hold a value by the time this is
-   * registered — the atom's stream runs to its first emission synchronously when
-   * the request resolves synchronously, which is every mounted test with a
-   * stubbed `Api`.
-   */
-  watch(
-    [projects, explicitHours] as const,
-    ([, chosen], previous) => {
-      if (previous && chosen !== previous[1]) discardRangeScopedState()
-      reconcileSelection()
-    },
-    { immediate: true },
-  )
-
-  const pollers = [
-    useIntervalFn(() => {
-      void selectedStream.poll()
-      void inspectedStream.poll()
-    }, eventsIntervalMs, { immediate: false }),
-    useIntervalFn(loadRun, runIntervalMs, { immediate: false }),
-    useIntervalFn(pollSessionEvents, sessionEventsIntervalMs, { immediate: false }),
-  ]
-
-  onMounted(() => {
-    pollers.forEach(poller => poller.resume())
-  })
-
-  tryOnScopeDispose(() => {
-    disposed = true
-    runRequests.invalidate()
-    sessionEventRequests.invalidate()
-    selectedStream.reset()
-    inspectedStream.reset()
-    requestControllers.forEach(controller => controller.abort())
-    requestControllers.clear()
-  })
+  // Each thunk reads the refs above, so the subscription follows the selection:
+  // choosing another agent swaps which atom this component is bound to, and the
+  // node behind the old one is torn down with its in-flight request.
+  const runResult = useAtomValue(() =>
+    runAtoms.run(runKey(selectedProject.value, selectedKey.value, hours.value)))
+  const eventsResult = useAtomValue(() =>
+    eventsAtoms.events(eventsKey(selectedProject.value, selectedKey.value, hours.value)))
+  const inspectedResult = useAtomValue(() =>
+    eventsAtoms.events(eventsKey(selectedProject.value, inspectedKey.value, hours.value)))
+  // Keyed on the session *root*: `/api/session-events` merges every agent
+  // beneath it, so selecting a subagent must not restart this feed.
+  const sessionResult = useAtomValue(() =>
+    sessionEventsAtoms.sessionEvents(
+      sessionEventsKey(
+        selectedProject.value,
+        selectedRoot.value?.key ?? selectedKey.value,
+        hours.value,
+      ),
+    ))
 
   return {
     projects,
@@ -428,16 +173,22 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     offline,
     visibleProjects,
     projectOptions,
-    selectedProject: shallowReadonly(selectedProject),
-    selectedKey: shallowReadonly(selectedKey),
+    selectedProject,
+    selectedKey,
     selectedNode,
     selectedRoot,
-    run: shallowReadonly(run),
-    events: shallowReadonly(selectedStream.events),
-    sessionEvents: shallowReadonly(sessionEvents),
-    sessionEventsTruncated: shallowReadonly(sessionEventsTruncated),
-    inspectedEvents: shallowReadonly(inspectedStream.events),
-    inspectedEventsLoading: shallowReadonly(inspectedEventsLoading),
+    run: computed(() => feedValue(runResult.value, response => response, null)),
+    events: computed(() => feedValue(eventsResult.value, events => events, NO_EVENTS)),
+    sessionEvents: computed(() =>
+      feedValue(sessionResult.value, response => response.events, NO_EVENTS)),
+    sessionEventsTruncated: computed(() =>
+      feedValue(sessionResult.value, response => response.truncated, false)),
+    inspectedEvents: computed(() => feedValue(inspectedResult.value, events => events, NO_EVENTS)),
+    // Only while something is inspected: with the overlay closed the feed is
+    // gated off and sits at `loading` forever, which is not a spinner anybody
+    // should see.
+    inspectedEventsLoading: computed(() =>
+      Boolean(inspectedKey.value) && toFeedView(inspectedResult.value).tag === 'loading'),
     query,
     sourceFilter,
     projectFilter,
@@ -451,8 +202,19 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     errorsOnly,
     density,
     hours,
-    select,
-    inspect,
-    clearInspection,
+    /**
+     * Selecting is one write. The detail, the transcript, and the session feed
+     * follow because they are keyed on it — there is nothing here to clear, and
+     * nothing to await: the caller used to await three requests it then ignored.
+     */
+    select: (key, project = selectedProject.value) => {
+      if (project) setSelection({ project, key })
+      return Promise.resolve()
+    },
+    inspect: (key) => {
+      setInspected(key)
+      return Promise.resolve()
+    },
+    clearInspection: () => setInspected(null),
   }
 }

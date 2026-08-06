@@ -24,8 +24,7 @@ import {
   watch,
 } from 'vue'
 import { useDocumentVisibility, useIntervalFn, useTimeoutFn } from '@vueuse/core'
-import type { DiagnosticIncident, RunResponse } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { DiagnosticIncidentWire, RunNodeWire, RunResponseWire } from '#shared/schemas/api'
 import ExecutionAgentNode from '~/components/ExecutionAgentNode.vue'
 import { provideExecutionCanvas } from '~/composables/useExecutionCanvas'
 import {
@@ -44,7 +43,7 @@ import { structuralComputed, structurallyEqual } from '~/utils/structural-comput
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 const props = defineProps<{
-  run: RunResponse | null
+  run: RunResponseWire | null
   root?: RunNodeWire | null
   selectedKey: string | null
   inspectorOpen?: boolean
@@ -54,7 +53,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [key: string]
   deselect: []
-  'inspect-incident': [incident: DiagnosticIncident]
+  'inspect-incident': [incident: DiagnosticIncidentWire]
   'focus-time': [timestamp: number | null]
   'focus-file': [path: string | null]
   'open-activity': []

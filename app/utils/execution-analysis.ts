@@ -1,5 +1,4 @@
-import type { RunResponse } from '#shared/types/run'
-import type { RunNodeWire } from '#shared/schemas/api'
+import type { RunNodeWire, RunResponseWire } from '#shared/schemas/api'
 import { parseTimestamp } from './format'
 
 export type CoordinationFindingKind =
@@ -90,7 +89,7 @@ function shortPath(path: string): string {
 
 export function analyzeCoordination(
   root: RunNodeWire | null,
-  run: RunResponse | null,
+  run: RunResponseWire | null,
   now = Date.now(),
 ): CoordinationAnalysis {
   const nodes = flattenRunTree(root)
