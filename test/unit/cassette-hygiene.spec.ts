@@ -6,6 +6,7 @@ import {
   collectEnvironmentSecrets,
   ENTROPY_THRESHOLD_BITS,
   formatResidueHits,
+  GENERIC_IDENTITIES,
   type NamedSecret,
   type ScanChunk,
   scanChunks,
@@ -91,6 +92,19 @@ describe('cassette hygiene', () => {
       )
     })
   }
+
+  it('never treats a generic environment identity as a secret', () => {
+    // An agent container runs as `root` with `Claude` as its git user.name.
+    // Both are substrings of ordinary cassette content (`workspace_roots`,
+    // `claude-opus-5`), so admitting them as environment secrets fails every
+    // cassette on such a runner while identifying nobody.
+    for (const secret of secrets) {
+      assert.ok(
+        !GENERIC_IDENTITIES.has(secret.value.toLowerCase()),
+        `Generic identity leaked into the secret list: ${secret.name}`,
+      )
+    }
+  })
 
   it('separates opaque model state from ordinary identifiers by entropy', () => {
     // A detector nobody tests is a detector a refactor can silently break, and

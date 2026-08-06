@@ -5,6 +5,13 @@ import { defineConfig, devices } from '@playwright/test'
 const baseURL = 'http://127.0.0.1:5678'
 const fixturesDirectory = join(import.meta.dirname, 'test/fixtures/browser')
 
+/**
+ * Sandboxed agent environments pre-install a Chromium at a fixed path and
+ * block Playwright's own browser download. `LCC_CHROMIUM` points the suite at
+ * that binary; unset, Playwright uses its managed browser as before.
+ */
+const executablePath = process.env.LCC_CHROMIUM || undefined
+
 export default defineConfig({
   testDir: './test/browser',
   fullyParallel: true,
@@ -33,6 +40,6 @@ export default defineConfig({
   },
   projects: [{
     name: 'chromium',
-    use: { ...devices['Desktop Chrome'] },
+    use: { ...devices['Desktop Chrome'], launchOptions: { executablePath } },
   }],
 })

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Prepare a fresh agent environment to run liveclaudecode end to end.
+#
+# Written from a live end-to-end run in a sandboxed agent container; every
+# step exists because skipping it broke something there. After this script,
+# all of the following work:
+#
+#   ./bin/liveclaudecode                   the dashboard, serving the build
+#   pnpm lint / test / test:types          the fast quality gates
+#   pnpm test:browser:prebuilt             Playwright against the build
+#   xvfb-run -a pnpm test:desktop:prebuilt Electron shell smoke tests
+#
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+log() { printf '\n== %s\n' "$*"; }
+
+log 'toolchain'
+node --version
+if ! command -v pnpm >/dev/null 2>&1; then
+  corepack enable
+fi
+pnpm --version
+
+log 'dependencies'
+pnpm install --frozen-lockfile
+
+# pnpm's build-script gating can leave the Electron runtime undownloaded even
+# though pnpm-workspace.yaml allows the download. The desktop shell and the
+# desktop Playwright suite launch the real binary.
+if [ ! -x node_modules/electron/dist/electron ]; then
+  log 'electron runtime'
+  node node_modules/electron/install.js
+fi
+
+log 'chromium for playwright'
+# Three cases, in order: the pinned browser build is already installed
+# (nothing to do); a sandbox pre-installs a Chromium at a fixed path and
+# discourages re-downloading (point the suite at it with LCC_CHROMIUM,
+# which playwright.config.ts honors); otherwise download the pinned build.
+missing=0
+while IFS= read -r location; do
+  [ -d "$location" ] || missing=1
+done < <(pnpm exec playwright install --dry-run chromium \
+  | sed -n 's/^ *Install location: *//p')
+if [ "$missing" -eq 0 ]; then
+  echo 'pinned browser build already installed'
+elif [ -x "${PLAYWRIGHT_BROWSERS_PATH:-/nonexistent}/chromium" ]; then
+  echo "using pre-installed sandbox Chromium; run browser tests with:"
+  echo "  LCC_CHROMIUM=$PLAYWRIGHT_BROWSERS_PATH/chromium pnpm test:browser:prebuilt"
+else
+  pnpm exec playwright install chromium
+fi
+
+log 'production build'
+pnpm build
+
+log 'ready'
+if [ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
+  echo 'headless environment: prefix desktop tests with `xvfb-run -a`'
+fi
+echo 'start the dashboard with ./bin/liveclaudecode (serves the build on :8787)'

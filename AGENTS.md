@@ -34,6 +34,13 @@ source code.
 ## Working in this repository
 
 - Use Node 22+ and pnpm 11.
+- In a fresh environment, run `./.agents/setup` once. It installs dependencies,
+  fetches the Electron runtime if pnpm's build-script gating skipped it, sorts
+  out a Chromium for Playwright, and produces the production build. In a
+  sandbox that pre-installs a Chromium and blocks browser downloads, run the
+  browser suite with `LCC_CHROMIUM=<path-to-chromium> pnpm
+  test:browser:prebuilt`; on a machine with no display, prefix desktop tests
+  with `xvfb-run -a`.
 - Inspect the nearest implementation and tests before changing behavior.
 - Keep the server read-only with respect to Claude transcript data.
 - Run the narrowest relevant test while iterating. Before handing off a change,
