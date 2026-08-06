@@ -480,7 +480,8 @@ export interface TreeResponse {
   sources: SessionSourceStatus[]
   now: number
   hours: number
-  costs?: CostSummary
+  /** Always present: `listSessions` summarises costs unconditionally. */
+  costs: CostSummary
 }
 
 export interface ProjectRuns {

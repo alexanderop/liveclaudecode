@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import type { CostSummary, ProjectRuns, SessionSourceStatus } from '#shared/types/run'
+import type { CostSummaryWire, ProjectRunsWire, SessionSourceStatusWire } from '#shared/schemas/api'
 import type { SessionSourceFilter } from '~/atoms/filters'
 import { sessionSourceLabel } from '~/utils/format'
 import { compareRoots, type SessionSort } from '~/utils/session-filter'
 
 const props = defineProps<{
-  projects: ProjectRuns[]
-  allProjects: ProjectRuns[]
-  sources: SessionSourceStatus[]
-  costs?: CostSummary | null
-  projectOptions: Array<{ id: string, name: string }>
+  projects: ReadonlyArray<ProjectRunsWire>
+  allProjects: ReadonlyArray<ProjectRunsWire>
+  sources: ReadonlyArray<SessionSourceStatusWire>
+  costs?: CostSummaryWire | null
+  projectOptions: ReadonlyArray<{ id: string, name: string }>
   loading: boolean
   selectedProject: string | null
   selectedKey: string | null

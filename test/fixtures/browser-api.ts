@@ -7,7 +7,7 @@ import type {
   TranscriptEvent,
   TreeResponse,
 } from '#shared/types/run'
-import { runNode, runResponse, transcriptEvent } from './runs'
+import { costSummary, runNode, runResponse, transcriptEvent } from './runs'
 
 export const browserProject = '/mock-project'
 
@@ -42,6 +42,7 @@ export function browserTree(
     }],
     now: Date.parse('2026-07-31T10:00:00.000Z'),
     hours: 168,
+    costs: costSummary(),
   }
 }
 

@@ -1,11 +1,7 @@
 import dagre from '@dagrejs/dagre'
 import { MarkerType, type Edge, type Node, type XYPosition } from '@vue-flow/core'
-import type {
-  DiagnosticIncident,
-  RunDiagnostics,
-  RunNode,
-  TimelineLane,
-} from '#shared/types/run'
+import type { DiagnosticIncident, RunDiagnostics, TimelineLane } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import type { CoordinationAnalysis } from '~/utils/execution-analysis'
 import { flattenRunTree } from '~/utils/execution-analysis'
@@ -71,7 +67,7 @@ export interface ExecutionGraph {
 }
 
 export interface ExecutionGraphContext {
-  root?: RunNode | null
+  root?: RunNodeWire | null
   diagnostics?: RunDiagnostics | null
   lens?: ExecutionLens
   asOf?: number | null
@@ -219,7 +215,7 @@ function stateFor(
   lane: TimelineLane,
   incidents: DiagnosticIncident[] = [],
   asOf: number | null = null,
-  node?: RunNode,
+  node?: RunNodeWire,
 ): ExecutionNodeState {
   const laneIncidents = relevantIncidents(lane.key, incidents, asOf)
   if (asOf !== null) {
@@ -277,7 +273,7 @@ function descendants(entry: LayoutEntry): LayoutEntry[] {
 function aggregate(
   entry: LayoutEntry,
   context: ExecutionGraphContext,
-  nodeByKey: ReadonlyMap<string, RunNode>,
+  nodeByKey: ReadonlyMap<string, RunNodeWire>,
 ): AggregateStats {
   const entries = descendants(entry)
   const incidents = context.diagnostics?.incidents || []
@@ -340,7 +336,7 @@ function compactDuration(milliseconds: number): string {
 }
 
 function summaryFor(
-  node: RunNode | undefined,
+  node: RunNodeWire | undefined,
   state: ExecutionNodeState,
   incident: DiagnosticIncident | undefined,
   pendingChildren: number,

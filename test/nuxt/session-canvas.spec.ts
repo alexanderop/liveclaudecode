@@ -1,11 +1,13 @@
-import { mockComponent, mountSuspended } from '@nuxt/test-utils/runtime'
+import { mockComponent } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import { mockLiveApi, urlParam } from '../fixtures/live-api'
-import { eventsResponse, runNode, runResponse, timelineLane } from '../fixtures/runs'
+import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
+import { eventsResponse, runNode, runResponse, timelineLane, treeResponse } from '../fixtures/runs'
+import { servingTree } from '../fixtures/stub-api'
 
 // The page mounts the canvas lazily, and a `stubs` entry cannot intercept an
 // async component by name — it has no name until its module resolves. Replacing
@@ -23,11 +25,12 @@ mockComponent('RunCanvas', {
   `,
 })
 
-let component: VueWrapper | null = null
+let mounted: MountedAtoms | null = null
 
 afterEach(() => {
-  component?.unmount()
-  component = null
+  mounted?.wrapper.unmount()
+  mounted?.registry.dispose()
+  mounted = null
   window.localStorage.clear()
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
 })
@@ -110,8 +113,9 @@ const InspectorStub = defineComponent({
   `,
 })
 
-async function mountCanvasPage() {
-  const wrapper = await mountSuspended(IndexPage, {
+async function mountCanvasPage(root: ReturnType<typeof canvasFixtures>['root']) {
+  mounted = await mountWithAtoms(IndexPage, {
+    api: servingTree(treeResponse(root)),
     global: {
       stubs: {
         EventFeed: true,
@@ -124,8 +128,7 @@ async function mountCanvasPage() {
       },
     },
   })
-  component = wrapper
-  return wrapper
+  return mounted.wrapper
 }
 
 // The canvas is mounted lazily, so it resolves a tick after the click that
@@ -139,8 +142,9 @@ async function openMap(wrapper: VueWrapper): Promise<void> {
 describe('persistent session canvas', () => {
   it('resizes and remembers both docked sidebars', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
-    mockCanvasApi(canvasFixtures())
-    const wrapper = await mountCanvasPage()
+    const fixtures = canvasFixtures()
+    mockCanvasApi(fixtures)
+    const wrapper = await mountCanvasPage(fixtures.root)
 
     const sidebarHandle = wrapper.get('button[aria-label="Resize session browser"]')
     expect(sidebarHandle.attributes('aria-valuenow')).toBe('272')
@@ -171,7 +175,7 @@ describe('persistent session canvas', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
     const fixtures = canvasFixtures()
     const fetch = mockCanvasApi(fixtures)
-    const wrapper = await mountCanvasPage()
+    const wrapper = await mountCanvasPage(fixtures.root)
     await flushPromises()
     await openMap(wrapper)
 
@@ -198,8 +202,9 @@ describe('persistent session canvas', () => {
   })
 
   it('shows one primary workspace and restores the same canvas after an Activity round trip', async () => {
-    mockCanvasApi(canvasFixtures())
-    const wrapper = await mountCanvasPage()
+    const fixtures = canvasFixtures()
+    mockCanvasApi(fixtures)
+    const wrapper = await mountCanvasPage(fixtures.root)
     await openMap(wrapper)
     const originalCanvas = wrapper.get('.canvas-stub').element
 

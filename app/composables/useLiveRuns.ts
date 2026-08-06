@@ -1,14 +1,16 @@
-import type { ComputedRef, ShallowRef, WritableComputedRef } from 'vue'
+import type { ComputedRef, Ref, ShallowRef, WritableComputedRef } from 'vue'
 import type {
-  CostSummary,
-  ProjectRuns,
-  RunNode,
   RunResponse,
   SessionEventsResponse,
-  SessionSourceStatus,
   TranscriptEvent,
-  TreeResponse,
 } from '#shared/types/run'
+import type {
+  CostSummaryWire,
+  ProjectRunsWire,
+  RunNodeWire,
+  SessionSourceStatusWire,
+} from '#shared/schemas/api'
+import { useAtomValue } from '@effect/atom-vue'
 import type { SessionSort } from '~/utils/session-filter'
 import type { ProjectOption, SessionSourceFilter } from '~/atoms/filters'
 import type { FeedDensity } from '~/atoms/preferences'
@@ -16,17 +18,12 @@ import type { SessionRangeHours } from '~/atoms/range'
 import { filtersAtoms } from '~/atoms/filters'
 import { preferencesAtoms } from '~/atoms/preferences'
 import { rangeAtoms } from '~/atoms/range'
+import { treeAtoms } from '~/atoms/tree'
 import { useAtomModel } from '~/composables/atom'
 import { createLatestRequestGate } from '~/utils/latest-request-gate'
 import { deepestLiveNode, flattenRunTree } from '~/utils/execution-analysis'
 
 export interface UseLiveRunsOptions {
-  /**
-   * Poll cadence for the session tree, in milliseconds.
-   *
-   * @default 4000
-   */
-  treeIntervalMs?: number
   /**
    * Poll cadence for selected and inspected transcript events, in
    * milliseconds.
@@ -56,27 +53,27 @@ export interface UseLiveRunsOptions {
 
 export interface UseLiveRunsReturn {
   /** All discovered projects with their session trees, unfiltered. */
-  readonly projects: Readonly<ShallowRef<ProjectRuns[]>>
+  readonly projects: Readonly<Ref<ReadonlyArray<ProjectRunsWire>>>
   /** Per-source scanner status, e.g. a provider that failed to load. */
-  readonly sources: Readonly<ShallowRef<SessionSourceStatus[]>>
+  readonly sources: Readonly<Ref<ReadonlyArray<SessionSourceStatusWire>>>
   /** Aggregated cost summary for the visible range, when available. */
-  readonly costs: Readonly<ShallowRef<CostSummary | null>>
+  readonly costs: Readonly<Ref<CostSummaryWire | null>>
   /** True until the first tree response (or failure) arrives. */
-  readonly loading: Readonly<ShallowRef<boolean>>
-  /** True while the server is unreachable; cleared by the next success. */
-  readonly offline: Readonly<ShallowRef<boolean>>
+  readonly loading: Readonly<Ref<boolean>>
+  /** True while the *tree* poll is failing; cleared by its next success. */
+  readonly offline: Readonly<Ref<boolean>>
   /** Projects with the sidebar filters applied. */
-  readonly visibleProjects: ComputedRef<ProjectRuns[]>
+  readonly visibleProjects: Readonly<Ref<ProjectRunsWire[]>>
   /** All known projects as name-sorted select options, unfiltered. */
-  readonly projectOptions: ComputedRef<ProjectOption[]>
+  readonly projectOptions: Readonly<Ref<ProjectOption[]>>
   /** Project id of the current selection, or `null` before the first load. */
   readonly selectedProject: Readonly<ShallowRef<string | null>>
   /** Key of the selected agent, or `null` before the first load. */
   readonly selectedKey: Readonly<ShallowRef<string | null>>
   /** Tree node of the selected agent, when it exists in the current tree. */
-  readonly selectedNode: ComputedRef<RunNode | null>
+  readonly selectedNode: ComputedRef<RunNodeWire | null>
   /** Root session node the selected agent belongs to. */
-  readonly selectedRoot: ComputedRef<RunNode | null>
+  readonly selectedRoot: ComputedRef<RunNodeWire | null>
   /** Detail payload for the selected agent (lanes, files, diagnostics). */
   readonly run: Readonly<ShallowRef<RunResponse | null>>
   /** Transcript events of the selected agent. */
@@ -135,18 +132,21 @@ export interface UseLiveRunsReturn {
  */
 export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn {
   const {
-    treeIntervalMs = 4_000,
     eventsIntervalMs = 2_000,
     runIntervalMs = 6_000,
     sessionEventsIntervalMs = 4_000,
     sessionEventsLimit = 800,
   } = options
 
-  const projects = shallowRef<ProjectRuns[]>([])
-  const sources = shallowRef<SessionSourceStatus[]>([])
-  const costs = shallowRef<CostSummary | null>(null)
-  const loading = shallowRef(true)
-  const offline = shallowRef(false)
+  // The tree is an atom now: one poll loop, its own cancellation, and a value
+  // that survives a failed refresh. Everything below it here is still a ref.
+  const projects = useAtomValue(() => treeAtoms.projects)
+  const sources = useAtomValue(() => treeAtoms.sources)
+  const costs = useAtomValue(() => treeAtoms.costs)
+  const loading = useAtomValue(() => treeAtoms.loading)
+  const offline = useAtomValue(() => treeAtoms.offline)
+  const visibleProjects = useAtomValue(() => filtersAtoms.visibleProjects)
+  const projectOptions = useAtomValue(() => filtersAtoms.projectOptions)
   const selectedProject = shallowRef<string | null>(null)
   const selectedKey = shallowRef<string | null>(null)
   const run = shallowRef<RunResponse | null>(null)
@@ -171,34 +171,21 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
   const errorsOnly = useAtomModel(() => preferencesAtoms.errorsOnly)
   const density = useAtomModel(() => preferencesAtoms.density)
   const hours = useAtomModel(() => rangeAtoms.hours)
-  let treePending = false
-  let treeReloadQueued = false
-  let treeGeneration = 0
-  let rangeInitialized = false
+  // The range the user picked, as opposed to the one in effect. Only a change
+  // to this one means "show me a different window".
+  const explicitHours = useAtomValue(() => rangeAtoms.explicit)
   let disposed = false
   const requestControllers = new Set<AbortController>()
   const runRequests = createLatestRequestGate()
   const sessionEventRequests = createLatestRequestGate()
 
-  // Both projections move to `app/atoms/filters.ts` in Stage 5, when the tree
-  // they read stops being a `shallowRef` here and becomes an atom.
-  const visibleProjects = computed(() => filterSessionProjects(projects.value, {
-    query: query.value,
-    source: sourceFilter.value,
-    project: projectFilter.value,
-    liveOnly: liveOnly.value,
-    attentionOnly: attentionOnly.value,
-    hideIdle: hideIdle.value,
-    minimumSubagents: minimumSubagents.value,
-    sort: sessionSort.value,
-  }))
-  const projectOptions = computed((): ProjectOption[] => projects.value
-    .map(project => ({ id: project.id, name: project.name }))
-    .sort((a, b) => a.name.localeCompare(b.name)))
-
   const nodeIndex = computed(() => {
-    const map = new Map<string, { node: RunNode, parent: string | null }>()
-    const visit = (project: string, nodes: RunNode[], parent: string | null): void => {
+    const map = new Map<string, { node: RunNodeWire, parent: string | null }>()
+    const visit = (
+      project: string,
+      nodes: ReadonlyArray<RunNodeWire>,
+      parent: string | null,
+    ): void => {
       nodes.forEach((node) => {
         map.set(`${project}\0${node.key}`, { node, parent })
         visit(project, node.children, node.key)
@@ -225,74 +212,47 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     return current?.node || null
   })
 
-  async function request<T>(
-    url: string,
-    isCurrent: () => boolean = () => true,
-  ): Promise<T | null> {
+  /**
+   * One detail request.
+   *
+   * No longer touches `offline`: that is the tree's poll now, which is the only
+   * one that runs unconditionally and therefore the only one that can tell
+   * "the server is gone" from "nothing is selected".
+   */
+  async function request<T>(url: string): Promise<T | null> {
     if (disposed) return null
     const controller = new AbortController()
     requestControllers.add(controller)
     try {
       const result = await $fetch(url, { signal: controller.signal })
       if (disposed) return null
-      if (isCurrent()) offline.value = false
       return result as T
     } catch {
-      if (!disposed && !controller.signal.aborted && isCurrent()) offline.value = true
       return null
     } finally {
       requestControllers.delete(controller)
     }
   }
 
-  async function loadTree(): Promise<void> {
-    if (disposed) return
-    if (treePending) {
-      treeReloadQueued = true
+  /**
+   * What the tree poll used to do with each response, now that it does not
+   * deliver one: pick something on first load, and follow the newest live agent.
+   *
+   * Both become atoms in Stage 6. Until then this watcher stands in for the tail
+   * of `loadTree`, and fires on the same cadence — every response is a fresh
+   * array, so `projects` changes identity on every poll.
+   */
+  function reconcileSelection(): void {
+    if (!selectedKey.value) {
+      const firstProject = visibleProjects.value.find(project => project.roots.length)
+      if (firstProject) void select(deepestLiveNode(firstProject.roots[0]!).key, firstProject.id)
       return
     }
-    treePending = true
-    const requestGeneration = treeGeneration
-    const requestedHours = rangeInitialized ? hours.value : null
-    const isCurrent = () => treeGeneration === requestGeneration
-      && (requestedHours === null ? !rangeInitialized : requestedHours === hours.value)
-    try {
-      const response = await request<TreeResponse>(requestedHours === null
-        ? '/api/tree'
-        : `/api/tree?hours=${requestedHours}`, isCurrent)
-      if (!isCurrent()) return
-      if (!response) {
-        loading.value = false
-        return
-      }
-      if (!rangeInitialized) {
-        hours.value = response.hours
-        await nextTick()
-        if (!isCurrent()) return
-        rangeInitialized = true
-      }
-      projects.value = response.projects
-      sources.value = response.sources
-      costs.value = response.costs || null
-      loading.value = false
-
-      if (!selectedKey.value) {
-        const firstProject = visibleProjects.value.find(project => project.roots.length)
-        if (firstProject) void select(deepestLiveNode(firstProject.roots[0]!).key, firstProject.id)
-        return
-      }
-      if (followActive.value && selectedRoot.value) {
-        const live = flattenRunTree(selectedRoot.value)
-          .filter(node => node.live)
-          .sort((a, b) => b.mtime - a.mtime)[0]
-        if (live && live.key !== selectedKey.value) void select(live.key, selectedProject.value!)
-      }
-    } finally {
-      treePending = false
-      if (treeReloadQueued) {
-        treeReloadQueued = false
-        void loadTree()
-      }
+    if (followActive.value && selectedRoot.value) {
+      const live = flattenRunTree(selectedRoot.value)
+        .filter(node => node.live)
+        .sort((a, b) => b.mtime - a.mtime)[0]
+      if (live && live.key !== selectedKey.value) void select(live.key, selectedProject.value!)
     }
   }
 
@@ -307,7 +267,6 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     try {
       const response = await request<RunResponse>(
         `/api/run?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&hours=${requestedHours}`,
-        () => runRequests.isCurrent(pending),
       )
       if (
         response
@@ -339,7 +298,6 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     try {
       const response = await request<SessionEventsResponse>(
         `/api/session-events?project=${encodeURIComponent(project)}&key=${encodeURIComponent(key)}&limit=${sessionEventsLimit}&hours=${requestedHours}`,
-        () => sessionEventRequests.isCurrent(pending),
       )
       if (
         !response
@@ -395,11 +353,8 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     await Promise.all([selectedStream.poll(), loadRun(), pollSessionEvents()])
   }
 
-  watch(hours, () => {
-    if (!rangeInitialized) return
-    treeGeneration += 1
-    loading.value = true
-    projects.value = []
+  /** A range the *user* chose invalidates everything scoped to the old one. */
+  function discardRangeScopedState(): void {
     selectedProject.value = null
     selectedKey.value = null
     run.value = null
@@ -409,11 +364,40 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
     sessionEvents.value = []
     sessionEventsTruncated.value = false
     clearInspection()
-    void loadTree()
-  })
+  }
+
+  /**
+   * One watcher for both, because the order between them is load-bearing: a
+   * range change discards the selection and then picks a new one, and two
+   * separate watchers would have that order decided by which was registered
+   * first.
+   *
+   * The tree itself is not reset here. It re-keys on the explicit range and
+   * rebuilds its own loop, which is why the sidebar keeps the previous range's
+   * sessions on screen for the moment the new ones take to arrive instead of
+   * blanking, and why this fires again when they do — every response is a fresh
+   * array, so `projects` changes identity on every poll.
+   *
+   * Watching the *explicit* choice rather than the effective range is what the
+   * `rangeInitialized` flag used to do: adopting the server's range on first
+   * load changes what the sidebar displays but is not a change of range, and
+   * must not throw away the selection the same response just produced.
+   *
+   * `immediate` because the feed can already hold a value by the time this is
+   * registered — the atom's stream runs to its first emission synchronously when
+   * the request resolves synchronously, which is every mounted test with a
+   * stubbed `Api`.
+   */
+  watch(
+    [projects, explicitHours] as const,
+    ([, chosen], previous) => {
+      if (previous && chosen !== previous[1]) discardRangeScopedState()
+      reconcileSelection()
+    },
+    { immediate: true },
+  )
 
   const pollers = [
-    useIntervalFn(loadTree, treeIntervalMs, { immediate: false }),
     useIntervalFn(() => {
       void selectedStream.poll()
       void inspectedStream.poll()
@@ -423,14 +407,11 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
   ]
 
   onMounted(() => {
-    void loadTree()
     pollers.forEach(poller => poller.resume())
   })
 
   tryOnScopeDispose(() => {
     disposed = true
-    treeGeneration += 1
-    treeReloadQueued = false
     runRequests.invalidate()
     sessionEventRequests.invalidate()
     selectedStream.reset()
@@ -440,11 +421,11 @@ export function useLiveRuns(options: UseLiveRunsOptions = {}): UseLiveRunsReturn
   })
 
   return {
-    projects: shallowReadonly(projects),
-    sources: shallowReadonly(sources),
-    costs: shallowReadonly(costs),
-    loading: shallowReadonly(loading),
-    offline: shallowReadonly(offline),
+    projects,
+    sources,
+    costs,
+    loading,
+    offline,
     visibleProjects,
     projectOptions,
     selectedProject: shallowReadonly(selectedProject),

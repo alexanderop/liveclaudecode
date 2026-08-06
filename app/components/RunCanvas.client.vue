@@ -24,7 +24,8 @@ import {
   watch,
 } from 'vue'
 import { useDocumentVisibility, useIntervalFn, useTimeoutFn } from '@vueuse/core'
-import type { DiagnosticIncident, RunNode, RunResponse } from '#shared/types/run'
+import type { DiagnosticIncident, RunResponse } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import ExecutionAgentNode from '~/components/ExecutionAgentNode.vue'
 import { provideExecutionCanvas } from '~/composables/useExecutionCanvas'
 import {
@@ -44,7 +45,7 @@ import { normalizeSessionLabel } from '#shared/utils/session-label'
 
 const props = defineProps<{
   run: RunResponse | null
-  root?: RunNode | null
+  root?: RunNodeWire | null
   selectedKey: string | null
   inspectorOpen?: boolean
   focusedFile?: string | null

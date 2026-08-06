@@ -1,6 +1,7 @@
 import type { SessionSource } from '#shared/types/run'
 import * as Atom from 'effect/unstable/reactivity/Atom'
-import type { SessionSort } from '~/utils/session-filter'
+import { filterSessionProjects, type SessionSort } from '~/utils/session-filter'
+import { treeAtoms, type TreeAtoms } from './tree'
 
 /** One transcript source, or every source at once. */
 export type SessionSourceFilter = 'all' | SessionSource
@@ -24,31 +25,57 @@ export interface ProjectOption {
  * is state, and the registry's 400 ms idle sweep would otherwise reset it the
  * moment nothing is reading it.
  *
- * **`visibleProjects` and `projectOptions` are deliberately not here yet.** Both
- * derive from the run tree, which is still `useLiveRuns`'s `shallowRef`; they
- * land in this file in Stage 5, on top of `app/atoms/tree.ts`. Bridging the tree
- * through a writable atom in the meantime would duplicate it — the same list in
- * a ref and in an atom, written from a poll callback — which is a worse thing to
- * own for one stage than a computed that has to move once.
+ * The two projections at the bottom are why this file reads `tree`: filtering
+ * is the one thing the session browser does to the tree, and putting the result
+ * anywhere else would mean two files knowing the filter set.
  */
-export const makeFiltersAtoms = () => ({
+export const makeFiltersAtoms = (tree: TreeAtoms = treeAtoms) => {
   /** Free-text search across projects, session labels, and agents. */
-  query: Atom.make('').pipe(Atom.keepAlive),
+  const query = Atom.make('').pipe(Atom.keepAlive)
   /** Restrict sessions to one transcript source. */
-  source: Atom.make<SessionSourceFilter>('all').pipe(Atom.keepAlive),
+  const source = Atom.make<SessionSourceFilter>('all').pipe(Atom.keepAlive)
   /** Restrict sessions to one project id, or `'all'`. */
-  project: Atom.make('all').pipe(Atom.keepAlive),
+  const project = Atom.make('all').pipe(Atom.keepAlive)
   /** Show only sessions with live activity. */
-  liveOnly: Atom.make(false).pipe(Atom.keepAlive),
+  const liveOnly = Atom.make(false).pipe(Atom.keepAlive)
   /** Show only finished sessions that ended with errors. */
-  attentionOnly: Atom.make(false).pipe(Atom.keepAlive),
+  const attentionOnly = Atom.make(false).pipe(Atom.keepAlive)
   /** Hide empty sessions that never recorded any activity. */
-  hideIdle: Atom.make(true).pipe(Atom.keepAlive),
+  const hideIdle = Atom.make(true).pipe(Atom.keepAlive)
   /** Minimum number of subagents a session must have spawned. */
-  minimumSubagents: Atom.make(0).pipe(Atom.keepAlive),
+  const minimumSubagents = Atom.make(0).pipe(Atom.keepAlive)
   /** Session ordering within a project. */
-  sort: Atom.make<SessionSort>('updated').pipe(Atom.keepAlive),
-})
+  const sort = Atom.make<SessionSort>('updated').pipe(Atom.keepAlive)
+
+  return {
+    query,
+    source,
+    project,
+    liveOnly,
+    attentionOnly,
+    hideIdle,
+    minimumSubagents,
+    sort,
+    /** The tree with the active filters applied, as the sidebar lists it. */
+    visibleProjects: Atom.make(get => filterSessionProjects(get(tree.projects), {
+      query: get(query),
+      source: get(source),
+      project: get(project),
+      liveOnly: get(liveOnly),
+      attentionOnly: get(attentionOnly),
+      hideIdle: get(hideIdle),
+      minimumSubagents: get(minimumSubagents),
+      sort: get(sort),
+    })),
+    /**
+     * Every known project as a name-sorted option, *unfiltered* — the project
+     * picker must keep offering the project you filtered yourself out of.
+     */
+    projectOptions: Atom.make((get): ProjectOption[] => get(tree.projects)
+      .map(entry => ({ id: entry.id, name: entry.name }))
+      .sort((left, right) => left.name.localeCompare(right.name))),
+  }
+}
 
 /** The live instance every component reads. Tests call the factory instead. */
 export const filtersAtoms = makeFiltersAtoms()

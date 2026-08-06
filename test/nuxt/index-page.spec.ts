@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import { mockLiveApi } from '../fixtures/live-api'
 import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
-import { runNode } from '../fixtures/runs'
+import { runNode, treeResponse } from '../fixtures/runs'
+import { servingTree } from '../fixtures/stub-api'
 
 let mounted: MountedAtoms | null = null
 
@@ -18,6 +19,7 @@ describe('session view controls', () => {
     const root = runNode({ subErrors: 0, errors: 0 })
     mockLiveApi(root)
     mounted = await mountWithAtoms(IndexPage, {
+      api: servingTree(treeResponse(root)),
       global: {
         stubs: {
           EventFeed: true,
@@ -56,8 +58,10 @@ describe('session view controls', () => {
 
 describe('focus view', () => {
   async function mountDashboard(): Promise<VueWrapper> {
-    mockLiveApi(runNode({ subErrors: 0, errors: 0 }))
+    const root = runNode({ subErrors: 0, errors: 0 })
+    mockLiveApi(root)
     mounted = await mountWithAtoms(IndexPage, {
+      api: servingTree(treeResponse(root)),
       global: {
         stubs: {
           EventFeed: true,

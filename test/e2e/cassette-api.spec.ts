@@ -3,7 +3,9 @@ import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from 'vitest'
 import { setup } from '@nuxt/test-utils/e2e'
+import { Schema } from 'effect'
 import { $fetch } from '../fixtures/api-client'
+import { TreeResponseSchema } from '#shared/schemas/api'
 import type {
   CostOverviewResponse,
   ParseHealthResponse,
@@ -141,6 +143,11 @@ describe('cassette API replay', async () => {
 
   it('serves every recorded session through the read-only API', async () => {
     const tree = await $fetch<TreeResponse>('/api/tree')
+    // The dashboard decodes this response with a `Schema` before rendering it,
+    // and this is the only tier where that schema meets bytes a real Claude,
+    // Codex, or Copilot session produced. A field the recorder captured but the
+    // decoder does not describe fails here rather than in a browser.
+    Schema.decodeUnknownSync(TreeResponseSchema)(tree)
     const costs = await $fetch<CostOverviewResponse>('/api/costs')
     const debug = await $fetch<ParseHealthResponse>('/api/debug')
 

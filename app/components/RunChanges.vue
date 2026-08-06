@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { RunNode, RunResponse } from '#shared/types/run'
+import type { RunResponse } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import { splitPath } from '~/utils/file-changes'
 
-const props = defineProps<{ run: RunResponse | null, root?: RunNode | null, selectedKey?: string | null }>()
+const props = defineProps<{ run: RunResponse | null, root?: RunNodeWire | null, selectedKey?: string | null }>()
 const scope = ref<'session' | 'agent'>('session')
 
 const sessionNodes = computed(() => {

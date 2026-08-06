@@ -8,6 +8,8 @@ import {
   type ChatEventsResponseWire,
   CostOverviewResponseSchema,
   type CostOverviewResponseWire,
+  TreeResponseSchema,
+  type TreeResponseWire,
 } from '#shared/schemas/api'
 import { ChatActionSchema } from '#shared/schemas/chat'
 import type { ChatAction } from '#shared/types/chat'
@@ -85,6 +87,7 @@ export interface ChatCursorQuery {
  * request with no bookkeeping.
  */
 export class Api extends Context.Service<Api, {
+  readonly tree: (query: RangeQuery) => Effect.Effect<TreeResponseWire, ApiError>
   readonly costs: (query: RangeQuery) => Effect.Effect<CostOverviewResponseWire, ApiError>
   readonly chatEvents: (query: ChatCursorQuery) => Effect.Effect<ChatEventsResponseWire, ApiError>
   readonly chatAction: (
@@ -129,6 +132,7 @@ export class Api extends Context.Service<Api, {
         )
       }
 
+      const tree = route('/api/tree', TreeResponseSchema)
       const costs = route('/api/costs', CostOverviewResponseSchema)
       const chatEvents = route('/api/chat', ChatEventsResponseSchema)
 
@@ -169,7 +173,9 @@ export class Api extends Context.Service<Api, {
 
       return Api.of({
         // `HttpClientRequest`'s urlParams skip undefined values, so an omitted
-        // `hours` produces '/api/costs' rather than '/api/costs?hours=undefined'.
+        // `hours` produces '/api/tree' rather than '/api/tree?hours=undefined'.
+        // That is the range handshake's first request, with no branch.
+        tree: query => tree({ hours: query.hours }),
         costs: query => costs({ hours: query.hours }),
         chatEvents: query =>
           chatEvents({

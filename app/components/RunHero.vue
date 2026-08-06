@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { RunNode } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { sessionSourceLabel } from '~/utils/format'
 import { sessionDisplayState, type SessionDisplayKind } from '~/utils/session-state'
 import type { PrimaryWorkspaceKind } from '~/utils/workspace-state'
 
 const props = withDefaults(defineProps<{
-  root: RunNode | null
+  root: RunNodeWire | null
   sidebarVisible: boolean
   workspace?: PrimaryWorkspaceKind
 }>(), {

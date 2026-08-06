@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { RunNode, RunResponse, TranscriptEvent } from '#shared/types/run'
+import type { RunResponse, TranscriptEvent } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { useAtomValue } from '@effect/atom-vue'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { preferencesAtoms } from '~/atoms/preferences'
@@ -11,8 +12,8 @@ import { agentState } from '~/utils/session-state'
 
 const props = defineProps<{
   run: RunResponse | null
-  root: RunNode | null
-  selected: RunNode | null
+  root: RunNodeWire | null
+  selected: RunNodeWire | null
   selectedKey: string | null
   /** Project of the observed session; scopes the Ask conversation with `selectedKey`. */
   project: string

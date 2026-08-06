@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { RunNode } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { formatTime, sessionSourceLabel } from '~/utils/format'
 
 const props = defineProps<{
-  node: RunNode
+  node: RunNodeWire
   depth: number
   selectedKey: string | null
 }>()
@@ -13,7 +13,7 @@ const emit = defineEmits<{ select: [key: string] }>()
 interface RunTreeItem {
   key: string
   label: string
-  node: RunNode
+  node: RunNodeWire
   slot: 'session'
   defaultExpanded: boolean
   class: Array<string | Record<string, boolean>>
@@ -21,13 +21,13 @@ interface RunTreeItem {
   onSelect: () => void
 }
 
-function statusLabel(node: RunNode): string {
+function statusLabel(node: RunNodeWire): string {
   if (node.spawnState === 'running' || node.subLive || (node.live && node.kind === 'subagent')) return 'running'
   if (node.subErrors) return `${node.subErrors} err`
   return ''
 }
 
-function metadata(node: RunNode): string {
+function metadata(node: RunNodeWire): string {
   const agentCount = Math.max(1, node.subAgents + 1)
   return [
     sessionSourceLabel(node.source),
@@ -36,7 +36,7 @@ function metadata(node: RunNode): string {
   ].filter(Boolean).join(' · ')
 }
 
-function toItem(node: RunNode): RunTreeItem {
+function toItem(node: RunNodeWire): RunTreeItem {
   return {
     key: node.key,
     label: normalizeSessionLabel(node.label, node.key),

@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 import { ChatAgentIdSchema } from '#shared/schemas/chat'
 import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
-import type { CostOverviewResponse } from '#shared/types/run'
+import type { CostOverviewResponse, TreeResponse } from '#shared/types/run'
 
 /**
  * Decoders for what `server/api/**` returns.
@@ -93,6 +93,180 @@ export type CostOverviewResponseWire = typeof CostOverviewResponseSchema.Type
 const _costsWireAcceptsServerShape: CostOverviewResponseWire =
   undefined as unknown as CostOverviewResponse
 void _costsWireAcceptsServerShape
+
+/** `Timestamp` — an ISO string, or null when the transcript recorded none. */
+const TimestampSchema = Schema.NullOr(Schema.String)
+
+const TodoSchema = Schema.Struct({
+  content: Schema.optionalKey(Schema.String),
+  activeForm: Schema.optionalKey(Schema.String),
+  // The three known states are documented on the interface as a union with
+  // `string`, which collapses to `string`. Harnesses invent their own.
+  status: Schema.String,
+})
+
+const SkillUseSchema = Schema.Struct({ skill: Schema.String, ts: TimestampSchema })
+
+const MilestoneSchema = Schema.Struct({
+  title: Schema.String,
+  ts: TimestampSchema,
+  strong: Schema.Boolean,
+  who: Schema.optionalKey(Schema.String),
+})
+
+const CurrentActivitySchema = Schema.Struct({
+  tool: Schema.String,
+  summary: Schema.String,
+  ts: TimestampSchema,
+})
+
+const FileChangeSchema = Schema.Struct({
+  path: Schema.String,
+  ops: Schema.Number,
+  tools: Schema.Array(Schema.String),
+  lastTs: TimestampSchema,
+})
+
+const CommandRunSchema = Schema.Struct({
+  cmd: Schema.String,
+  ts: TimestampSchema,
+  ok: Schema.NullOr(Schema.Boolean),
+  tid: Schema.String,
+  note: Schema.optionalKey(Schema.String),
+})
+
+/**
+ * The fields `RunNode` inherits from `TranscriptStats`.
+ *
+ * A record rather than a schema so the recursive and non-recursive node schemas
+ * can each spread it. `Schema.Struct` does support omission through
+ * `.mapFields(Struct.omit([…]))`, but the recursive node has to be annotated
+ * `Schema.Codec<…>` for `Schema.suspend` to typecheck, and `Codec` has no
+ * `mapFields`. This is the one place that trade-off applies; prefer `mapFields`
+ * everywhere else.
+ */
+const TranscriptStatsFields = {
+  records: Schema.Number,
+  tools: Schema.Number,
+  toolCounts: Schema.Record(Schema.String, Schema.Number),
+  reads: Schema.Number,
+  errors: Schema.Number,
+  tokensOut: Schema.Number,
+  firstTs: TimestampSchema,
+  lastTs: TimestampSchema,
+  mtime: Schema.Number,
+  /** Milliseconds since `mtime`, recomputed per request — see the note on equality. */
+  ago: Schema.Number,
+  live: Schema.Boolean,
+  size: Schema.Number,
+  todos: Schema.NullOr(Schema.Array(TodoSchema)),
+  skills: Schema.Array(SkillUseSchema),
+  milestones: Schema.Array(MilestoneSchema),
+  current: Schema.NullOr(CurrentActivitySchema),
+  files: Schema.Array(FileChangeSchema),
+  commands: Schema.Array(CommandRunSchema),
+  finalText: Schema.String,
+} as const
+
+/** Everything a `RunNode` adds, except `children` and `subFiles`. */
+const RunNodeOwnFields = {
+  source: SessionSourceSchema,
+  sourceDetail: Schema.String,
+  key: Schema.String,
+  kind: Schema.Literals(['session', 'subagent']),
+  sid: Schema.String,
+  label: Schema.String,
+  title: Schema.String,
+  openingPrompt: Schema.String,
+  lastPrompt: Schema.String,
+  agentType: Schema.String,
+  toolUseId: Schema.NullOr(Schema.String),
+  model: Schema.String,
+  spawnDepth: Schema.NullOr(Schema.Number),
+  parentAgentId: Schema.NullOr(Schema.String),
+  stoppedByUser: Schema.Boolean,
+  spawnState: Schema.Literals(['', 'running', 'returned']),
+  subAgents: Schema.Number,
+  subRunning: Schema.Number,
+  subErrors: Schema.Number,
+  subTools: Schema.Number,
+  subLast: TimestampSchema,
+  subLive: Schema.Boolean,
+} as const
+
+/**
+ * One agent in the run tree, with its subagents beneath it.
+ *
+ * The interface is written out rather than inferred because `Schema.suspend`
+ * needs a type to refer to while the schema is still being defined.
+ */
+export interface RunNodeWire extends
+  Schema.Struct.Type<typeof TranscriptStatsFields>,
+  Schema.Struct.Type<typeof RunNodeOwnFields>
+{
+  readonly children: ReadonlyArray<RunNodeWire>
+  readonly subFiles: { readonly [path: string]: number }
+}
+
+export const RunNodeSchema: Schema.Codec<RunNodeWire> = Schema.Struct({
+  ...TranscriptStatsFields,
+  ...RunNodeOwnFields,
+  children: Schema.Array(Schema.suspend((): Schema.Codec<RunNodeWire> => RunNodeSchema)),
+  subFiles: Schema.Record(Schema.String, Schema.Number),
+})
+
+export const ProjectRunsSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  roots: Schema.Array(RunNodeSchema),
+})
+
+export type ProjectRunsWire = typeof ProjectRunsSchema.Type
+
+/** The Claude spend summary the sidebar shows under the session list. */
+export const CostSummarySchema = Schema.Struct({
+  usd: Schema.Number,
+  pricedRequests: Schema.Number,
+  unpricedRequests: Schema.Number,
+  estimated: Schema.Literal(true),
+  currency: Schema.Literal('USD'),
+  todayUsd: Schema.Number,
+  /** Null when the selected range does not cover seven days. */
+  last7DaysUsd: Schema.NullOr(Schema.Number),
+  coverageHours: Schema.Number,
+})
+
+export type CostSummaryWire = typeof CostSummarySchema.Type
+
+/**
+ * `GET /api/tree`.
+ *
+ * `costs` is required, not optional. `listSessions` calls `summarizeCosts`
+ * unconditionally and that function always returns a summary
+ * (`server/utils/cost.ts:327`), so the `costs?` on `TreeResponse` described a
+ * case the server cannot produce — it has been made required there too, which
+ * is what lets the drift guard below hold. An `optional` here would have
+ * propagated `| undefined` through every consumer for nothing.
+ *
+ * `hours` is the server's *effective* range: `parseHours` clamps what it was
+ * asked for, so a client that sends nothing learns the configured default from
+ * this field. That is the whole range handshake.
+ */
+export const TreeResponseSchema = Schema.Struct({
+  projects: Schema.Array(ProjectRunsSchema),
+  sources: Schema.Array(SessionSourceStatusSchema),
+  /** Fractional epoch *seconds*, like `/api/costs` — not milliseconds. */
+  now: Schema.Number,
+  hours: Schema.Number,
+  costs: CostSummarySchema,
+})
+
+export type TreeResponseWire = typeof TreeResponseSchema.Type
+
+export type SessionSourceStatusWire = typeof SessionSourceStatusSchema.Type
+
+const _treeWireAcceptsServerShape: TreeResponseWire = undefined as unknown as TreeResponse
+void _treeWireAcceptsServerShape
 
 export const ChatStatusSchema = Schema.Literals(['idle', 'starting', 'busy', 'error'])
 

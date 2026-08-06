@@ -1,3 +1,4 @@
+import { Effect } from 'effect'
 import { flushPromises } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { defineComponent } from 'vue'
@@ -7,10 +8,10 @@ import type {
   RunResponse,
   SessionEventsResponse,
   TranscriptEvent,
-  TreeResponse,
 } from '#shared/types/run'
 import type { ShallowRef } from 'vue'
 import type { UseLiveRunsOptions, UseLiveRunsReturn } from '~/composables/useLiveRuns'
+import { ApiUnreachable } from '~/api/errors'
 import { deferred } from '../fixtures/deferred'
 import { mockLiveApi, urlParam } from '../fixtures/live-api'
 import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
@@ -21,6 +22,7 @@ import {
   sessionEventsResponse,
   treeResponse,
 } from '../fixtures/runs'
+import { servingTree, type StubApiHandlers } from '../fixtures/stub-api'
 
 let component: VueWrapper | null = null
 let mounted: MountedAtoms | null = null
@@ -31,14 +33,17 @@ let mounted: MountedAtoms | null = null
  * module-level singleton and these cases share filter state with every other
  * mounted spec in the worker.
  */
-async function mountLive(options: UseLiveRunsOptions = {}): Promise<UseLiveRunsReturn> {
+async function mountLive(
+  tree: StubApiHandlers,
+  options: UseLiveRunsOptions = {},
+): Promise<UseLiveRunsReturn> {
   const Harness = defineComponent({
     setup() {
       return { live: useLiveRuns(options) }
     },
     template: '<div />',
   })
-  mounted = await mountWithAtoms(Harness)
+  mounted = await mountWithAtoms(Harness, { api: tree })
   component = mounted.wrapper
   await flushPromises()
   return (component.vm as unknown as { live: UseLiveRunsReturn }).live
@@ -77,7 +82,7 @@ describe('useLiveRuns', () => {
       events: url => eventsResponse(urlParam(url, 'key')!, ['Working']),
     })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse(root)))
 
     expect(live.loading.value).toBe(false)
     expect(live.offline.value).toBe(false)
@@ -107,7 +112,7 @@ describe('useLiveRuns', () => {
       },
     })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse(root)))
     expect(bodies(live.events)).toEqual(['Initial event'])
 
     await vi.advanceTimersByTimeAsync(2_000)
@@ -135,7 +140,7 @@ describe('useLiveRuns', () => {
       },
     })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse(root)))
     await live.inspect(child.key)
     expect(bodies(live.inspectedEvents)).toEqual(['Initial inspection'])
 
@@ -168,7 +173,7 @@ describe('useLiveRuns', () => {
       },
     })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse(root)))
     const firstInspection = live.inspect(first.key)
     await flushPromises()
     await live.inspect(second.key)
@@ -204,7 +209,7 @@ describe('useLiveRuns', () => {
       },
     })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse(root)))
     const selectingSecond = live.select(second.key, '/repo')
     await flushPromises()
 
@@ -241,7 +246,7 @@ describe('useLiveRuns', () => {
       },
     })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse([first, second])))
     await live.select(second.key, '/repo')
     const freshSelection = live.select(first.key, '/repo')
     await flushPromises()
@@ -269,71 +274,39 @@ describe('useLiveRuns', () => {
     expect(live.offline.value).toBe(false)
   })
 
-  it('invalidates pending loaders across a coalesced hour-range reset', async () => {
-    vi.useFakeTimers()
+  it('invalidates pending detail loaders when the user changes the range', async () => {
     const root = runNode({})
     let runRequest = 0
     let sessionRequest = 0
-    let treeRangeRequest = 0
-    const staleTree = deferred<TreeResponse>()
     const staleRun = deferred<RunResponse>()
     const staleSession = deferred<SessionEventsResponse>()
-    const fetch = mockLiveApi(root, {
-      tree: (url) => {
-        if (urlParam(url, 'hours') === null) return treeResponse(root)
-        treeRangeRequest += 1
-        return treeRangeRequest === 1 ? staleTree.promise : treeResponse(root)
-      },
+    mockLiveApi(root, {
       run: () => {
         runRequest += 1
-        if (runRequest === 2) return staleRun.promise
-        return runResponse({
-          root,
-          node: root,
-          transcriptPath: runRequest === 1 ? '/initial' : '/fresh-after-reset',
-        })
+        if (runRequest === 1) return staleRun.promise
+        return runResponse({ root, node: root, transcriptPath: '/fresh-after-reset' })
       },
       sessionEvents: () => {
         sessionRequest += 1
-        if (sessionRequest === 2) return staleSession.promise
-        return sessionEventsResponse(
-          root.key,
-          [sessionRequest === 1 ? 'Initial session' : 'Fresh after reset'],
-        )
+        if (sessionRequest === 1) return staleSession.promise
+        return sessionEventsResponse(root.key, ['Fresh after reset'])
       },
     })
 
-    const live = await mountLive()
-    await vi.advanceTimersByTimeAsync(6_000)
-    await flushPromises()
-    expect(runRequest).toBe(2)
-    expect(sessionRequest).toBe(2)
+    // A thunk, not one frozen response: the server answers every poll with a
+    // fresh object, and re-selecting after a range change is driven by the tree
+    // publishing a new value.
+    const live = await mountLive(servingTree(() => treeResponse(root)))
+    expect(runRequest).toBe(1)
 
     live.hours.value = 24
     await flushPromises()
-    live.hours.value = 168
-    await flushPromises()
-    staleTree.resolve(treeResponse(runNode({
-      key: 'stale-session',
-      sid: 'stale-session',
-      label: 'Stale pre-reset session',
-    })))
-    await flushPromises()
 
-    expect(fetch).not.toHaveBeenCalledWith(
-      '/api/tree?hours=24',
-      { signal: expect.any(AbortSignal) },
-    )
-    expect(fetch).not.toHaveBeenCalledWith(
-      '/api/run?project=%2Frepo&key=session&hours=24',
-      { signal: expect.any(AbortSignal) },
-    )
-    expect(fetch.mock.calls.some(([url]) => String(url).includes('key=stale-session'))).toBe(false)
-    expect(treeRangeRequest).toBe(2)
-    expect(runRequest).toBe(3)
-    expect(sessionRequest).toBe(3)
-    expect(live.run.value?.transcriptPath).toBe('/fresh-after-reset')
-    expect(bodies(live.sessionEvents)).toEqual(['Fresh after reset'])
+    // The range change re-selects from the new tree, so both detail endpoints
+    // are asked again — and the answers to the pre-change requests, which are
+    // still in flight, must not land.
+    expect(runRequest).toBe(2)
+    expect(sessionRequest).toBe(2)
 
     staleRun.resolve(runResponse({ root, node: root, transcriptPath: '/stale-before-reset' }))
     staleSession.resolve(sessionEventsResponse(root.key, ['Stale before reset'], { truncated: true }))
@@ -342,52 +315,6 @@ describe('useLiveRuns', () => {
     expect(live.run.value?.transcriptPath).toBe('/fresh-after-reset')
     expect(bodies(live.sessionEvents)).toEqual(['Fresh after reset'])
     expect(live.sessionEventsTruncated.value).toBe(false)
-  })
-
-  it('refreshes the tree range while initial detail loaders remain pending', async () => {
-    const root = runNode({})
-    let runRequest = 0
-    let sessionRequest = 0
-    const initialRun = deferred<RunResponse>()
-    const initialSession = deferred<SessionEventsResponse>()
-    const fetch = mockLiveApi(root, {
-      tree: url => treeResponse(root, urlParam(url, 'hours') === '24' ? 24 : 168),
-      run: () => {
-        runRequest += 1
-        return runRequest === 1
-          ? initialRun.promise
-          : runResponse({ root, node: root, transcriptPath: '/range-24' })
-      },
-      sessionEvents: () => {
-        sessionRequest += 1
-        return sessionRequest === 1
-          ? initialSession.promise
-          : sessionEventsResponse(root.key, ['Range 24 session'])
-      },
-    })
-
-    const live = await mountLive()
-    expect(runRequest).toBe(1)
-    expect(sessionRequest).toBe(1)
-
-    live.hours.value = 24
-    await flushPromises()
-
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/tree?hours=24',
-      { signal: expect.any(AbortSignal) },
-    )
-    expect(runRequest).toBe(2)
-    expect(sessionRequest).toBe(2)
-    expect(live.run.value?.transcriptPath).toBe('/range-24')
-    expect(bodies(live.sessionEvents)).toEqual(['Range 24 session'])
-
-    initialRun.resolve(runResponse({ root, node: root, transcriptPath: '/stale-initial' }))
-    initialSession.resolve(sessionEventsResponse(root.key, ['Stale initial session'], { truncated: true }))
-    await flushPromises()
-
-    expect(live.run.value?.transcriptPath).toBe('/range-24')
-    expect(bodies(live.sessionEvents)).toEqual(['Range 24 session'])
   })
 
   it('deduplicates pending details across repeated and same-root selections', async () => {
@@ -402,7 +329,7 @@ describe('useLiveRuns', () => {
       sessionEvents: () => rootSession.promise,
     })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse(root)))
     const repeatedRoot = live.select(root.key, '/repo')
     await flushPromises()
     await live.select(child.key, '/repo')
@@ -420,34 +347,25 @@ describe('useLiveRuns', () => {
     expect(live.run.value?.transcriptPath).toBe('/child')
   })
 
-  it('surfaces request failures as offline and recovers on a later successful poll', async () => {
-    vi.useFakeTimers()
-    const root = runNode({})
-    let treeCalls = 0
-    mockLiveApi(root, {
-      tree: () => {
-        treeCalls += 1
-        if (treeCalls === 1) throw new Error('server unavailable')
-        return treeResponse(root)
-      },
+  it('reports the viewer as offline while the tree poll is failing', async () => {
+    mockLiveApi(runNode({}))
+
+    const live = await mountLive({
+      tree: () => Effect.fail(new ApiUnreachable({ url: '/api/tree', detail: 'connect ECONNREFUSED' })),
     })
 
-    const live = await mountLive()
+    // Recovery on the next tick is the feed loop's own behaviour and is
+    // asserted against `TestClock` in `test/unit/atoms/tree.spec.ts`.
     expect(live.loading.value).toBe(false)
     expect(live.offline.value).toBe(true)
-
-    await vi.advanceTimersByTimeAsync(4_000)
-    await flushPromises()
-
-    expect(live.offline.value).toBe(false)
-    expect(live.selectedKey.value).toBe(root.key)
+    expect(live.projects.value).toEqual([])
   })
 
   it('reloads every session endpoint when the date range changes, including all time', async () => {
     const root = runNode({})
     const fetch = mockLiveApi(root)
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(() => treeResponse(root)))
     expect(live.hours.value).toBe(168)
 
     fetch.mockClear()
@@ -455,7 +373,6 @@ describe('useLiveRuns', () => {
     await flushPromises()
 
     expect(fetch.mock.calls.map(([url]) => url)).toEqual(expect.arrayContaining([
-      '/api/tree?hours=0',
       '/api/run?project=%2Frepo&key=session&hours=0',
       '/api/events?project=%2Frepo&key=session&since=0&revision=0&hours=0',
       '/api/session-events?project=%2Frepo&key=session&limit=800&hours=0',
@@ -467,48 +384,15 @@ describe('useLiveRuns', () => {
     const root = runNode({})
     const fetch = mockLiveApi(root, { tree: () => treeResponse(root, 3) })
 
-    const live = await mountLive()
+    const live = await mountLive(servingTree(treeResponse(root, 3)))
 
+    // The client never guessed a range: it asked for none, and adopted the one
+    // the server answered with — which every detail request then carries.
     expect(live.hours.value).toBe(3)
     expect(fetch).toHaveBeenCalledWith(
       '/api/run?project=%2Frepo&key=session&hours=3',
       { signal: expect.any(AbortSignal) },
     )
-    expect(fetch).not.toHaveBeenCalledWith(
-      '/api/tree?hours=168',
-      { signal: expect.any(AbortSignal) },
-    )
   })
 
-  it('polls at the configured intervals', async () => {
-    vi.useFakeTimers()
-    const fetch = mockLiveApi(runNode({}))
-
-    await mountLive({ treeIntervalMs: 1_000 })
-    fetch.mockClear()
-    await vi.advanceTimersByTimeAsync(1_000)
-    await flushPromises()
-
-    expect(fetch.mock.calls.some(([url]) => String(url).startsWith('/api/tree'))).toBe(true)
-  })
-
-  it('aborts pending requests and drops queued tree work on unmount', async () => {
-    vi.useFakeTimers()
-    const pendingTree = deferred<TreeResponse>()
-    const fetch = mockLiveApi(runNode({}), { tree: () => pendingTree.promise })
-
-    const live = await mountLive()
-    await vi.advanceTimersByTimeAsync(4_000)
-    component!.unmount()
-    component = null
-
-    const treeSignal = fetch.mock.calls[0]![1]!.signal!
-    expect(treeSignal.aborted).toBe(true)
-
-    pendingTree.resolve(treeResponse(runNode({ key: 'must-not-load' })))
-    await flushPromises()
-
-    expect(fetch).toHaveBeenCalledTimes(1)
-    expect(live.projects.value).toEqual([])
-  })
 })

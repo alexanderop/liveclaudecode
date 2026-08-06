@@ -1,4 +1,5 @@
-import type { DiagnosticIncident, RunNode, TranscriptEvent } from '#shared/types/run'
+import type { DiagnosticIncident, TranscriptEvent } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 
 export interface MergeActivityEventsOptions {
   /** Session-wide transcript events already attributed to their agents. */
@@ -6,7 +7,7 @@ export interface MergeActivityEventsOptions {
   /** Diagnostic incidents to synthesize into system events. */
   incidents: readonly DiagnosticIncident[]
   /** Flattened session agents, used to label synthesized incident events. */
-  agents: readonly Pick<RunNode, 'key' | 'label' | 'agentType'>[]
+  agents: readonly Pick<RunNodeWire, 'key' | 'label' | 'agentType'>[]
   /**
    * Agent key to filter the merged feed down to, or `'all'` for the whole
    * session.

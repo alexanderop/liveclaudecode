@@ -9,6 +9,7 @@ import RunOverview from '~/components/RunOverview.vue'
 import { mockLiveApi } from '../fixtures/live-api'
 import { mountWithAtoms } from '../fixtures/mount-atoms'
 import { runNode, runResponse, treeResponse } from '../fixtures/runs'
+import { servingTree } from '../fixtures/stub-api'
 
 const axeOptions: RunOptions = {
   resultTypes: ['violations'],
@@ -42,10 +43,10 @@ afterEach(() => {
 
 describe('accessibility', () => {
   it('has no detectable semantic violations in the empty dashboard state', async () => {
-    mockLiveApi(runNode(), {
-      tree: () => ({ ...treeResponse([]), projects: [] }),
-    })
+    const empty = { ...treeResponse([]), projects: [] }
+    mockLiveApi(runNode(), { tree: () => empty })
     const dashboard = await mountWithAtoms(IndexPage, {
+      api: servingTree(empty),
       attachTo: document.body,
       global: {
         stubs: {
@@ -67,6 +68,7 @@ describe('accessibility', () => {
     const run = runResponse()
     mockLiveApi(root, { run: () => run })
     const dashboard = await mountWithAtoms(IndexPage, {
+      api: servingTree(treeResponse(root)),
       attachTo: document.body,
       global: {
         stubs: {

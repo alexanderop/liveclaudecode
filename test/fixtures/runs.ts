@@ -1,6 +1,7 @@
 import type {
   CostOverviewGroup,
   CostOverviewResponse,
+  CostSummary,
   EventsResponse,
   ParseHealthResponse,
   PublicRunNode,
@@ -226,6 +227,27 @@ export function sessionEventsResponse(
   }
 }
 
+/**
+ * The spend summary `/api/tree` always carries.
+ *
+ * `listSessions` calls `summarizeCosts` unconditionally, so a tree response
+ * without this field is a shape the server cannot produce — and one the client's
+ * decoder now rejects.
+ */
+export function costSummary(overrides: Partial<CostSummary> = {}): CostSummary {
+  return {
+    usd: 0,
+    pricedRequests: 0,
+    unpricedRequests: 0,
+    estimated: true,
+    currency: 'USD',
+    todayUsd: 0,
+    last7DaysUsd: null,
+    coverageHours: DEFAULT_HOURS,
+    ...overrides,
+  }
+}
+
 export function treeResponse(
   roots: RunNode | RunNode[],
   hours = DEFAULT_HOURS,
@@ -239,6 +261,7 @@ export function treeResponse(
     sources: [],
     now: 0,
     hours,
+    costs: costSummary({ coverageHours: hours }),
   }
 }
 

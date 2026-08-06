@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { RunNode, RunResponse } from '#shared/types/run'
+import type { RunResponse } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { normalizeSessionLabel, normalizeSessionSummary } from '#shared/utils/session-label'
 import { flattenRunTree } from '~/utils/execution-analysis'
 import {
@@ -11,7 +12,7 @@ import {
 import type { PrimaryWorkspaceKind } from '~/utils/workspace-state'
 
 const props = withDefaults(defineProps<{
-  root?: RunNode | null
+  root?: RunNodeWire | null
   run: RunResponse | null
   loading?: boolean
   /** The provider's storage could not be read at all, so nothing loaded. */
@@ -34,7 +35,7 @@ const emit = defineEmits<{
 
 const toast = useToast()
 const clipboard = useClipboard({ legacy: true })
-const overviewRoot = computed<RunNode | null>(() => {
+const overviewRoot = computed<RunNodeWire | null>(() => {
   if (props.root) return props.root
   if (!props.run?.root) return null
   return { ...props.run.root, children: [], subFiles: {} }

@@ -1,4 +1,5 @@
-import type { ProjectRuns, RunNode, SessionSource } from '#shared/types/run'
+import type { SessionSource } from '#shared/types/run'
+import type { ProjectRunsWire, RunNodeWire } from '#shared/schemas/api'
 
 export type SessionSort = 'updated' | 'subagents'
 
@@ -17,7 +18,7 @@ export interface SessionFilterOptions {
  * Orders session roots by the active sort: most subagents first (falling back
  * to recency for ties), or most recently updated first.
  */
-export function compareRoots(left: RunNode, right: RunNode, sort: SessionSort): number {
+export function compareRoots(left: RunNodeWire, right: RunNodeWire, sort: SessionSort): number {
   const leftSubagents = left.subAgents ?? 0
   const rightSubagents = right.subAgents ?? 0
   if (sort === 'subagents' && leftSubagents !== rightSubagents) {
@@ -27,15 +28,15 @@ export function compareRoots(left: RunNode, right: RunNode, sort: SessionSort): 
 }
 
 export function filterSessionProjects(
-  projects: ProjectRuns[],
+  projects: ReadonlyArray<ProjectRunsWire>,
   options: SessionFilterOptions,
-): ProjectRuns[] {
+): ProjectRunsWire[] {
   const needle = options.query.trim().toLowerCase()
 
-  const filterNode = (node: RunNode, projectMatches: boolean): RunNode | null => {
+  const filterNode = (node: RunNodeWire, projectMatches: boolean): RunNodeWire | null => {
     const children = node.children
       .map(child => filterNode(child, projectMatches))
-      .filter((child): child is RunNode => Boolean(child))
+      .filter((child): child is RunNodeWire => Boolean(child))
     const self = (!options.liveOnly || node.subLive)
       && (!options.attentionOnly || (node.subErrors > 0 && !node.subLive))
       && (!options.hideIdle || node.records > 0 || children.length > 0)
@@ -57,7 +58,7 @@ export function filterSessionProjects(
         ...project,
         roots: project.roots
           .map(root => filterNode(root, projectMatches))
-          .filter((root): root is RunNode => Boolean(root))
+          .filter((root): root is RunNodeWire => Boolean(root))
           .filter(root => (root.subAgents ?? 0) >= options.minimumSubagents)
           .sort((left, right) => compareRoots(left, right, options.sort)),
       }

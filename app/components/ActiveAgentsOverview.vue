@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ProjectRuns } from '#shared/types/run'
+import type { ProjectRunsWire } from '#shared/schemas/api'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
 import { formatRelativeAge, sessionSourceLabel } from '~/utils/format'
 import { buildParentIndex, flattenRunTree } from '~/utils/execution-analysis'
@@ -12,7 +12,7 @@ import {
 import { structuralComputed, structurallyEqual } from '~/utils/structural-computed'
 
 const props = defineProps<{
-  projects: ProjectRuns[]
+  projects: ReadonlyArray<ProjectRunsWire>
 }>()
 
 const emit = defineEmits<{

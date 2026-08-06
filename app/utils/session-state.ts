@@ -1,4 +1,5 @@
-import type { DiagnosticIncident, RunNode } from '#shared/types/run'
+import type { DiagnosticIncident } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { parseTimestamp } from './format'
 
 export type AgentDisplayState =
@@ -59,7 +60,7 @@ export function canonicalIssueCount(
 }
 
 export function agentState(
-  node: RunNode | null | undefined,
+  node: RunNodeWire | null | undefined,
   incidents: readonly DiagnosticIncident[] = [],
 ): AgentStateSummary {
   if (!node) return { state: 'inactive', label: 'Inactive', detail: 'No activity recorded', issueCount: 0 }
@@ -109,7 +110,7 @@ export function agentState(
   return { state: 'completed', label: 'Completed', detail: 'Work ended without a recorded final message', issueCount }
 }
 
-export function lastActivityTime(node: RunNode): number | null {
+export function lastActivityTime(node: RunNodeWire): number | null {
   return parseTimestamp(node.current?.ts || node.lastTs || node.firstTs)
 }
 
@@ -128,7 +129,7 @@ export interface SessionDisplayState {
 
 /** The root fields the session status ladder depends on. */
 export type SessionDisplayRoot = Pick<
-  RunNode,
+  RunNodeWire,
   'subLive' | 'stoppedByUser' | 'subErrors' | 'finalText' | 'lastTs'
 >
 

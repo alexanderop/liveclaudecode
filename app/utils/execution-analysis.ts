@@ -1,4 +1,5 @@
-import type { RunNode, RunResponse } from '#shared/types/run'
+import type { RunResponse } from '#shared/types/run'
+import type { RunNodeWire } from '#shared/schemas/api'
 import { parseTimestamp } from './format'
 
 export type CoordinationFindingKind =
@@ -30,10 +31,10 @@ export interface CoordinationAnalysis {
   fileAgents: ReadonlyMap<string, string[]>
 }
 
-export function flattenRunTree(root: RunNode | null): RunNode[] {
+export function flattenRunTree(root: RunNodeWire | null): RunNodeWire[] {
   if (!root) return []
-  const output: RunNode[] = []
-  const visit = (node: RunNode): void => {
+  const output: RunNodeWire[] = []
+  const visit = (node: RunNodeWire): void => {
     output.push(node)
     node.children.forEach(visit)
   }
@@ -42,8 +43,8 @@ export function flattenRunTree(root: RunNode | null): RunNode[] {
 }
 
 /** Maps every descendant's key to its parent node. */
-export function buildParentIndex(root: RunNode | null): ReadonlyMap<string, RunNode> {
-  const parents = new Map<string, RunNode>()
+export function buildParentIndex(root: RunNodeWire | null): ReadonlyMap<string, RunNodeWire> {
+  const parents = new Map<string, RunNodeWire>()
   for (const node of flattenRunTree(root)) {
     for (const child of node.children) parents.set(child.key, node)
   }
@@ -51,7 +52,7 @@ export function buildParentIndex(root: RunNode | null): ReadonlyMap<string, RunN
 }
 
 /** Depth-first search for the node with `key`, including the root itself. */
-export function findNode(root: RunNode | null, key: string | null): RunNode | null {
+export function findNode(root: RunNodeWire | null, key: string | null): RunNodeWire | null {
   if (!root || !key) return null
   if (root.key === key) return root
   for (const child of root.children) {
@@ -66,12 +67,12 @@ export function findNode(root: RunNode | null, key: string | null): RunNode | nu
  * actually doing work right now; returns the node itself when nothing
  * beneath it is live.
  */
-export function deepestLiveNode(node: RunNode): RunNode {
+export function deepestLiveNode(node: RunNodeWire): RunNodeWire {
   const liveChildren = node.children.filter(child => child.subLive)
   return liveChildren.length ? deepestLiveNode(liveChildren.at(-1)!) : node
 }
 
-export function runNodeDuration(node: RunNode, now = Date.now()): number {
+export function runNodeDuration(node: RunNodeWire, now = Date.now()): number {
   const start = parseTimestamp(node.firstTs)
   if (start === null) return 0
   const end = parseTimestamp(node.lastTs) ?? (node.live ? now : start)
@@ -88,7 +89,7 @@ function shortPath(path: string): string {
 }
 
 export function analyzeCoordination(
-  root: RunNode | null,
+  root: RunNodeWire | null,
   run: RunResponse | null,
   now = Date.now(),
 ): CoordinationAnalysis {
@@ -207,7 +208,7 @@ export function analyzeCoordination(
   }
 
   const criticalPathKeys = new Set<string>()
-  const longestPath = (node: RunNode): { duration: number, path: RunNode[] } => {
+  const longestPath = (node: RunNodeWire): { duration: number, path: RunNodeWire[] } => {
     const own = runNodeDuration(node, now)
     if (!node.children.length) return { duration: own, path: [node] }
     const child = node.children.map(longestPath).sort((a, b) => b.duration - a.duration)[0]!
