@@ -2,10 +2,16 @@ import { Context, Effect, Layer, Option, Schema } from 'effect'
 import type { HttpClientError } from 'effect/unstable/http'
 import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/unstable/http'
 import {
+  ChatActionResponseSchema,
+  type ChatActionResponseWire,
+  ChatEventsResponseSchema,
+  type ChatEventsResponseWire,
   CostOverviewResponseSchema,
   type CostOverviewResponseWire,
 } from '#shared/schemas/api'
-import { ApiMalformed, ApiRejected, ApiUnreachable, type ApiError } from './errors'
+import { ChatActionSchema } from '#shared/schemas/chat'
+import type { ChatAction } from '#shared/types/chat'
+import { ApiMalformed, ApiRefused, ApiRejected, ApiUnreachable, type ApiError } from './errors'
 
 /** What h3's `createError` serialises — the only structure a failure has. */
 const ServerFailureSchema = Schema.Struct({
@@ -30,11 +36,12 @@ const failureDetail = (body: unknown): string =>
  */
 const classify = (url: string) =>
 (
-  failure: HttpClientError.HttpClientError | Schema.SchemaError | ApiRejected,
+  failure: HttpClientError.HttpClientError | Schema.SchemaError | ApiRejected | ApiRefused,
 ): Effect.Effect<never, ApiError> =>
-  // A rejection is already classified — the route inspected the status itself so
-  // the server's `statusMessage` would survive. It passes straight through.
-  failure._tag === 'ApiRejected'
+  // A rejection or a refusal is already classified — the route inspected the
+  // status itself so the server's `statusMessage` would survive, and a refusal
+  // never left the browser. Both pass straight through.
+  failure._tag === 'ApiRejected' || failure._tag === 'ApiRefused'
     ? Effect.fail(failure)
     : Schema.isSchemaError(failure)
       ? Effect.fail(new ApiMalformed({ url, detail: failure.message }))
@@ -45,6 +52,23 @@ const classify = (url: string) =>
 export interface RangeQuery {
   /** Hours of history. Omitted lets the server apply its configured default. */
   readonly hours?: number | undefined
+}
+
+/**
+ * Where a chat poll has read up to.
+ *
+ * No `hours`. `server/api/chat.get.ts` is the one GET handler that never calls
+ * `browserOptionsFor`, and `CursorQuerySchema` has no such field
+ * (`shared/schemas/request.ts:36-47`), so the `&hours=` the old transport
+ * appended was decoded away on arrival. `POST /api/chat` does use it.
+ */
+export interface ChatCursorQuery {
+  readonly project: string
+  readonly key: string
+  /** Index of the first event not yet seen. */
+  readonly since: number
+  /** Log revision the cursor belongs to; a mismatch makes the server reset. */
+  readonly revision: number
 }
 
 /**
@@ -62,6 +86,11 @@ export interface RangeQuery {
  */
 export class Api extends Context.Service<Api, {
   readonly costs: (query: RangeQuery) => Effect.Effect<CostOverviewResponseWire, ApiError>
+  readonly chatEvents: (query: ChatCursorQuery) => Effect.Effect<ChatEventsResponseWire, ApiError>
+  readonly chatAction: (
+    action: ChatAction,
+    query: RangeQuery,
+  ) => Effect.Effect<ChatActionResponseWire, ApiError>
 }>()('lcc/Api') {
   static readonly layer: Layer.Layer<Api> = Layer.effect(
     Api,
@@ -101,11 +130,55 @@ export class Api extends Context.Service<Api, {
       }
 
       const costs = route('/api/costs', CostOverviewResponseSchema)
+      const chatEvents = route('/api/chat', ChatEventsResponseSchema)
+
+      /**
+       * The one POST the dashboard makes.
+       *
+       * The body is encoded through `ChatActionSchema` — the schema the server
+       * parses it with — so the browser runs the same `isPattern(/\S/)` and
+       * `isMaxLength(20_000)` checks the handler would. A payload that fails
+       * them is refused here rather than sent to be answered 400, which is why
+       * `ApiRefused` exists.
+       */
+      const encodeChatAction = Schema.encodeEffect(ChatActionSchema)
+      const decodeChatAction = Schema.decodeUnknownEffect(ChatActionResponseSchema)
+      const chatAction = Effect.fn('Api POST /api/chat')(
+        function*(action: ChatAction, hours: number | undefined) {
+          const body = yield* encodeChatAction(action).pipe(
+            Effect.catch(error =>
+              new ApiRefused({ url: '/api/chat', detail: error.message })),
+          )
+          const response = yield* client.execute(
+            HttpClientRequest.post('/api/chat', { urlParams: { hours } }).pipe(
+              HttpClientRequest.bodyJsonUnsafe(body),
+            ),
+          )
+          const payload = yield* response.json
+          if (response.status >= 400) {
+            return yield* new ApiRejected({
+              url: '/api/chat',
+              status: response.status,
+              detail: failureDetail(payload),
+            })
+          }
+          return yield* decodeChatAction(payload)
+        },
+        Effect.catch(classify('/api/chat')),
+      )
 
       return Api.of({
         // `HttpClientRequest`'s urlParams skip undefined values, so an omitted
         // `hours` produces '/api/costs' rather than '/api/costs?hours=undefined'.
         costs: query => costs({ hours: query.hours }),
+        chatEvents: query =>
+          chatEvents({
+            project: query.project,
+            key: query.key,
+            since: query.since,
+            revision: query.revision,
+          }),
+        chatAction: (action, query) => chatAction(action, query.hours),
       })
     }),
   ).pipe(Layer.provide(FetchHttpClient.layer))

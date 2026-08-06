@@ -67,9 +67,12 @@ const selectedChanges = computed(() => (props.run?.diagnostics.changes || []).fi
 const selectedFiles = computed(() =>
   mergeAgentFileChanges(props.selected?.files || [], selectedChanges.value))
 /**
- * One ChatPanel instance belongs to one conversation: `useChatSessionState`
- * reads its project and key once at setup, so another agent needs another
- * instance rather than a prop update.
+ * One ChatPanel instance per conversation.
+ *
+ * The panel's atoms are keyed by project and session key and would follow a
+ * prop change on their own, but its activation bookkeeping is tied to the
+ * instance — so remounting is what keeps a hidden panel's poll from being
+ * attributed to the agent that replaced it.
  */
 const chatIdentity = computed(() => `${props.project}\0${props.selectedKey || ''}`)
 const promptEvent = computed(() => props.events.find(event => event.kind === 'prompt'))

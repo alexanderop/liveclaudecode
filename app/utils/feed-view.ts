@@ -1,6 +1,16 @@
+import type { ApiError } from '~/api/errors'
 import type { Feed } from '~/atoms/feed'
 import * as AsyncResult from 'effect/unstable/reactivity/AsyncResult'
 import * as Cause from 'effect/Cause'
+
+/**
+ * Something that went wrong, as the screen says it: what happened, and what to
+ * do about it. The pair every `ApiError` carries, flattened for a template.
+ */
+export interface Problem {
+  readonly message: string
+  readonly remedy: string
+}
 
 /**
  * What a polled resource looks like to a template: one string discriminant, no
@@ -101,6 +111,27 @@ export const feedValue = <A, B, E>(
 ): B => {
   const feed = AsyncResult.isSuccess(result) ? result.value : null
   return feed?.value == null ? fallback : project(feed.value)
+}
+
+/**
+ * The failure of a one-shot mutation — a `runtime.fn` atom — if it has one.
+ *
+ * Not a feed: a mutation has no last-good value to keep showing, so there is no
+ * stale state and nothing to fold the failure into. It stands until the next
+ * write replaces it, or until an `Atom.Reset` clears it.
+ *
+ * Interruption is not a failure here either. Writing the atom again while a run
+ * is in flight interrupts the first one, and the user who did that is looking
+ * at the second one's outcome.
+ */
+export const toActionError = <A>(
+  result: AsyncResult.AsyncResult<A, ApiError>,
+): Problem | null => {
+  if (result._tag !== 'Failure' || Cause.hasInterruptsOnly(result.cause)) return null
+  const failure = Cause.findError(result.cause)
+  return failure._tag === 'Success'
+    ? { message: failure.success.message, remedy: failure.success.remedy }
+    : { message: causeMessage(result.cause), remedy: DEFECT_REMEDY }
 }
 
 /** Whether the most recent poll of this feed failed. Drives the offline banner. */

@@ -43,12 +43,21 @@ export interface Feed<A> {
  * `AtomContext.stream` is the source to hand in: it subscribes rather than
  * registering a parent, so the pulse cannot rebuild the node either
  * (`repos/effect/packages/effect/src/unstable/reactivity/AtomRegistry.ts:973`).
+ *
+ * `enabled` is how a feed stops without dying. It is read per tick, and a tick
+ * it turns away emits **nothing** — the accumulator is handed straight back, so
+ * the cursor survives and a resumed feed continues where it left off instead of
+ * refetching from zero. Re-keying the family would achieve the pause and lose
+ * exactly that; see §3.9. The predicate is synchronous because the only caller
+ * reads an atom with `AtomContext.once`, which is synchronous and observes the
+ * live registry value from inside the running stream (experiment E7).
  */
 export const pollingFeed = <S, A, R>(options: {
   readonly interval: Duration.Input
   readonly initial: () => S
   readonly fetch: (state: S) => Effect.Effect<readonly [S, A], ApiError, R>
   readonly pulses?: Stream.Stream<unknown> | undefined
+  readonly enabled?: (() => boolean) | undefined
 }): Stream.Stream<Feed<A>, never, R> => {
   /** The cursor plus the newest value, threaded across ticks. */
   interface Accumulated {
@@ -59,11 +68,17 @@ export const pollingFeed = <S, A, R>(options: {
   const tick = (
     acc: Accumulated,
   ): Effect.Effect<readonly [Accumulated, ReadonlyArray<Feed<A>>], never, R> =>
-    options.fetch(acc.state).pipe(
-      Effect.map(([state, value]) => [{ state, last: value }, [{ value, error: null }]] as const),
-      // Keep the cursor and the last value; report the failure alongside.
-      Effect.catch(error => Effect.succeed([acc, [{ value: acc.last, error }]] as const)),
-    )
+    options.enabled && !options.enabled()
+      // No request, and no emission either: a paused feed has observed nothing,
+      // so republishing the last value would only re-render every subscriber on
+      // a timer for as long as the panel stays hidden.
+      ? Effect.succeed([acc, []] as const)
+      : options.fetch(acc.state).pipe(
+          Effect.map(([state, value]) =>
+            [{ state, last: value }, [{ value, error: null }]] as const),
+          // Keep the cursor and the last value; report the failure alongside.
+          Effect.catch(error => Effect.succeed([acc, [{ value: acc.last, error }]] as const)),
+        )
 
   const ticks: Stream.Stream<unknown> = options.pulses
     ? Stream.merge(Stream.tick(options.interval), options.pulses)

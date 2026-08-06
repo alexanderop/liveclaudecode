@@ -1,5 +1,4 @@
 import { vi } from 'vitest'
-import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import type {
   CostOverviewResponse,
   EventsResponse,
@@ -8,7 +7,6 @@ import type {
   SessionEventsResponse,
   TreeResponse,
 } from '#shared/types/run'
-import { chatActionResponse, chatEventsResponse } from './chat'
 import {
   costOverviewResponse,
   eventsResponse,
@@ -46,16 +44,6 @@ export interface LiveApiHandlers {
     url: string,
     options?: LiveApiRequestOptions,
   ) => EventsResponse | Promise<EventsResponse>
-  /** GET /api/chat — the poll for chat events. */
-  readonly chat?: (
-    url: string,
-    options?: LiveApiRequestOptions,
-  ) => ChatEventsResponse | Promise<ChatEventsResponse>
-  /** POST /api/chat — send/cancel/reset actions. */
-  readonly chatAction?: (
-    url: string,
-    options?: LiveApiRequestOptions,
-  ) => ChatActionResponse | Promise<ChatActionResponse>
   readonly costs?: (
     url: string,
     options?: LiveApiRequestOptions,
@@ -95,12 +83,9 @@ export function mockLiveApi(root: RunNode, handlers: LiveApiHandlers = {}) {
     if (url.startsWith('/api/costs')) {
       return (handlers.costs ?? (() => costOverviewResponse()))(url, options)
     }
-    if (url.startsWith('/api/chat')) {
-      if (options?.method === 'POST') {
-        return (handlers.chatAction ?? (() => chatActionResponse()))(url, options)
-      }
-      return (handlers.chat ?? (() => chatEventsResponse()))(url, options)
-    }
+    // No `/api/chat`: the chat talks to the server through the `Api` service and
+    // `HttpClient`, so a `$fetch` to it would be a bug, not a request to answer.
+    // Stub it with `mountWithAtoms` and `stubApi` instead.
     throw new Error(`Unexpected URL: ${url}`)
   })
   vi.stubGlobal('$fetch', fetch)

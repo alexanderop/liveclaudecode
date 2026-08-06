@@ -150,7 +150,22 @@ without mounting — survives. Only the mechanism changed.
 - An atom holding configuration a test substitutes — `apiLayerAtom` — needs
   `keepAlive`. It has no subscribers of its own, so the idle sweep can discard it
   between the write and the first read and silently restore the production
-  default.
+  default. The same applies to any atom a *stream body* reads with `get.once`:
+  `chat.ts`'s activation map has no subscribers either, and losing it stops every
+  visible panel from polling.
+- **A feed that has to pause reads a flag per tick; it does not change key.**
+  `pollingFeed`'s `enabled` runs before each request and, when it turns one away,
+  emits nothing — so the accumulator survives and a resumed feed continues from
+  its cursor. Putting the flag in the `Atom.family` key makes a paused feed a
+  different atom and a different node, so resuming refetches everything. Read the
+  flag with `AtomContext.once`: a tracked `get` makes the feed a dependent and
+  rebuilds the stream when the flag flips, which is the same loss by another
+  route. A `get.once` from inside a running stream body does observe the live
+  registry value — experiment E7, and `test/unit/atoms/chat.spec.ts` pins it.
+- Whatever writes that flag must write it **during `setup()`**, before the feed
+  is subscribed to. Subscribing starts the stream, and its first tick reads the
+  flag; announcing the component from `onMounted` costs a whole interval before
+  anything appears.
 - Imports between `app/atoms/**` follow a one-way DAG:
   `runtime → range → tree → {filters, selection} → {run-detail, events,
   session-events} → activity`. A back-edge is a review blocker. One file per
@@ -173,6 +188,10 @@ without mounting — survives. Only the mechanism changed.
 - Two-way bindings use `useAtomModel` from `app/composables/atom.ts`. The
   binding returns a readonly `Ref` plus a separate setter and ships no
   writable-ref helper.
+- Mutations go through `useAtomAction` from the same file, which answers whether
+  the write succeeded. Do not reach for `mode: 'promiseExit'` in a component —
+  reading the `Exit` means importing Effect into the render layer, and the
+  failure is already on the atom, where `toActionError` renders it from.
 - Data that differs between two mount sites of the same component stays a PROP.
   Only app-wide preferences (feed density, errors-only, follow-output,
   follow-active) are read from global atoms.
@@ -306,7 +325,9 @@ silently caught.
   is forked with the layer's services. It does NOT reach `Atom.setIdleTTL`, the
   registry's `defaultIdleTTL`, or node removal — those use raw `setTimeout` and
   a macrotask. Anything asserting on disposal needs real or `vi`-faked timers,
-  and a macrotask flush rather than `await nextTick()`.
+  and a macrotask flush rather than `await nextTick()`. Keep those cases in their
+  own file — `test/unit/atoms/chat-lifetime.spec.ts` — so the behaviour spec next
+  to it stays timer-free and fast.
 - Assert an out-of-band emission with `published()` from
   `test/fixtures/atom-registry.ts`, not by advancing the clock: it suspends until
   the atom publishes again. A merged pulse stream registers its listener one
@@ -315,9 +336,15 @@ silently caught.
   can, and the symptom is a hang.
 - Stub `Api` at the service boundary for pages and atoms, but keep `Api.layer`
   itself covered from below, against a fake `FetchHttpClient.Fetch`
-  (`test/unit/api/costs-route.spec.ts`). Everything between the service and the
-  socket — status handling, error classification, response decoding, and the URL
-  the client actually built — is invisible to a service-level stub.
+  (`test/fixtures/api-transport.ts`, used by `test/unit/api/**`). Everything
+  between the service and the socket — status handling, error classification,
+  request body encoding, response decoding, and the URL the client actually
+  built — is invisible to a service-level stub.
+- A mounted component's poll loop is driven with a **pulse**, not with faked
+  timers: write the feed's pulse atom through the mount's own registry and
+  flush. A pulse and an interval tick enter `pollingFeed` through the same step,
+  so a gate that turns one away turns the other away too, and the interval
+  itself is covered by `TestClock` in the atom spec.
 - `@effect/atom-vue` ships a placeholder test suite, so
   `test/nuxt/atom-binding.spec.ts` owns coverage of the binding itself:
   synchronous value before first render, re-subscription on thunk dependency

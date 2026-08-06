@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import type { ChatAgentId } from '#shared/types/chat'
+import { useAtomSet, useAtomValue } from '@effect/atom-vue'
+import type { ChatAction, ChatAgentId } from '#shared/types/chat'
+import type { ChatTarget } from '~/atoms/chat'
+import { chatAtoms, chatTarget } from '~/atoms/chat'
 
 const props = defineProps<{
   project: string
@@ -32,24 +35,77 @@ const agentLabels: Readonly<Record<ChatAgentId, string>> = Object.fromEntries(
   agents.map(agent => [agent.id, agent.label]),
 ) as Record<ChatAgentId, string>
 
-const { state: sessionState, touch: touchSessionState } = useChatSessionState(
-  props.project,
-  props.sessionKey,
-)
-const {
-  events,
-  since,
-  revision,
-  status,
-  selectedAgent,
-  draft,
-} = toRefs(sessionState)
-const { actionPending, requestError, ...transport } = useChatTransport({
-  project: () => props.project,
-  sessionKey: () => props.sessionKey,
-  hours: () => props.hours,
-  state: { events, since, revision, status, selectedAgent },
-})
+// Both mount sites re-`:key` the panel when the conversation changes, so these
+// props are fixed for the lifetime of one instance. The thunks are reactive
+// anyway — that is the contract of the binding, not an assumption about here.
+const target = computed(() => chatTarget(props.project, props.sessionKey))
+
+const setActive = useAtomSet(() => chatAtoms.active)
+const pollNow = useAtomSet(() => chatAtoms.pulse)
+
+/**
+ * Whether this panel is on screen.
+ *
+ * `<KeepAlive>` does not stop effect scopes in Vue 3.5 — a deactivated subtree
+ * is moved, not suspended, and its atom subscriptions stay live — so a hidden
+ * panel would keep polling unless it says otherwise. The count it writes is
+ * read per tick from inside the poll loop, which is why deactivating pauses the
+ * requests without discarding the cursor: reactivating resumes from the event
+ * the panel had already read, instead of refetching the conversation.
+ *
+ * A count and not a flag: the session panel and the inspector's Ask tab can be
+ * showing the same conversation, and either one's deactivation would otherwise
+ * stop the other's poll.
+ *
+ * The guard makes the pair idempotent. The first call is `setup`'s, `onActivated`
+ * fires straight after it inside a `<KeepAlive>`, and eviction runs
+ * `onDeactivated` and then `onUnmounted`.
+ */
+let activated: ChatTarget | null = null
+let shown = false
+
+function activate(): void {
+  if (activated) return
+  activated = target.value
+  setActive({ target: activated, delta: 1 })
+  // Coming back to a panel polls at once rather than waiting out an interval
+  // the conversation spent hidden. The first appearance needs no pulse — the
+  // feed's stream emits on its first pull — and could not use one anyway: the
+  // stream is not listening for pulses until a turn after that first value.
+  if (shown) pollNow(activated)
+  shown = true
+}
+
+function deactivate(): void {
+  if (!activated) return
+  setActive({ target: activated, delta: -1 })
+  activated = null
+}
+
+// Before the feed below is subscribed to, and deliberately: subscribing starts
+// the stream, whose first tick reads the count above. Announcing the panel from
+// `onMounted` instead would let that first tick find nothing on screen and skip,
+// so the conversation would take a whole interval to appear.
+activate()
+onActivated(activate)
+onDeactivated(deactivate)
+onUnmounted(deactivate)
+
+const conversation = useAtomValue(() => chatAtoms.conversation(target.value))
+const draft = useAtomModel(() => chatAtoms.draft(target.value))
+const chosenAgent = useAtomValue(() => chatAtoms.agentChoice(target.value))
+const chooseAgent = useAtomSet(() => chatAtoms.agentChoice(target.value))
+const actionResult = useAtomValue(() => chatAtoms.action(target.value))
+const submit = useAtomAction(() => chatAtoms.action(target.value))
+
+const chat = computed(() => toChatView(conversation.value))
+const events = computed(() => chat.value.events)
+const status = computed(() => chat.value.status)
+const selectedAgent = computed(() => chatAgent(chat.value.agent, chosenAgent.value))
+const actionPending = computed(() => actionResult.value.waiting)
+// A failed poll is the louder problem — it means nothing on screen is current —
+// so it wins over a stale action failure underneath it.
+const requestError = computed(() => chat.value.error ?? toActionError(actionResult.value))
 
 const busy = computed(() => status.value === 'starting' || status.value === 'busy')
 const canSend = computed(() => Boolean(
@@ -111,30 +167,53 @@ function rowKey(row: ChatRow, index: number): string {
   return row.kind === 'tool' ? `tool-${row.toolCallId}` : `${row.kind}-${index}`
 }
 
+/**
+ * Posts one action and, if the server took it, polls straight away.
+ *
+ * The pulse is what keeps a send from looking laggy: the action changed the
+ * server's log — appended the question, or removed the record on a reset — and
+ * without it the panel would show that up to a full interval later. It goes
+ * into the running stream rather than refreshing the atom, which would rebuild
+ * the node and restart the cursor at zero.
+ */
+async function act(action: ChatAction): Promise<boolean> {
+  const accepted = await submit({ action, hours: props.hours })
+  if (accepted) pollNow(target.value)
+  return accepted
+}
+
 async function send(): Promise<void> {
   const text = draft.value.trim()
   if (!canSend.value || !text) return
-  if (await transport.send(text)) draft.value = ''
+  const accepted = await act({
+    action: 'send',
+    project: props.project,
+    key: props.sessionKey,
+    agent: selectedAgent.value,
+    text,
+  })
+  if (accepted) draft.value = ''
 }
 
 async function cancel(): Promise<void> {
   if (!busy.value || actionPending.value) return
-  await transport.cancel()
+  await act({ action: 'cancel', project: props.project, key: props.sessionKey })
 }
 
+/**
+ * Starts a fresh conversation.
+ *
+ * Nothing is cleared here. `resetChat` removes the record server-side, so the
+ * poll the pulse triggers comes back with `reset: true` and an empty log, and
+ * the feed replaces what it was holding. That is the point of giving the poll
+ * sole ownership of `events`, `since`, and `revision`: the old code had to
+ * clear all three by hand, in order, and only after the POST was accepted.
+ */
 async function reset(): Promise<void> {
   if (actionPending.value) return
-  await transport.reset()
+  await act({ action: 'reset', project: props.project, key: props.sessionKey })
 }
 
-function activate(): void {
-  touchSessionState()
-  transport.resume()
-}
-
-onMounted(activate)
-onActivated(activate)
-onDeactivated(() => transport.pause())
 </script>
 
 <template>
@@ -150,7 +229,7 @@ onDeactivated(() => transport.pause())
           :class="{ selected: selectedAgent === agent.id }"
           :aria-pressed="selectedAgent === agent.id"
           :disabled="busy"
-          @click="selectedAgent = agent.id"
+          @click="chooseAgent(agent.id)"
         >{{ agent.label }}</UButton>
       </div>
       <span class="chat-status" :class="status">
@@ -259,7 +338,7 @@ onDeactivated(() => transport.pause())
       variant="soft"
       icon="i-lucide-wifi-off"
       title="Local chat unavailable"
-      :description="requestError"
+      :description="`${requestError.message}. ${requestError.remedy}`"
     />
 
     <UChatPrompt

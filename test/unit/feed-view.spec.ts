@@ -2,7 +2,7 @@ import { assert, describe, it } from '@effect/vitest'
 import { Cause } from 'effect'
 import * as AsyncResult from 'effect/unstable/reactivity/AsyncResult'
 import type { Feed } from '~/atoms/feed'
-import { feedIsOffline, feedValue, toFeedView } from '~/utils/feed-view'
+import { feedIsOffline, feedValue, toActionError, toFeedView } from '~/utils/feed-view'
 import type { ApiError } from '~/api/errors'
 import { ApiMalformed, ApiUnreachable } from '~/api/errors'
 
@@ -121,6 +121,42 @@ describe('feedValue', () => {
 
   it('keeps the stale value through a failed refresh', () => {
     assert.strictEqual(feedValue(success(feed('abc', offline)), v => v.length, 0), 3)
+  })
+})
+
+describe('toActionError', () => {
+  const pending = AsyncResult.initial<string, ApiError>(true)
+
+  it('has nothing to report before an action is run', () => {
+    assert.isNull(toActionError(AsyncResult.initial<string, ApiError>()))
+    assert.isNull(toActionError(pending))
+  })
+
+  it('has nothing to report for an accepted action', () => {
+    assert.isNull(toActionError(AsyncResult.success<string, ApiError>('starting')))
+  })
+
+  it('reports the failure and what to do about it', () => {
+    const result = AsyncResult.failure<string, ApiError>(Cause.fail(offline))
+    assert.deepStrictEqual(toActionError(result), {
+      message: offline.message,
+      remedy: offline.remedy,
+    })
+  })
+
+  it('says nothing when the action was superseded rather than refused', () => {
+    // Writing the atom again interrupts the run in flight, and the user who did
+    // that is looking at the outcome of the second one.
+    const result = AsyncResult.failure<string, ApiError>(Cause.interrupt(1))
+    assert.isNull(toActionError(result))
+  })
+
+  it('reports a defect as itself, with no advice it cannot give', () => {
+    const result = AsyncResult.failure<string, ApiError>(Cause.die(new Error('boom')))
+    assert.deepStrictEqual(toActionError(result), {
+      message: 'boom',
+      remedy: 'Reload the page. If it happens again, check the server output.',
+    })
   })
 })
 

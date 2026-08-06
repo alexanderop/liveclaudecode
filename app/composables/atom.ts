@@ -1,6 +1,6 @@
 import type * as Atom from 'effect/unstable/reactivity/Atom'
 import type { WritableComputedRef } from 'vue'
-import { injectRegistry, useAtom } from '@effect/atom-vue'
+import { injectRegistry, useAtom, useAtomSet } from '@effect/atom-vue'
 import { computed, watchEffect } from 'vue'
 
 /**
@@ -51,4 +51,21 @@ export const useAtomMount = <A>(atom: () => Atom.Atom<A>): void => {
 export const useAtomModel = <A>(atom: () => Atom.Writable<A, A>): WritableComputedRef<A> => {
   const [value, set] = useAtom(atom)
   return computed({ get: () => value.value, set })
+}
+
+/**
+ * Runs a `runtime.fn` atom and answers whether it succeeded.
+ *
+ * A mutation nearly always has a follow-up the caller only wants on success —
+ * clearing the composer once the question is really queued. `promise` mode
+ * rejects with the squashed cause on failure, and this deliberately drops it:
+ * the failure is already on the atom, where the component renders it from, and
+ * a second copy thrown into a click handler is one more thing to forget to
+ * catch. Read the reason with `toActionError`, not from here.
+ */
+export const useAtomAction = <Value, Failure, Arg>(
+  atom: () => Atom.AtomResultFn<Arg, Value, Failure>,
+): ((value: Arg) => Promise<boolean>) => {
+  const set = useAtomSet(atom, { mode: 'promise' })
+  return value => set(value).then(() => true, () => false)
 }

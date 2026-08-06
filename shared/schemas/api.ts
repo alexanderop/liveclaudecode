@@ -1,4 +1,6 @@
 import { Schema } from 'effect'
+import { ChatAgentIdSchema } from '#shared/schemas/chat'
+import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import type { CostOverviewResponse } from '#shared/types/run'
 
 /**
@@ -91,3 +93,72 @@ export type CostOverviewResponseWire = typeof CostOverviewResponseSchema.Type
 const _costsWireAcceptsServerShape: CostOverviewResponseWire =
   undefined as unknown as CostOverviewResponse
 void _costsWireAcceptsServerShape
+
+export const ChatStatusSchema = Schema.Literals(['idle', 'starting', 'busy', 'error'])
+
+export type ChatStatusWire = typeof ChatStatusSchema.Type
+
+/**
+ * One entry in a chat's append-only log.
+ *
+ * A plain `Schema.Union` rather than a tagged one: the discriminant is `kind`,
+ * not `_tag`, and the arms are small enough that `anyOf` costs nothing — a poll
+ * decodes only the events after the cursor, which is a handful per turn.
+ */
+export const ChatEventSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal('user'), text: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal('assistant-chunk'),
+    agent: ChatAgentIdSchema,
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('thought-chunk'),
+    agent: ChatAgentIdSchema,
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('tool'),
+    toolCallId: Schema.String,
+    title: Schema.String,
+    toolKind: Schema.String,
+    status: Schema.String,
+  }),
+  Schema.Struct({ kind: Schema.Literal('turn-end'), stopReason: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal('error'), message: Schema.String }),
+])
+
+export type ChatEventWire = typeof ChatEventSchema.Type
+
+/**
+ * `GET /api/chat`.
+ *
+ * `reset` is the server telling the client to replace its log rather than
+ * extend it — a new `revision`, a cursor before the retained window, or a
+ * cursor past the end. `agent` is null until the first message is sent, and
+ * again after a reset, because the reset removes the record entirely
+ * (`server/utils/chat.ts:526-532`).
+ */
+export const ChatEventsResponseSchema = Schema.Struct({
+  events: Schema.Array(ChatEventSchema),
+  next: Schema.Number,
+  revision: Schema.Number,
+  reset: Schema.Boolean,
+  status: ChatStatusSchema,
+  agent: Schema.NullOr(ChatAgentIdSchema),
+})
+
+export type ChatEventsResponseWire = typeof ChatEventsResponseSchema.Type
+
+/** `POST /api/chat`. */
+export const ChatActionResponseSchema = Schema.Struct({ status: ChatStatusSchema })
+
+export type ChatActionResponseWire = typeof ChatActionResponseSchema.Type
+
+const _chatEventsWireAcceptsServerShape: ChatEventsResponseWire =
+  undefined as unknown as ChatEventsResponse
+void _chatEventsWireAcceptsServerShape
+
+const _chatActionWireAcceptsServerShape: ChatActionResponseWire =
+  undefined as unknown as ChatActionResponse
+void _chatActionWireAcceptsServerShape

@@ -1,6 +1,11 @@
 import { Effect, Layer } from 'effect'
-import type { CostOverviewResponseWire } from '#shared/schemas/api'
-import type { RangeQuery } from '~/api/api'
+import type {
+  ChatActionResponseWire,
+  ChatEventsResponseWire,
+  CostOverviewResponseWire,
+} from '#shared/schemas/api'
+import type { ChatAction } from '#shared/types/chat'
+import type { ChatCursorQuery, RangeQuery } from '~/api/api'
 import { Api } from '~/api/api'
 import type { ApiError } from '~/api/errors'
 import { makeCallLog, type CallLog } from './call-log'
@@ -25,11 +30,26 @@ export type StubHandler<Query, A> = (query: Query) => Effect.Effect<A, ApiError>
 export interface StubApiHandlers {
   /** `GET /api/costs`. */
   readonly costs?: StubHandler<RangeQuery, CostOverviewResponseWire>
+  /** `GET /api/chat`. */
+  readonly chatEvents?: StubHandler<ChatCursorQuery, ChatEventsResponseWire>
+  /** `POST /api/chat`. Both arguments are recorded. */
+  readonly chatAction?: (
+    action: ChatAction,
+    query: RangeQuery,
+  ) => Effect.Effect<ChatActionResponseWire, ApiError>
+}
+
+/** One recorded `POST /api/chat`. */
+export interface StubChatAction {
+  readonly action: ChatAction
+  readonly query: RangeQuery
 }
 
 /** What each stubbed endpoint was called with, oldest call first. */
 export interface StubApiCalls {
   readonly costs: CallLog<RangeQuery>
+  readonly chatEvents: CallLog<ChatCursorQuery>
+  readonly chatAction: CallLog<StubChatAction>
 }
 
 export interface StubApi {
@@ -66,11 +86,21 @@ const recording = <Query, A>(log: CallLog<Query>, handler: StubHandler<Query, A>
 export const stubApi = (handlers: StubApiHandlers = {}): StubApi => {
   const calls: StubApiCalls = {
     costs: Effect.runSync(makeCallLog<RangeQuery>()),
+    chatEvents: Effect.runSync(makeCallLog<ChatCursorQuery>()),
+    chatAction: Effect.runSync(makeCallLog<StubChatAction>()),
   }
+  const { chatAction } = handlers
   return {
     calls,
     layer: Layer.mock(Api, {
       ...(handlers.costs && { costs: recording(calls.costs, handlers.costs) }),
+      ...(handlers.chatEvents && { chatEvents: recording(calls.chatEvents, handlers.chatEvents) }),
+      ...(chatAction && {
+        chatAction: Effect.fn('stubApi')(function*(action: ChatAction, query: RangeQuery) {
+          yield* calls.chatAction.record({ action, query })
+          return yield* chatAction(action, query)
+        }),
+      }),
     }),
   }
 }

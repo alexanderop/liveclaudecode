@@ -1,28 +1,40 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
+import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { chatAtoms, chatTarget } from '~/atoms/chat'
 import RunInspector from '~/components/RunInspector.vue'
 import type { RunNode, RunResponse } from '#shared/types/run'
 import { chatActionResponse, chatEventsResponse } from '../fixtures/chat'
 import { mockLiveApi } from '../fixtures/live-api'
+import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
 import { runNode, runResponse, timelineLane, transcriptEvent } from '../fixtures/runs'
+import { recordedCalls, type StubApiHandlers } from '../fixtures/stub-api'
 
 let component: VueWrapper | null = null
+let mounted: MountedAtoms | null = null
 
 afterEach(() => {
   component?.unmount()
   component = null
+  mounted?.wrapper.unmount()
+  // The registry owns the chat poll loop; unmounting only drops the subscription.
+  mounted?.registry.dispose()
+  mounted = null
   vi.unstubAllGlobals()
 })
 
 const ASK_TAB = 5
 
-/** Requests the chat poll made, so a test can watch polling start and stop. */
-function chatPolls(fetch: ReturnType<typeof mockLiveApi>): number {
-  return fetch.mock.calls.filter(([url, options]) =>
-    String(url).startsWith('/api/chat') && options?.method !== 'POST').length
-}
+/** Answers the Ask tab's poll, and accepts whatever it posts. */
+const chatting = (): StubApiHandlers => ({
+  chatEvents: () => Effect.succeed(chatEventsResponse()),
+  chatAction: () => Effect.succeed(chatActionResponse()),
+})
+
+/** Every chat poll the inspected panel issued, oldest first. */
+const chatPolls = () => recordedCalls(mounted!.api.calls.chatEvents)
 
 function inspectorNode(key: string, overrides: Partial<RunNode> = {}): RunNode {
   return runNode({
@@ -227,11 +239,9 @@ describe('run inspector', () => {
   it('scopes the Ask tab to the inspected subagent', async () => {
     const child = inspectorNode('root/review', { label: 'Review accessibility' })
     const root = inspectorNode('root', { children: [child] })
-    const fetch = mockLiveApi(root, {
-      chat: () => chatEventsResponse(),
-      chatAction: () => chatActionResponse(),
-    })
-    const wrapper = component = await mountSuspended(RunInspector, {
+    mockLiveApi(root)
+    mounted = await mountWithAtoms(RunInspector, {
+      api: chatting(),
       props: {
         run: inspectorRun(root, child),
         root,
@@ -246,35 +256,40 @@ describe('run inspector', () => {
         followOutput: false,
       },
     })
+    const wrapper = mounted.wrapper
 
     await wrapper.findAll('[role="tab"]')[ASK_TAB]!.trigger('mousedown', { button: 0 })
     await flushPromises()
 
     expect(wrapper.get('.chat-empty').text()).toContain('Ask about this subagent')
-    expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/chat?project=%2Frepo&key=root%2Freview&since=0&revision=0&hours=720'),
-      { signal: expect.any(AbortSignal) },
-    )
+    // The inspected agent's key, not the session root's: this mount site and
+    // the one in `index.vue` hold two independent conversations.
+    expect(chatPolls()).toEqual([
+      { project: '/repo', key: 'root/review', since: 0, revision: 0 },
+    ])
 
     await wrapper.get('textarea').setValue('What did this agent change?')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    const post = fetch.mock.calls.find(([, options]) => options?.method === 'POST')
-    expect(post?.[1]?.body).toEqual({
-      action: 'send',
-      project: '/repo',
-      key: 'root/review',
-      agent: 'claude',
-      text: 'What did this agent change?',
+    expect(recordedCalls(mounted.api.calls.chatAction)[0]).toEqual({
+      action: {
+        action: 'send',
+        project: '/repo',
+        key: 'root/review',
+        agent: 'claude',
+        text: 'What did this agent change?',
+      },
+      query: { hours: 720 },
     })
   })
 
   it('stops polling the subagent chat once another tab is opened', async () => {
     const child = inspectorNode('root/review', { label: 'Review accessibility' })
     const root = inspectorNode('root', { children: [child] })
-    const fetch = mockLiveApi(root, { chat: () => chatEventsResponse() })
-    const wrapper = component = await mountSuspended(RunInspector, {
+    mockLiveApi(root)
+    mounted = await mountWithAtoms(RunInspector, {
+      api: chatting(),
       props: {
         run: inspectorRun(root, child),
         root,
@@ -289,33 +304,32 @@ describe('run inspector', () => {
         followOutput: false,
       },
     })
+    const wrapper = mounted.wrapper
 
-    vi.useFakeTimers()
-    try {
-      await wrapper.findAll('[role="tab"]')[ASK_TAB]!.trigger('mousedown', { button: 0 })
-      await flushPromises()
-      const opened = chatPolls(fetch)
-      await vi.advanceTimersByTimeAsync(2_400)
-      expect(chatPolls(fetch)).toBeGreaterThan(opened)
+    await wrapper.findAll('[role="tab"]')[ASK_TAB]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
+    expect(chatPolls()).toHaveLength(1)
 
-      await wrapper.findAll('[role="tab"]')[0]!.trigger('mousedown', { button: 0 })
-      await flushPromises()
-      const closed = chatPolls(fetch)
-      await vi.advanceTimersByTimeAsync(2_400)
+    await wrapper.findAll('[role="tab"]')[0]!.trigger('mousedown', { button: 0 })
+    await flushPromises()
 
-      expect(wrapper.find('.chat-panel').exists()).toBe(false)
-      expect(chatPolls(fetch)).toBe(closed)
-    } finally {
-      vi.useRealTimers()
-    }
+    // This mount site has no `<KeepAlive>`, so leaving the tab destroys the
+    // panel — and the poll loop it left behind must not outlive it. Pulsing is
+    // a stronger prod than the interval: both enter the loop the same way.
+    expect(wrapper.find('.chat-panel').exists()).toBe(false)
+    mounted.registry.set(chatAtoms.pulse, chatTarget('/repo', 'root/review'))
+    await flushPromises()
+    await flushPromises()
+    expect(chatPolls()).toHaveLength(1)
   })
 
   it('leaves the Ask tab when another agent is selected', async () => {
     const child = inspectorNode('root/review', { label: 'Review accessibility' })
     const sibling = inspectorNode('root/audit', { label: 'Audit the styles' })
     const root = inspectorNode('root', { children: [child, sibling] })
-    mockLiveApi(root, { chat: () => chatEventsResponse() })
-    const wrapper = component = await mountSuspended(RunInspector, {
+    mockLiveApi(root)
+    mounted = await mountWithAtoms(RunInspector, {
+      api: chatting(),
       props: {
         run: inspectorRun(root, child),
         root,
@@ -330,6 +344,7 @@ describe('run inspector', () => {
         followOutput: false,
       },
     })
+    const wrapper = mounted.wrapper
 
     await wrapper.findAll('[role="tab"]')[ASK_TAB]!.trigger('mousedown', { button: 0 })
     await flushPromises()
