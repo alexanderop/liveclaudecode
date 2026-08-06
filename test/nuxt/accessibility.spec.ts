@@ -1,12 +1,12 @@
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import axe from 'axe-core'
+import { Effect } from 'effect'
 import type { RunOptions } from 'axe-core'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import IndexPage from '~/pages/index.vue'
 import RunChanges from '~/components/RunChanges.vue'
 import RunOverview from '~/components/RunOverview.vue'
-import { mockLiveApi } from '../fixtures/live-api'
 import { mountWithAtoms } from '../fixtures/mount-atoms'
 import { runNode, runResponse, treeResponse } from '../fixtures/runs'
 import { servingTree } from '../fixtures/stub-api'
@@ -44,7 +44,6 @@ afterEach(() => {
 describe('accessibility', () => {
   it('has no detectable semantic violations in the empty dashboard state', async () => {
     const empty = { ...treeResponse([]), projects: [] }
-    mockLiveApi(runNode(), { tree: () => empty })
     const dashboard = await mountWithAtoms(IndexPage, {
       api: servingTree(empty),
       attachTo: document.body,
@@ -66,9 +65,8 @@ describe('accessibility', () => {
   it('has no detectable violations across the populated dashboard panels', async () => {
     const root = runNode()
     const run = runResponse()
-    mockLiveApi(root, { run: () => run })
     const dashboard = await mountWithAtoms(IndexPage, {
-      api: servingTree(treeResponse(root)),
+      api: { ...servingTree(treeResponse(root)), run: () => Effect.succeed(run) },
       attachTo: document.body,
       global: {
         stubs: {

@@ -4,6 +4,7 @@ import type { ChatActionResponse, ChatEventsResponse } from '#shared/types/chat'
 import type {
   CostOverviewResponse,
   EventsResponse,
+  ParseHealthResponse,
   PublicRunNode,
   RunResponse,
   SessionEventsResponse,
@@ -627,6 +628,51 @@ void _eventsWireAcceptsServerShape
 const _sessionEventsWireAcceptsServerShape: SessionEventsResponseWire =
   undefined as unknown as SessionEventsResponse
 void _sessionEventsWireAcceptsServerShape
+
+const ParseIssueSchema = Schema.Struct({
+  reason: Schema.Literals(['invalid-json', 'schema-mismatch', 'unsupported-shape']),
+  line: Schema.Number,
+  recordType: Schema.String,
+  detail: Schema.String,
+  excerpt: Schema.String,
+})
+
+export type ParseIssueWire = typeof ParseIssueSchema.Type
+
+const SessionParseHealthSchema = Schema.Struct({
+  skipped: Schema.Number,
+  counts: Schema.Struct({
+    invalidJson: Schema.Number,
+    schemaMismatch: Schema.Number,
+    unsupportedShape: Schema.Number,
+  }),
+  source: SessionSourceSchema,
+  sourceDetail: Schema.String,
+  projectId: Schema.String,
+  projectName: Schema.String,
+  key: Schema.String,
+  label: Schema.String,
+  transcriptPath: Schema.String,
+  lastTs: TimestampSchema,
+  samples: Schema.Array(ParseIssueSchema),
+})
+
+export type SessionParseHealthWire = typeof SessionParseHealthSchema.Type
+
+/** `GET /api/debug` — which records the scanners had to skip, and why. */
+export const ParseHealthResponseSchema = Schema.Struct({
+  hours: Schema.Number,
+  sources: Schema.Array(SessionSourceStatusSchema),
+  sessions: Schema.Array(SessionParseHealthSchema),
+  skipped: Schema.Number,
+  sampleLimit: Schema.Number,
+})
+
+export type ParseHealthResponseWire = typeof ParseHealthResponseSchema.Type
+
+const _parseHealthWireAcceptsServerShape: ParseHealthResponseWire =
+  undefined as unknown as ParseHealthResponse
+void _parseHealthWireAcceptsServerShape
 
 export const ChatStatusSchema = Schema.Literals(['idle', 'starting', 'busy', 'error'])
 

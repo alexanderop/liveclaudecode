@@ -225,9 +225,11 @@ transcripts, and ordinary cloud ChatGPT conversations are out of scope.
 
 ```text
 app/
+  api/              the client-side Api service and its typed errors
+  atoms/            Effect Atom state: polling feeds, filters, and selection
   components/       provider-neutral Vue dashboard components
-  composables/      polling, selection, and combined filtering state
-  utils/            display and pure session-filter helpers
+  composables/      provide/inject context and thin atom-binding adapters
+  utils/            display helpers and pure view-model projections
 server/
   api/              thin Nitro/Effect adapters
   utils/            provider adapters, transcript scans, and unified catalog

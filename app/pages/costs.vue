@@ -5,6 +5,7 @@ import { costsAtoms, costsKey } from '~/atoms/costs'
 import ChartLine from '~/components/charts/LineChart.vue'
 import ChartSparkline from '~/components/charts/Sparkline.vue'
 import type { ChartCategory, ChartDatum } from '~/components/charts/chart'
+import { normalizeHours, RANGE_OPTIONS } from '~/utils/range'
 
 type HarnessFilter = 'all' | SessionSourceWire
 
@@ -13,12 +14,7 @@ const router = useRouter()
 useHead({ title: 'Costs — liveclaudecode' })
 const selectedHarness = ref<HarnessFilter>('all')
 const hours = ref(normalizeHours(route.query.hours))
-const rangeOptions = [
-  { label: 'Last 24 hours', value: 24 },
-  { label: 'Last 7 days', value: 168 },
-  { label: 'Last 30 days', value: 720 },
-  { label: 'All time', value: 0 },
-]
+const rangeOptions = RANGE_OPTIONS
 const sourceMeta: Record<SessionSourceWire, { icon: string, color: string }> = {
   claude: { icon: 'i-lucide-sparkles', color: '#d9915b' },
   codex: { icon: 'i-lucide-square-terminal', color: '#65b89a' },
@@ -109,11 +105,6 @@ const largestMetric = computed(() => Math.max(
   ...visibleModels.value.map(model => modelMetric(model, chartUsesCost.value)),
 ))
 const degradedSources = computed(() => data.value?.sources.filter(source => source.state !== 'ready') || [])
-
-function normalizeHours(value: unknown): number {
-  const parsed = Number(Array.isArray(value) ? value[0] : value)
-  return [0, 24, 168, 720].includes(parsed) ? parsed : 720
-}
 
 function formatDay(date: string): string {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })

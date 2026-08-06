@@ -4,6 +4,7 @@ import type {
   ChatEventsResponseWire,
   CostOverviewResponseWire,
   EventsResponseWire,
+  ParseHealthResponseWire,
   RunResponseWire,
   SessionEventsResponseWire,
   TreeResponseWire,
@@ -49,6 +50,8 @@ export interface StubApiHandlers {
   readonly sessionEvents?: StubHandler<SessionEventsQuery, SessionEventsResponseWire>
   /** `GET /api/costs`. */
   readonly costs?: StubHandler<RangeQuery, CostOverviewResponseWire>
+  /** `GET /api/debug`. */
+  readonly parseHealth?: StubHandler<RangeQuery, ParseHealthResponseWire>
   /** `GET /api/chat`. */
   readonly chatEvents?: StubHandler<ChatCursorQuery, ChatEventsResponseWire>
   /** `POST /api/chat`. Both arguments are recorded. */
@@ -85,6 +88,7 @@ export interface StubApiCalls {
   readonly events: CallLog<EventsQuery>
   readonly sessionEvents: CallLog<SessionEventsQuery>
   readonly costs: CallLog<RangeQuery>
+  readonly parseHealth: CallLog<RangeQuery>
   readonly chatEvents: CallLog<ChatCursorQuery>
   readonly chatAction: CallLog<StubChatAction>
 }
@@ -127,6 +131,7 @@ export const stubApi = (handlers: StubApiHandlers = {}): StubApi => {
     events: Effect.runSync(makeCallLog<EventsQuery>()),
     sessionEvents: Effect.runSync(makeCallLog<SessionEventsQuery>()),
     costs: Effect.runSync(makeCallLog<RangeQuery>()),
+    parseHealth: Effect.runSync(makeCallLog<RangeQuery>()),
     chatEvents: Effect.runSync(makeCallLog<ChatCursorQuery>()),
     chatAction: Effect.runSync(makeCallLog<StubChatAction>()),
   }
@@ -141,6 +146,9 @@ export const stubApi = (handlers: StubApiHandlers = {}): StubApi => {
         sessionEvents: recording(calls.sessionEvents, handlers.sessionEvents),
       }),
       ...(handlers.costs && { costs: recording(calls.costs, handlers.costs) }),
+      ...(handlers.parseHealth && {
+        parseHealth: recording(calls.parseHealth, handlers.parseHealth),
+      }),
       ...(handlers.chatEvents && { chatEvents: recording(calls.chatEvents, handlers.chatEvents) }),
       ...(chatAction && {
         chatAction: Effect.fn('stubApi')(function*(action: ChatAction, query: RangeQuery) {

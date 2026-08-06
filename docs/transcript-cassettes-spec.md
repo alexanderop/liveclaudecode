@@ -681,7 +681,7 @@ point of the system.
 | A zero-token turn, a negative duration, an absurd token count | Synthetic |
 | Exactly the boundary of `LIVE_WINDOW` | Synthetic |
 | A specific tool's output shape in isolation | Synthetic |
-| Component and composable tests | Synthetic (`mockLiveApi`, `runs.ts` builders) |
+| Component and atom tests | Synthetic (`stubApi`, `runs.ts` builders) |
 
 Cassettes answer *"is this still true of reality?"*. Synthetic fixtures answer
 *"is this branch correct?"*. Neither replaces the other, and the existing
@@ -805,7 +805,7 @@ division:
 | Browser test concern | Mechanism |
 | --- | --- |
 | Loading, error, empty, degraded-source states | `mockDashboardApi` |
-| Stale-response and race handling | `mockDashboardApi` + `deferred()` |
+| A response held open, so a pending state can be observed | `mockDashboardApi` + `deferred()` |
 | Does real data render correctly end to end | **Cassette** |
 | Accessibility of populated views | **Cassette** |
 | Visual regression | **Cassette** |

@@ -10,6 +10,8 @@ import {
   type CostOverviewResponseWire,
   EventsResponseSchema,
   type EventsResponseWire,
+  ParseHealthResponseSchema,
+  type ParseHealthResponseWire,
   RunResponseSchema,
   type RunResponseWire,
   SessionEventsResponseSchema,
@@ -119,6 +121,7 @@ export class Api extends Context.Service<Api, {
     query: SessionEventsQuery,
   ) => Effect.Effect<SessionEventsResponseWire, ApiError>
   readonly costs: (query: RangeQuery) => Effect.Effect<CostOverviewResponseWire, ApiError>
+  readonly parseHealth: (query: RangeQuery) => Effect.Effect<ParseHealthResponseWire, ApiError>
   readonly chatEvents: (query: ChatCursorQuery) => Effect.Effect<ChatEventsResponseWire, ApiError>
   readonly chatAction: (
     action: ChatAction,
@@ -167,6 +170,7 @@ export class Api extends Context.Service<Api, {
       const events = route('/api/events', EventsResponseSchema)
       const sessionEvents = route('/api/session-events', SessionEventsResponseSchema)
       const costs = route('/api/costs', CostOverviewResponseSchema)
+      const parseHealth = route('/api/debug', ParseHealthResponseSchema)
       const chatEvents = route('/api/chat', ChatEventsResponseSchema)
 
       /**
@@ -226,6 +230,7 @@ export class Api extends Context.Service<Api, {
             hours: query.hours,
           }),
         costs: query => costs({ hours: query.hours }),
+        parseHealth: query => parseHealth({ hours: query.hours }),
         chatEvents: query =>
           chatEvents({
             project: query.project,

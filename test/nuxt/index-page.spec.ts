@@ -1,7 +1,6 @@
 import type { VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from '~/pages/index.vue'
-import { mockLiveApi } from '../fixtures/live-api'
 import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
 import { runNode, treeResponse } from '../fixtures/runs'
 import { servingTree } from '../fixtures/stub-api'
@@ -17,7 +16,6 @@ afterEach(() => {
 describe('session view controls', () => {
   it('exposes and updates the selected event density', async () => {
     const root = runNode({ subErrors: 0, errors: 0 })
-    mockLiveApi(root)
     mounted = await mountWithAtoms(IndexPage, {
       api: servingTree(treeResponse(root)),
       global: {
@@ -59,7 +57,6 @@ describe('session view controls', () => {
 describe('focus view', () => {
   async function mountDashboard(): Promise<VueWrapper> {
     const root = runNode({ subErrors: 0, errors: 0 })
-    mockLiveApi(root)
     mounted = await mountWithAtoms(IndexPage, {
       api: servingTree(treeResponse(root)),
       global: {

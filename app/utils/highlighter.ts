@@ -33,7 +33,16 @@ const LANGUAGE_LOADERS: Readonly<Record<string, LanguageInput>> = {
  */
 const THEMES = { light: 'github-light', dark: 'github-dark-default' } as const
 
-/** In-flight grammar loads, so concurrent blocks in one language load once. */
+/**
+ * In-flight grammar loads, so concurrent blocks in one language load once.
+ *
+ * Module-level mutable state, deliberately kept through the atom migration. It
+ * is a process-wide dedupe of a process-wide side effect — Shiki's own
+ * singleton highlighter and its lazily-loaded grammars — not application state,
+ * and it has no per-registry meaning: two atom registries in one browser tab
+ * would still want one copy of the `typescript` grammar. Making it an atom
+ * would tie a download to a subscription lifetime for no gain.
+ */
 const pendingLanguages = new Map<string, Promise<HighlighterCore>>()
 
 /**

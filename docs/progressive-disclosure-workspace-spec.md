@@ -1071,6 +1071,9 @@ The redesign primarily affects:
 
 - app/pages/index.vue — identity, workspace, launcher, context, and URL state;
 - app/composables/useLiveRuns.ts — stable root-session versus focused-run state;
+  **superseded (2026-08): deleted by the Effect Atom migration. That state now
+  lives in `app/atoms/selection.ts`, `run-detail.ts`, `events.ts`, and
+  `session-events.ts`; see `docs/effect-atom-migration-spec.md`;**
 - app/components/RunHero.vue — reduced global-header responsibility;
 - app/components/RunNowBoard.vue and the existing RunOverview.vue — adaptive
   Overview after a component rename;

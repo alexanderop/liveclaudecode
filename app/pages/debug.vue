@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import type { ParseIssueReason } from '#shared/types/run'
 import type {
-  ParseHealthResponse,
-  ParseIssue,
-  ParseIssueReason,
-  SessionParseHealth,
-  SessionSource,
-} from '#shared/types/run'
+  ParseIssueWire,
+  SessionParseHealthWire,
+  SessionSourceWire,
+} from '#shared/schemas/api'
+import { useAtomSet, useAtomValue } from '@effect/atom-vue'
+import { parseHealthAtoms, parseHealthKey } from '~/atoms/parse-health'
+import { normalizeHours, RANGE_OPTIONS } from '~/utils/range'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,13 +17,8 @@ useHead({ title: 'Debug — liveclaudecode' })
 
 const hours = ref(normalizeHours(route.query.hours))
 const expanded = ref(new Set<string>())
-const rangeOptions = [
-  { label: 'Last 24 hours', value: 24 },
-  { label: 'Last 7 days', value: 168 },
-  { label: 'Last 30 days', value: 720 },
-  { label: 'All time', value: 0 },
-]
-const sourceIcon: Record<SessionSource, string> = {
+const rangeOptions = RANGE_OPTIONS
+const sourceIcon: Record<SessionSourceWire, string> = {
   claude: 'i-lucide-sparkles',
   codex: 'i-lucide-square-terminal',
   copilot: 'i-lucide-github',
@@ -57,16 +54,35 @@ const reasonMeta: Record<ParseIssueReason, {
   },
 }
 
-const { data, status, error, refresh } = await useFetch<ParseHealthResponse>('/api/debug', {
-  query: computed(() => ({ hours: hours.value })),
-  watch: [hours],
-})
+// The thunk depends on `hours`, so changing the range swaps which atom this
+// page is subscribed to. Both bindings must run during setup() —
+// `injectRegistry` falls back to a module singleton rather than throwing.
+const result = useAtomValue(() => parseHealthAtoms.parseHealth(parseHealthKey(hours.value)))
+const pulse = useAtomSet(() => parseHealthAtoms.refresh)
+
+// One string discriminant for the template: `result` is stream-backed, so it is
+// permanently `waiting` and neither `matchWithWaiting` nor `result.waiting`
+// can decide anything.
+const view = computed(() => toFeedView(result.value))
+const data = computed(() =>
+  view.value.tag === 'ready' || view.value.tag === 'stale' ? view.value.value : null,
+)
+const loading = computed(() => view.value.tag === 'loading')
 
 watch(hours, (value) => {
   void router.replace({ query: { ...route.query, hours: String(value) } })
 })
 
-const loading = computed(() => status.value === 'pending')
+// A stream atom cannot say whether a request is in flight, so the button owns
+// that: busy on click, cleared by the next value the feed publishes.
+const refreshing = ref(false)
+watch(result, () => {
+  refreshing.value = false
+})
+function refresh(): void {
+  refreshing.value = true
+  pulse()
+}
 const sessions = computed(() => data.value?.sessions || [])
 const unavailable = computed(() => (data.value?.sources || []).filter(source => source.state === 'unavailable'))
 const totals = computed(() => {
@@ -91,27 +107,22 @@ const activeReasons = computed<ParseIssueReason[]>(() => {
   return [...present]
 })
 
-function normalizeHours(value: unknown): number {
-  const parsed = Number(Array.isArray(value) ? value[0] : value)
-  return [0, 24, 168, 720].includes(parsed) ? parsed : 720
-}
-
-function sessionId(session: SessionParseHealth): string {
+function sessionId(session: SessionParseHealthWire): string {
   return `${session.projectId}/${session.key}`
 }
 
-function isExpanded(session: SessionParseHealth): boolean {
+function isExpanded(session: SessionParseHealthWire): boolean {
   return expanded.value.has(sessionId(session))
 }
 
-function toggle(session: SessionParseHealth): void {
+function toggle(session: SessionParseHealthWire): void {
   const next = new Set(expanded.value)
   const id = sessionId(session)
   if (!next.delete(id)) next.add(id)
   expanded.value = next
 }
 
-function breakdown(session: SessionParseHealth): Array<{ reason: ParseIssueReason, count: number }> {
+function breakdown(session: SessionParseHealthWire): Array<{ reason: ParseIssueReason, count: number }> {
   return ([
     { reason: 'invalid-json', count: session.counts.invalidJson },
     { reason: 'schema-mismatch', count: session.counts.schemaMismatch },
@@ -120,7 +131,7 @@ function breakdown(session: SessionParseHealth): Array<{ reason: ParseIssueReaso
 }
 
 /** Transcripts are addressed by `file:line`, one-based as an editor shows them. */
-function location(session: SessionParseHealth, issue: ParseIssue): string {
+function location(session: SessionParseHealthWire, issue: ParseIssueWire): string {
   return `${session.transcriptPath}:${issue.line + 1}`
 }
 
@@ -145,7 +156,7 @@ async function copy(text: string, label: string): Promise<void> {
       </nav>
       <div>
         <span class="local-state"><i />Local transcripts</span>
-        <UButton color="neutral" variant="ghost" icon="i-lucide-refresh-cw" aria-label="Refresh parse health" :loading="loading" @click="refresh()" />
+        <UButton color="neutral" variant="ghost" icon="i-lucide-refresh-cw" aria-label="Refresh parse health" :loading="loading || refreshing" @click="refresh()" />
       </div>
     </header>
 
@@ -159,7 +170,8 @@ async function copy(text: string, label: string): Promise<void> {
         <USelect v-model="hours" :items="rangeOptions" value-key="value" label-key="label" aria-label="Debug date range" />
       </section>
 
-      <UAlert v-if="error" class="state-alert" color="error" variant="soft" icon="i-lucide-cloud-off" title="Could not read parse health" description="The local transcript scan failed. Retry after checking the server output." />
+      <UAlert v-if="view.tag === 'error'" class="state-alert" color="error" variant="soft" icon="i-lucide-cloud-off" title="Could not read parse health" :description="`${view.message}. ${view.remedy}`" />
+      <UAlert v-else-if="view.tag === 'stale'" class="state-alert" color="warning" variant="soft" icon="i-lucide-cloud-off" title="Showing the last parse health read" :description="`${view.message}. ${view.remedy}`" />
       <UAlert
         v-for="source in unavailable"
         :key="source.source"

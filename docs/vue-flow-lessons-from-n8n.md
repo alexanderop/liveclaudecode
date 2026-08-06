@@ -130,7 +130,11 @@ n8n's perf strategy is not virtualization, not `markRaw`, not
 one idea applied ruthlessly: *make unchanged data referentially unchanged, so
 Vue's reactivity stops propagation at the source.*
 
-The workhorse is a 30-line primitive, `structuralComputed`:
+The workhorse is a 30-line primitive, `structuralComputed`. It survived the
+atom migration with all three of its consumers: two compute over *props*, where
+an atom's equality could not substitute, and the third guards the activity feed
+— `Atom.withEquality` would have carried that one, but it exists in the vendored
+Effect source and not in the published `4.0.0-beta.101` dist.
 
 ```ts
 export function structuralComputed<T>(

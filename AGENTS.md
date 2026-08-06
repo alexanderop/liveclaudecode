@@ -11,7 +11,10 @@ files. It must remain useful without telemetry or runtime network access. See
 
 ## Repository map
 
-- `app/` — Nuxt/Vue UI, client state, and display helpers.
+- `app/` — Nuxt/Vue UI, client state, and display helpers. `app/api/` holds the
+  client-side `Api` service, `app/atoms/` the Effect Atom state that polls it,
+  and `app/composables/` what is left: provide/inject context and thin adapters
+  over the `@effect/atom-vue` bindings.
 - `server/api/` — thin Nitro/h3 adapters; no domain logic.
 - `server/utils/` — Effect services, transcript parsing, project resolution,
   run aggregation, and the Effect-to-HTTP bridge.
@@ -167,10 +170,15 @@ without mounting — survives. Only the mechanism changed.
   flag; announcing the component from `onMounted` costs a whole interval before
   anything appears.
 - Imports between `app/atoms/**` follow a one-way DAG:
-  `runtime → range → tree → {filters, selection} → {run-detail, events,
-  session-events} → activity`. A back-edge is a review blocker. One file per
-  domain noun; a file that needs a second noun in its name is two files. A file
-  may fetch OR derive, never both.
+  `runtime → range → tree → filters → selection → {run-detail, events,
+  session-events} → activity`. `costs`, `parse-health`, `preferences`, and
+  `workspace` hang off `runtime` alone. A back-edge is a review blocker. One
+  file per domain noun; a file that needs a second noun in its name is two
+  files. A file may fetch OR derive across domains, never both — unwrapping the
+  fields of the response it just fetched is not deriving (`tree.ts` exposes
+  `projects`/`sources`/`costs`), but combining that response with another
+  module's state belongs in the file that owns the other state
+  (`filters.ts`, `selection.ts`, `activity.ts`).
 - `app/atoms/**` is not auto-imported and has no `index.ts` barrel.
 
 ### Components
@@ -275,10 +283,20 @@ Follow VueUse conventions:
 
 - Assert on the composable's returned refs directly; do not serialize state
   into DOM attributes.
-- Stub the dashboard API with `mockLiveApi()` from `test/fixtures/live-api.ts`
-  and build data with the `test/fixtures/runs.ts` builders; use `deferred()`
-  from `test/fixtures/deferred.ts` for stale-response races instead of inline
-  promise wiring.
+- Mount atom-reading components with `mountWithAtoms()` from
+  `test/fixtures/mount-atoms.ts`, which provides a fresh registry and a fresh
+  stub `Api` layer. A forgotten registry does not error — it shares atom state
+  with every other mounted spec in the worker and produces order-dependent
+  flakes.
+- Stub the dashboard API with `stubApi()` from `test/fixtures/stub-api.ts`
+  (`Layer.mock` over the `Api` service) and build data with the
+  `test/fixtures/runs.ts` builders. An endpoint the test did not script is a
+  named defect, not a plausible default. `AtomRegistry.make({ initialValues })`
+  seeds a value but does NOT stop the atom's effect from running, so it is a
+  supplement to the stub layer, never a replacement.
+- Stale-response races no longer exist: a superseded query is a different atom.
+  Do not write `deferred()`-driven race tests; assert atom identity instead.
+  `deferred()` survives for holding a response open to observe a pending state.
 - Unmount in `afterEach` (never as the last line of a test), pair
   `vi.useFakeTimers` with cleanup, and prefer `vi.advanceTimersByTimeAsync`
   so reactivity settles.

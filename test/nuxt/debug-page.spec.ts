@@ -1,23 +1,39 @@
-import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
-import type { VueWrapper } from '@vue/test-utils'
+import { Effect } from 'effect'
+import { flushPromises } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ParseHealthResponse } from '#shared/types/run'
 import DebugPage from '~/pages/debug.vue'
+import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
 import { parseHealthResponse, sessionParseHealth } from '../fixtures/runs'
 
-let component: VueWrapper | null = null
-let response = parseHealthResponse()
-
-registerEndpoint('/api/debug', () => response)
+let mounted: MountedAtoms | null = null
 
 afterEach(() => {
-  component?.unmount()
-  component = null
-  response = parseHealthResponse()
+  mounted?.wrapper.unmount()
+  mounted?.registry.dispose()
+  mounted = null
 })
+
+/**
+ * Mounts the page against a stub `Api` rather than `registerEndpoint`.
+ *
+ * The page reads an atom now, so the seam is the service: an endpoint the test
+ * does not script is a named defect instead of a plausible default, and the
+ * request never has to be matched by URL.
+ */
+async function mountDebug(response: ParseHealthResponse = parseHealthResponse()) {
+  mounted = await mountWithAtoms(DebugPage, {
+    api: { parseHealth: () => Effect.succeed(response) },
+  })
+  // The atom's poll runs in a forked fiber; one flush is what lets its first
+  // value reach the render.
+  await flushPromises()
+  return mounted.wrapper
+}
 
 describe('debug page', () => {
   it('splits the tally by cause so the reader knows who can fix it', async () => {
-    response = parseHealthResponse([
+    const wrapper = await mountDebug(parseHealthResponse([
       sessionParseHealth({ counts: { invalidJson: 4, schemaMismatch: 0, unsupportedShape: 0 } }),
       sessionParseHealth({
         key: 'other',
@@ -25,8 +41,7 @@ describe('debug page', () => {
         source: 'codex',
         counts: { invalidJson: 0, schemaMismatch: 9, unsupportedShape: 2 },
       }),
-    ])
-    const wrapper = component = await mountSuspended(DebugPage)
+    ]))
 
     const summary = wrapper.get('.summary-grid').text()
     expect(summary).toContain('15')
@@ -44,7 +59,7 @@ describe('debug page', () => {
   })
 
   it('reveals the file, line, reason, and excerpt for a session on demand', async () => {
-    const wrapper = component = await mountSuspended(DebugPage)
+    const wrapper = await mountDebug()
 
     expect(wrapper.find('.session-body').exists()).toBe(false)
     await wrapper.get('.session-head').trigger('click')
@@ -65,18 +80,16 @@ describe('debug page', () => {
   })
 
   it('says how many skipped records went unsampled', async () => {
-    response = parseHealthResponse([
+    const wrapper = await mountDebug(parseHealthResponse([
       sessionParseHealth({ counts: { invalidJson: 0, schemaMismatch: 30, unsupportedShape: 0 } }),
-    ])
-    const wrapper = component = await mountSuspended(DebugPage)
+    ]))
     await wrapper.get('.session-head').trigger('click')
 
     expect(wrapper.get('.issue-more').text()).toContain('29 further skipped records not sampled')
   })
 
   it('confirms a clean scan rather than showing an empty table', async () => {
-    response = parseHealthResponse([])
-    const wrapper = component = await mountSuspended(DebugPage)
+    const wrapper = await mountDebug(parseHealthResponse([]))
 
     expect(wrapper.text()).toContain('Every record parsed cleanly')
     expect(wrapper.find('.session-list').exists()).toBe(false)

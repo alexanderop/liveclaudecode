@@ -460,16 +460,20 @@ For a scan projection: sort the `files` map and `counts` keys; keep
 
 ## 10. Component tests
 
-`packages/app` has 128 test files and **zero** Effect — a hard boundary
-identical to the `app/**` rule in CLAUDE.md. Their component tests are
-unremarkable and yours are better instrumented:
+`packages/app` has 128 test files and **zero** Effect. That was once a boundary
+identical to this repo's; it is not any more. `app/**` here runs Effect in two
+places — `app/api/**` and `app/atoms/**` — while the render layer stayed
+Effect-free, so the comparison below is between their component tests and what
+replaced ours:
 
 | | opencode | here |
 | --- | --- | --- |
 | Environment | happy-dom preload | Nuxt environment via `defineVitestProject` |
-| API stubbing | ad-hoc per test | `mockLiveApi()` from `test/fixtures/live-api.ts` |
+| API stubbing | ad-hoc per test | `stubApi()` (`Layer.mock` over the `Api` service) |
+| Mounting | `mount()` | `mountWithAtoms()` — fresh registry *and* stub layer |
 | Data building | inline literals | `test/fixtures/runs.ts` builders |
-| Race testing | inline promises | `deferred()` from `test/fixtures/deferred.ts` |
+| Race testing | inline promises | not needed: a superseded query is a different atom |
+| Timing | fake timers | `TestClock` in `test/unit/atoms/**`, with no DOM at all |
 
 Nothing to import here. The one habit worth borrowing is **co-locating tests
 with source** (`src/context/permission-auto-respond.test.ts` sits next to its

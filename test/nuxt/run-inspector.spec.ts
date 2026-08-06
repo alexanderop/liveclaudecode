@@ -6,7 +6,6 @@ import { preferencesAtoms } from '~/atoms/preferences'
 import RunInspector from '~/components/RunInspector.vue'
 import type { RunNode, RunResponse } from '#shared/types/run'
 import { chatActionResponse, chatEventsResponse } from '../fixtures/chat'
-import { mockLiveApi } from '../fixtures/live-api'
 import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
 import { runNode, runResponse, timelineLane, transcriptEvent } from '../fixtures/runs'
 import { recordedCalls, type StubApiHandlers } from '../fixtures/stub-api'
@@ -263,7 +262,6 @@ describe('run inspector', () => {
   it('scopes the Ask tab to the inspected subagent', async () => {
     const child = inspectorNode('root/review', { label: 'Review accessibility' })
     const root = inspectorNode('root', { children: [child] })
-    mockLiveApi(root)
     mounted = await mountWithAtoms(RunInspector, {
       api: chatting(),
       props: {
@@ -308,7 +306,6 @@ describe('run inspector', () => {
   it('stops polling the subagent chat once another tab is opened', async () => {
     const child = inspectorNode('root/review', { label: 'Review accessibility' })
     const root = inspectorNode('root', { children: [child] })
-    mockLiveApi(root)
     mounted = await mountWithAtoms(RunInspector, {
       api: chatting(),
       props: {
@@ -345,7 +342,6 @@ describe('run inspector', () => {
     const child = inspectorNode('root/review', { label: 'Review accessibility' })
     const sibling = inspectorNode('root/audit', { label: 'Audit the styles' })
     const root = inspectorNode('root', { children: [child, sibling] })
-    mockLiveApi(root)
     mounted = await mountWithAtoms(RunInspector, {
       api: chatting(),
       props: {

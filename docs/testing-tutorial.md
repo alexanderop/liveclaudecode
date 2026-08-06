@@ -114,18 +114,31 @@ Real filesystem coverage belongs in `test/e2e`, not here.
 ## 4. Walk two — a component test
 
 ```ts
-import { mockLiveApi } from '../fixtures/live-api'
+import { Effect } from 'effect'
+import { mountWithAtoms } from '../fixtures/mount-atoms'
 import { treeResponse } from '../fixtures/runs'
 
-const live = mockLiveApi({ tree: () => treeResponse(/* … */) })
+const { wrapper, registry, api } = await mountWithAtoms(IndexPage, {
+  api: { tree: () => Effect.succeed(treeResponse(/* … */)) },
+})
 ```
 
 - Build data with the `test/fixtures/runs.ts` builders (`treeResponse`,
   `runResponse`, `eventsResponse`, …). `T0`, `PROJECT_ID`, and `DEFAULT_HOURS`
   are exported so your expectations don't hardcode magic values.
-- Stub the API with `mockLiveApi()` — never hand-roll `$fetch`.
-- Racing a stale response? Use `deferred()` from `test/fixtures/deferred.ts`
-  instead of inline promise wiring.
+- Mount through `mountWithAtoms()`. It builds a fresh registry *and* a fresh
+  stub `Api` per call and provides both. A forgotten registry does not error —
+  the binding falls back to a module-level singleton, and your test starts
+  sharing atom state with every other mounted spec in the worker.
+- Script only the endpoints your test uses. `stubApi` is `Layer.mock`, so an
+  endpoint you did not script is a named defect (`lcc/Api: Unimplemented method
+  "run"`) rather than a plausible default.
+- Read what the page asked for with `recordedCalls(api.calls.tree)` — the query
+  object, not a URL string.
+- Stale-response races are gone: a superseded query is a different atom, and
+  the node nobody is subscribed to is interrupted. Do not port a race test;
+  assert the atom identity instead. `deferred()` survives for the one thing it
+  is still good at — holding a response open to observe a pending state.
 - **Assert on the composable's returned refs directly.** Do not serialize state
   into DOM attributes to read it back.
 - Unmount in `afterEach` — never as the last line of a test, because a failing
@@ -304,7 +317,8 @@ Currently: 4 cassettes, 512 KB of the 2048 KB budget.
 | You want to check… | Write it as | Using |
 | --- | --- | --- |
 | a branch, an edge case, a boundary | unit test | synthetic fixtures + `testFileSystem()` |
-| a composable's reactive behavior | nuxt test | `mockLiveApi()` + `runs.ts` builders |
+| an atom's cadence, cursor, or gating | unit test | `testAtoms()` + `stubApi()` + `TestClock` |
+| what a component renders from an atom | nuxt test | `mountWithAtoms()` + `runs.ts` builders |
 | the HTTP contract of a route | e2e test | the built server (and the route-coverage ledger picks it up) |
 | that a vendor format still parses | **nothing** — L1 already does | add a cassette only if a *shape* is unrepresented |
 | that the scanners still produce X | **nothing** — L2 already does | re-bless when you change them on purpose |
