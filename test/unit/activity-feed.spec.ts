@@ -1,6 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 import type { DiagnosticIncident, TranscriptEvent } from '#shared/types/run'
-import { mergeActivityEvents } from '~/utils/activity-feed'
+import { activityBase, mergeActivityEvents } from '~/utils/activity-feed'
 import { transcriptEvent } from '../fixtures/runs'
 
 function event(overrides: Partial<TranscriptEvent> = {}): TranscriptEvent {
@@ -101,5 +101,44 @@ describe('mergeActivityEvents', () => {
     assert.strictEqual(unknownAgent!.agentLabel, 'compactor')
     assert.strictEqual(unknownAgent!.agentType, 'Diagnostic incident')
     assert.strictEqual(anonymous!.agentLabel, 'Session')
+  })
+})
+
+describe('activityBase', () => {
+  const root = { key: 'session', label: 'Ship the dashboard', agentType: '' }
+
+  it('prefers the session-wide merge when the server has one', () => {
+    const merged = [event({ body: 'merged' })]
+
+    assert.deepStrictEqual(
+      activityBase({ sessionEvents: merged, agentEvents: [event({ body: 'agent' })], root }),
+      merged,
+    )
+  })
+
+  it('attributes the fallback transcript to the session root', () => {
+    // `/api/events` answers for one agent and does not label its events, but the
+    // activity view groups by agent — so the fallback has to say whose they are.
+    const [only] = activityBase({
+      sessionEvents: [],
+      agentEvents: [transcriptEvent('working', { ts: '2026-07-25T18:00:00.000Z' })],
+      root,
+    })
+
+    assert.strictEqual(only?.agentKey, 'session')
+    assert.strictEqual(only?.agentLabel, 'Ship the dashboard')
+    assert.strictEqual(only?.agentType, 'Main session')
+    assert.strictEqual(only?.agentDepth, 0)
+  })
+
+  it('still labels the fallback when nothing is selected', () => {
+    const [only] = activityBase({
+      sessionEvents: [],
+      agentEvents: [transcriptEvent('working')],
+      root: null,
+    })
+
+    assert.isUndefined(only?.agentKey)
+    assert.strictEqual(only?.agentType, 'Main session')
   })
 })

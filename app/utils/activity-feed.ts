@@ -1,5 +1,35 @@
 import type { DiagnosticIncidentWire, RunNodeWire, TranscriptEventWire } from '#shared/schemas/api'
 
+export interface ActivityBaseOptions {
+  /** The session-wide merge, when the server has answered with one. */
+  sessionEvents: readonly TranscriptEventWire[]
+  /** The selected agent's own transcript, used when the merge is empty. */
+  agentEvents: readonly TranscriptEventWire[]
+  /** Session root, which is who the fallback events are attributed to. */
+  root: Pick<RunNodeWire, 'key' | 'label' | 'agentType'> | null
+}
+
+/**
+ * What the activity view shows before incidents are merged in.
+ *
+ * The session-wide feed when there is one, and otherwise the selected agent's
+ * transcript wearing the session root's identity — because those events arrive
+ * from `/api/events`, which does not attribute them to an agent, and the
+ * activity view groups by agent. The fallback matters on the first paint of a
+ * session and whenever the merged feed is still empty.
+ */
+export function activityBase(options: ActivityBaseOptions): readonly TranscriptEventWire[] {
+  const { sessionEvents, agentEvents, root } = options
+  if (sessionEvents.length) return sessionEvents
+  return agentEvents.map(event => ({
+    ...event,
+    agentKey: root?.key,
+    agentLabel: root?.label,
+    agentType: root?.agentType || 'Main session',
+    agentDepth: 0,
+  }))
+}
+
 export interface MergeActivityEventsOptions {
   /** Session-wide transcript events already attributed to their agents. */
   base: readonly TranscriptEventWire[]

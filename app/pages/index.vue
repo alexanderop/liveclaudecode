@@ -1,8 +1,20 @@
 <script setup lang="ts">
-import type { DiagnosticIncidentWire, TranscriptEventWire } from '#shared/schemas/api'
+import type { DiagnosticIncidentWire } from '#shared/schemas/api'
+import { useAtomSet, useAtomValue } from '@effect/atom-vue'
 import { normalizeSessionLabel } from '#shared/utils/session-label'
-import { mergeActivityEvents } from '~/utils/activity-feed'
+import { activityAtoms, activitySession } from '~/atoms/activity'
+import { eventsAtoms, eventsKey } from '~/atoms/events'
+import { filtersAtoms } from '~/atoms/filters'
+import { preferencesAtoms } from '~/atoms/preferences'
+import { rangeAtoms } from '~/atoms/range'
+import { runAtoms, runKey } from '~/atoms/run-detail'
+import { selectionAtoms } from '~/atoms/selection'
+import { sessionEventsAtoms, sessionEventsKey } from '~/atoms/session-events'
+import { treeAtoms } from '~/atoms/tree'
+import { workspaceAtoms } from '~/atoms/workspace'
+import { useAtomModel } from '~/composables/atom'
 import { findNode, flattenRunTree } from '~/utils/execution-analysis'
+import { feedValue, toFeedView } from '~/utils/feed-view'
 import { parseTimestamp } from '~/utils/format'
 import { structuralComputed, structurallyEqual } from '~/utils/structural-computed'
 import {
@@ -10,19 +22,90 @@ import {
   exitFocus,
   focusFile as focusInvestigationFile,
   focusIncident as focusInvestigationIncident,
-  initialWorkspaceState,
   openAgentDetails,
   openAsk,
   openPrimary,
   switchSelectedSession,
   toggleFocus,
   type PrimaryWorkspaceKind,
-  type WorkspaceState,
 } from '~/utils/workspace-state'
 
-const live = useLiveRuns()
 const route = useRoute()
 const router = useRouter()
+
+/**
+ * Every atom this page reads, bound once, here.
+ *
+ * All of it has to happen during `setup()`: the binding resolves its registry
+ * with `inject` and falls back to a module-level singleton rather than throwing,
+ * so a `useAtom*` call from `onMounted`, a watcher, or a handler would silently
+ * read and write state shared with every other component in the process.
+ *
+ * The four per-selection feeds are subscribed through thunks that read the
+ * selection refs, so choosing another agent swaps which atom this component is
+ * bound to — and the node behind the old one is torn down with its in-flight
+ * request.
+ */
+const projects = useAtomValue(() => treeAtoms.projects)
+const sources = useAtomValue(() => treeAtoms.sources)
+const costs = useAtomValue(() => treeAtoms.costs)
+const loading = useAtomValue(() => treeAtoms.loading)
+const offline = useAtomValue(() => treeAtoms.offline)
+const visibleProjects = useAtomValue(() => filtersAtoms.visibleProjects)
+const projectOptions = useAtomValue(() => filtersAtoms.projectOptions)
+const query = useAtomModel(() => filtersAtoms.query)
+const sourceFilter = useAtomModel(() => filtersAtoms.source)
+const projectFilter = useAtomModel(() => filtersAtoms.project)
+const liveOnly = useAtomModel(() => filtersAtoms.liveOnly)
+const attentionOnly = useAtomModel(() => filtersAtoms.attentionOnly)
+const hideIdle = useAtomModel(() => filtersAtoms.hideIdle)
+const minimumSubagents = useAtomModel(() => filtersAtoms.minimumSubagents)
+const sessionSort = useAtomModel(() => filtersAtoms.sort)
+const followActive = useAtomModel(() => preferencesAtoms.followActive)
+const followOutput = useAtomModel(() => preferencesAtoms.followOutput)
+const errorsOnly = useAtomModel(() => preferencesAtoms.errorsOnly)
+const density = useAtomModel(() => preferencesAtoms.density)
+const hours = useAtomModel(() => rangeAtoms.hours)
+const workspaceState = useAtomModel(() => workspaceAtoms.workspace)
+const selectedProject = useAtomValue(() => selectionAtoms.project)
+const selectedKey = useAtomValue(() => selectionAtoms.key)
+const selectedRoot = useAtomValue(() => selectionAtoms.root)
+const inspectedKey = useAtomValue(() => selectionAtoms.inspected)
+const setSelection = useAtomSet(() => selectionAtoms.selection)
+const setInspected = useAtomSet(() => selectionAtoms.inspected)
+const runResult = useAtomValue(() =>
+  runAtoms.run(runKey(selectedProject.value, selectedKey.value, hours.value)))
+const inspectedResult = useAtomValue(() =>
+  eventsAtoms.events(eventsKey(selectedProject.value, inspectedKey.value, hours.value)))
+const sessionResult = useAtomValue(() =>
+  sessionEventsAtoms.sessionEvents(sessionEventsKey(
+    selectedProject.value,
+    selectedRoot.value?.key ?? selectedKey.value,
+    hours.value,
+  )))
+const activityFeed = useAtomValue(() => activityAtoms.feed)
+const activityAgents = useAtomValue(() => activityAtoms.agents)
+const activityAgentKey = useAtomModel(() =>
+  activityAtoms.agent(activitySession(
+    selectedProject.value,
+    selectedRoot.value?.key ?? selectedKey.value,
+  )))
+
+const run = computed(() => feedValue(runResult.value, response => response, null))
+const inspectedEvents = computed(() =>
+  feedValue(inspectedResult.value, events => events, []))
+// Only while something is inspected: with the overlay closed the feed is gated
+// off and sits at `loading` forever, which is not a spinner anybody should see.
+const inspectedEventsLoading = computed(() =>
+  Boolean(inspectedKey.value) && toFeedView(inspectedResult.value).tag === 'loading')
+const sessionEventsTruncated = computed(() =>
+  feedValue(sessionResult.value, response => response.truncated, false))
+const sessionEventCount = computed(() =>
+  feedValue(sessionResult.value, response => response.events.length, 0))
+
+function selectSessionKey(key: string, project = selectedProject.value): void {
+  if (project) setSelection({ project, key })
+}
 const densities = ['compact', 'normal', 'raw'] as const
 const primaryViews = [
   { id: 'overview', label: 'Overview', icon: 'i-lucide-layout-dashboard', shortcut: 'N' },
@@ -36,23 +119,19 @@ const launcherViews = [
   { id: 'ask', label: 'Ask', icon: 'i-lucide-message-square', shortcut: 'Q' },
 ] as const
 
+// A `?view=` in the URL is a view the user asked for, so it wins over whichever
+// one the workspace atom was left in.
 const initialView = typeof route.query.view === 'string'
   && primaryViews.some(view => view.id === route.query.view)
   ? route.query.view as PrimaryWorkspaceKind
   : 'overview'
-const workspaceState = shallowRef<WorkspaceState>({
-  ...initialWorkspaceState(),
-  primary: initialView,
-})
-const inspectedKey = ref<string | null>(null)
+workspaceState.value = { ...workspaceState.value, primary: initialView }
+// View-local state, and deliberately not atoms: none of it outlives the page,
+// and two of them are positions inside a rendered list.
 const contextKey = ref<string | null>(null)
 const canvasTime = ref<number | null>(null)
 const focusedLine = ref<number | null>(null)
 const focusedFile = ref<string | null>(null)
-const ACTIVITY_AGENT_CAPACITY = 20
-// Bounded most-recently-used map so long dashboards do not accumulate one
-// entry per session ever visited.
-const activityAgentBySession = shallowRef<ReadonlyMap<string, string>>(new Map())
 const searchOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const statusAnnouncement = ref('')
@@ -76,12 +155,12 @@ const focusMode = computed(() => workspaceState.value.focused)
 // preference, so the layout math has to treat it as hidden all the same.
 const sidebarVisible = computed(() => !sidebarCollapsed.value && !focusMode.value)
 const effectivePanelWidth = computed(() => Math.min(panelWidth.value, viewportWidth.value * 0.4, PANEL_MAX))
-const selectedSessionKey = computed(() => live.selectedRoot.value?.key || null)
-const sessionIdentity = computed(() => live.selectedProject.value && selectedSessionKey.value
-  ? `${live.selectedProject.value}/${selectedSessionKey.value}`
+const selectedSessionKey = computed(() => selectedRoot.value?.key || null)
+const sessionIdentity = computed(() => selectedProject.value && selectedSessionKey.value
+  ? `${selectedProject.value}/${selectedSessionKey.value}`
   : '')
 const selectedContextVisible = computed(() => workspaceState.value.context.kind !== 'closed')
-const focusTitle = computed(() => normalizeSessionLabel(live.selectedRoot.value?.label || '', 'Local sessions'))
+const focusTitle = computed(() => normalizeSessionLabel(selectedRoot.value?.label || '', 'Local sessions'))
 const contextUsesModal = computed(() => {
   if (viewportWidth.value <= 680) return true
   const browserWidth = sidebarVisible.value ? sidebarWidth.value + 7 : 0
@@ -95,29 +174,17 @@ const contextUsesModal = computed(() => {
  * records travel with its run diagnostics instead.
  */
 const unavailableSource = computed(() => {
-  const source = live.selectedRoot.value?.source
+  const source = selectedRoot.value?.source
   if (!source) return null
-  return live.sources.value.find(status => status.source === source && status.state === 'unavailable') || null
+  return sources.value.find(status => status.source === source && status.state === 'unavailable') || null
 })
 const sourceUnavailable = computed(() => Boolean(unavailableSource.value))
 const selectedSourceMessage = computed(() => unavailableSource.value?.message || '')
-const attentionCount = computed(() => (live.run.value?.diagnostics.incidents || [])
+const attentionCount = computed(() => (run.value?.diagnostics.incidents || [])
   .filter(incident => incident.severity !== 'info').length)
-const sessionAgentCount = computed(() => flattenRunTree(live.selectedRoot.value).length)
-const sessionActivityCount = computed(() => live.sessionEvents.value.length || live.selectedRoot.value?.subTools || 0)
-const sessionChangeCount = computed(() => live.run.value?.files.length || 0)
-const activityAgentKey = computed({
-  get: () => activityAgentBySession.value.get(sessionIdentity.value) || 'all',
-  set: value => {
-    if (!sessionIdentity.value) return
-    const next = new Map(activityAgentBySession.value)
-    next.delete(sessionIdentity.value)
-    next.set(sessionIdentity.value, value)
-    while (next.size > ACTIVITY_AGENT_CAPACITY) next.delete(next.keys().next().value!)
-    activityAgentBySession.value = next
-  },
-})
-
+const sessionAgentCount = computed(() => flattenRunTree(selectedRoot.value).length)
+const sessionActivityCount = computed(() => sessionEventCount.value || selectedRoot.value?.subTools || 0)
+const sessionChangeCount = computed(() => run.value?.files.length || 0)
 const sidebarMax = computed(() => {
   if (viewportWidth.value <= 680) return SIDEBAR_MAX
   const dockedPanelWidth = selectedContextVisible.value && !contextUsesModal.value ? panelWidth.value : 0
@@ -145,35 +212,19 @@ function fitPanelsToViewport(): void {
     sidebarWidth.value = clampWidth(sidebarWidth.value, SIDEBAR_MIN, sidebarMax.value)
   }
 }
-const inspectedNode = computed(() => findNode(live.selectedRoot.value, inspectedKey.value))
-const activityAgents = computed(() => flattenRunTree(live.selectedRoot.value))
+const inspectedNode = computed(() => findNode(selectedRoot.value, inspectedKey.value))
+// The merge itself is an atom; this is only the re-render suppression, which
+// `Atom.withEquality` would have carried if the published dist exported it.
+const activityEvents = structuralComputed(() => activityFeed.value, structurallyEqual)
 const activityAgentOptions = computed(() => [
   { label: 'Whole session', value: 'all' },
   ...activityAgents.value.map(agent => ({ label: agent.label, value: agent.key })),
 ])
-const activityEvents = structuralComputed<TranscriptEventWire[]>(() => {
-  const root = live.selectedRoot.value
-  const base = live.sessionEvents.value.length
-    ? live.sessionEvents.value
-    : live.events.value.map(event => ({
-        ...event,
-        agentKey: root?.key,
-        agentLabel: root?.label,
-        agentType: root?.agentType || 'Main session',
-        agentDepth: 0,
-      }))
-  return mergeActivityEvents({
-    base,
-    incidents: live.run.value?.diagnostics.incidents || [],
-    agents: activityAgents.value,
-    agentKey: activityAgentKey.value,
-  })
-}, structurallyEqual)
 
 const searchGroups = computed(() => [{
   id: 'sessions',
   label: 'Sessions',
-  items: live.projects.value.flatMap(project => project.roots.map(root => ({
+  items: projects.value.flatMap(project => project.roots.map(root => ({
     id: `${project.id}/${root.key}`,
     label: normalizeSessionLabel(root.label, root.key),
     description: project.name,
@@ -192,7 +243,7 @@ const searchGroups = computed(() => [{
     label: view.label,
     icon: view.icon,
     kbds: [view.shortcut],
-    disabled: !live.selectedRoot.value,
+    disabled: !selectedRoot.value,
     onSelect: () => {
       searchOpen.value = false
       chooseDestination(view.id)
@@ -206,10 +257,9 @@ function focusWorkspaceHeading(): void {
   })
 }
 function closeAgentInspection(): void {
-  inspectedKey.value = null
+  setInspected(null)
   focusedLine.value = null
   focusedFile.value = null
-  live.clearInspection()
 }
 function closeContextPanel(): void {
   const wasAgent = workspaceState.value.context.kind === 'agent-details'
@@ -219,10 +269,10 @@ function closeContextPanel(): void {
 }
 function inspectAgent(key: string): void {
   const alreadyOpen = workspaceState.value.context.kind === 'agent-details'
-  inspectedKey.value = key
+  setInspected(key)
   contextKey.value = key
   workspaceState.value = openAgentDetails(workspaceState.value, key)
-  void live.inspect(key)
+  setInspected(key)
   if (!alreadyOpen) {
     nextTick(() => document.querySelector<HTMLElement>('.inspector-title strong, .inspector-close')?.focus())
   }
@@ -265,7 +315,7 @@ function toggleFocusView(): void {
     leaveFocusView()
     return
   }
-  if (!live.selectedRoot.value) return
+  if (!selectedRoot.value) return
   workspaceState.value = toggleFocus(workspaceState.value)
   statusAnnouncement.value = 'Focus view on. Press Escape to exit.'
   focusWorkspaceHeading()
@@ -276,18 +326,18 @@ function chooseDestination(destination: PrimaryWorkspaceKind | 'ask'): void {
 }
 
 async function selectSession(project: string, key: string): Promise<void> {
-  const projectRuns = live.projects.value.find(entry => entry.id === project)
+  const projectRuns = projects.value.find(entry => entry.id === project)
   const root = projectRuns?.roots.find(candidate => findNode(candidate, key)) || null
   if (root && root.key !== key) {
-    if (live.selectedProject.value !== project || selectedSessionKey.value !== root.key) {
+    if (selectedProject.value !== project || selectedSessionKey.value !== root.key) {
       sessionSelectionIsManual.value = true
-      await live.select(root.key, project)
+      selectSessionKey(root.key, project)
     }
     inspectAgent(key)
     return
   }
   sessionSelectionIsManual.value = true
-  await live.select(key, project)
+  selectSessionKey(key, project)
 }
 
 /**
@@ -340,7 +390,7 @@ watch(
     void router.replace({
       query: {
         ...route.query,
-        project: live.selectedProject.value || undefined,
+        project: selectedProject.value || undefined,
         session: selectedSessionKey.value || undefined,
         view: workspaceState.value.primary,
       },
@@ -349,7 +399,7 @@ watch(
   },
 )
 watch(
-  () => live.projects.value,
+  projects,
   (projects) => {
     if (routeSelectionApplied.value || !projects.length) return
     routeSelectionApplied.value = true
@@ -358,15 +408,15 @@ watch(
     if (!projectId || !rootKey) return
     const project = projects.find(entry => entry.id === projectId)
     const root = project?.roots.find(entry => entry.key === rootKey)
-    if (!root || (live.selectedProject.value === projectId && selectedSessionKey.value === rootKey)) return
-    void live.select(rootKey, projectId)
+    if (!root || (selectedProject.value === projectId && selectedSessionKey.value === rootKey)) return
+    selectSessionKey(rootKey, projectId)
   },
   { deep: false },
 )
 watch(inspectedNode, node => {
   if (inspectedKey.value && !node) closeContextPanel()
 })
-watch(() => live.selectedRoot.value, root => {
+watch(selectedRoot, root => {
   // Nothing left to focus on; drop back to the full shell rather than
   // stranding the user in a chrome-less empty workspace.
   if (!root && focusMode.value) workspaceState.value = exitFocus(workspaceState.value)
@@ -374,7 +424,7 @@ watch(() => live.selectedRoot.value, root => {
 watch(attentionCount, (count, previous = 0) => {
   if (count > previous) statusAnnouncement.value = `${count} warning or error ${count === 1 ? 'incident' : 'incidents'} recorded`
 })
-watch(() => live.offline.value, offline => {
+watch(offline, offline => {
   statusAnnouncement.value = offline ? 'Viewer disconnected' : 'Viewer reconnected'
 })
 watch(sourceUnavailable, unavailable => {
@@ -383,9 +433,9 @@ watch(sourceUnavailable, unavailable => {
 watch(
   () => ({
     identity: sessionIdentity.value,
-    live: live.selectedRoot.value?.subLive,
-    finalText: live.selectedRoot.value?.finalText,
-    errors: live.selectedRoot.value?.subErrors,
+    live: selectedRoot.value?.subLive,
+    finalText: selectedRoot.value?.finalText,
+    errors: selectedRoot.value?.subErrors,
   }),
   (current, previous) => {
     if (!previous || current.identity !== previous.identity || previous.live !== true || current.live !== false) return
@@ -421,7 +471,7 @@ onMounted(() => {
     />
     <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ statusAnnouncement }}</p>
     <UBadge
-      v-if="live.offline.value"
+      v-if="offline"
       class="offline-badge"
       color="error"
       variant="soft"
@@ -439,22 +489,22 @@ onMounted(() => {
       :ui="{ root: '!min-w-0', body: '!p-0 !gap-0 !overflow-hidden' }"
     >
       <RunSidebar
-        v-model:query="live.query.value"
-        v-model:source-filter="live.sourceFilter.value"
-        v-model:project-filter="live.projectFilter.value"
-        v-model:live-only="live.liveOnly.value"
-        v-model:attention-only="live.attentionOnly.value"
-        v-model:hide-idle="live.hideIdle.value"
-        v-model:minimum-subagents="live.minimumSubagents.value"
-        v-model:session-sort="live.sessionSort.value"
-        v-model:hours="live.hours.value"
-        :projects="live.visibleProjects.value"
-        :all-projects="live.projects.value"
-        :sources="live.sources.value"
-        :costs="live.costs.value"
-        :project-options="live.projectOptions.value"
-        :loading="live.loading.value"
-        :selected-project="live.selectedProject.value"
+        v-model:query="query"
+        v-model:source-filter="sourceFilter"
+        v-model:project-filter="projectFilter"
+        v-model:live-only="liveOnly"
+        v-model:attention-only="attentionOnly"
+        v-model:hide-idle="hideIdle"
+        v-model:minimum-subagents="minimumSubagents"
+        v-model:session-sort="sessionSort"
+        v-model:hours="hours"
+        :projects="visibleProjects"
+        :all-projects="projects"
+        :sources="sources"
+        :costs="costs"
+        :project-options="projectOptions"
+        :loading="loading"
+        :selected-project="selectedProject"
         :selected-key="selectedSessionKey"
         @select="selectSession"
         @collapse="sidebarCollapsed = true"
@@ -475,9 +525,9 @@ onMounted(() => {
       <main class="main-content">
         <RunHero
           v-show="!focusMode"
-          v-model:follow-active="live.followActive.value"
+          v-model:follow-active="followActive"
           :sidebar-visible="sidebarVisible"
-          :root="live.selectedRoot.value"
+          :root="selectedRoot"
           :workspace="workspaceState.primary"
           @show-sidebar="sidebarCollapsed = false"
           @focus="toggleFocusView"
@@ -513,7 +563,7 @@ onMounted(() => {
               :change-count="sessionChangeCount"
               :attention-count="attentionCount"
               :ask-active="workspaceState.context.kind === 'ask'"
-              :disabled="!live.selectedRoot.value"
+              :disabled="!selectedRoot"
               @select="chooseDestination"
             />
 
@@ -527,8 +577,8 @@ onMounted(() => {
               <LazyRunCanvas
                 v-if="workspaceState.primary === 'map'"
                 :key="sessionIdentity"
-                :run="live.run.value"
-                :root="live.selectedRoot.value"
+                :run="run"
+                :root="selectedRoot"
                 :selected-key="inspectedKey"
                 :inspector-open="workspaceState.context.kind === 'agent-details'"
                 :focused-file="focusedFile"
@@ -543,9 +593,9 @@ onMounted(() => {
 
             <RunOverview
                 v-if="workspaceState.primary === 'overview'"
-                :root="live.selectedRoot.value"
-                :run="live.run.value"
-                :loading="live.loading.value"
+                :root="selectedRoot"
+                :run="run"
+                :loading="loading"
                 :source-unavailable="sourceUnavailable"
                 :source-message="selectedSourceMessage"
                 @open="openWorkspace"
@@ -554,7 +604,7 @@ onMounted(() => {
             >
               <template #active-agents>
                 <ActiveAgentsOverview
-                  :projects="live.projects.value"
+                  :projects="projects"
                   @select="selectSession"
                 />
               </template>
@@ -583,9 +633,9 @@ onMounted(() => {
                         v-for="option in densities"
                         :key="option"
                         type="button"
-                        :class="{ selected: live.density.value === option }"
-                        :aria-pressed="live.density.value === option"
-                        @click="live.density.value = option"
+                        :class="{ selected: density === option }"
+                        :aria-pressed="density === option"
+                        @click="density = option"
                       >{{ option }}</button>
                     </div>
                     <UButton
@@ -594,9 +644,9 @@ onMounted(() => {
                       color="neutral"
                       variant="ghost"
                       icon="i-lucide-circle-alert"
-                      :class="{ active: live.errorsOnly.value }"
-                      :aria-pressed="live.errorsOnly.value"
-                      @click="live.errorsOnly.value = !live.errorsOnly.value"
+                      :class="{ active: errorsOnly }"
+                      :aria-pressed="errorsOnly"
+                      @click="errorsOnly = !errorsOnly"
                     >Errors</UButton>
                     <UButton
                       type="button"
@@ -604,18 +654,18 @@ onMounted(() => {
                       color="neutral"
                       variant="ghost"
                       icon="i-lucide-arrow-down-to-line"
-                      :class="{ active: live.followOutput.value }"
-                      :aria-pressed="live.followOutput.value"
-                      @click="live.followOutput.value = !live.followOutput.value"
+                      :class="{ active: followOutput }"
+                      :aria-pressed="followOutput"
+                      @click="followOutput = !followOutput"
                     >Follow</UButton>
                   </div>
                 </header>
                 <EventFeed
                   :events="activityEvents"
-                  :density="live.density.value"
-                  :errors-only="live.errorsOnly.value"
-                  :follow-output="live.followOutput.value"
-                  :truncated="live.sessionEventsTruncated.value"
+                  :density="density"
+                  :errors-only="errorsOnly"
+                  :follow-output="followOutput"
+                  :truncated="sessionEventsTruncated"
                   session-wide
                   @select="inspectAgent"
                 />
@@ -623,15 +673,15 @@ onMounted(() => {
 
             <div v-if="workspaceState.primary === 'changes'" class="primary-list-workspace">
               <RunChanges
-                :run="live.run.value"
-                :root="live.selectedRoot.value"
+                :run="run"
+                :root="selectedRoot"
                 :selected-key="contextKey"
               />
             </div>
 
             <div v-if="workspaceState.primary === 'diagnostics'" class="primary-list-workspace">
               <RunDiagnostics
-                :run="live.run.value"
+                :run="run"
                 :selected-key="contextKey"
                 @select="inspectAgent"
               />
@@ -657,14 +707,14 @@ onMounted(() => {
           >
             <RunInspector
               v-if="workspaceState.context.kind === 'agent-details'"
-              :run="live.run.value"
-              :root="live.selectedRoot.value"
+              :run="run"
+              :root="selectedRoot"
               :selected="inspectedNode"
               :selected-key="inspectedKey"
-              :project="live.selectedProject.value || ''"
-              :hours="live.hours.value"
-              :events="live.inspectedEvents.value"
-              :events-loading="live.inspectedEventsLoading.value"
+              :project="selectedProject || ''"
+              :hours="hours"
+              :events="inspectedEvents"
+              :events-loading="inspectedEventsLoading"
               :current-time="canvasTime"
               :focused-line="focusedLine"
               :focused-file="focusedFile"
@@ -683,9 +733,9 @@ onMounted(() => {
                 <ChatPanel
                   v-if="workspaceState.context.kind === 'ask'"
                   :key="sessionIdentity"
-                  :project="live.selectedProject.value || ''"
+                  :project="selectedProject || ''"
                   :session-key="selectedSessionKey || ''"
-                  :hours="live.hours.value"
+                  :hours="hours"
                 />
               </KeepAlive>
             </aside>
