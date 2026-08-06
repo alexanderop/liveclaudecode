@@ -19,6 +19,24 @@ afterEach(() => {
   mounted = null
 })
 
+/**
+ * One ChatPanel whose session key moves under it, with no `:key` to remount it.
+ *
+ * Neither mount site does this today — both re-`:key` the panel — which is
+ * precisely why it is worth a test. The atoms the panel reads are bound through
+ * reactive thunks and would follow the change on their own; the activation count
+ * is written imperatively and would not, unless it is made to.
+ */
+const MovingTargetHarness = defineComponent({
+  components: { ChatPanel },
+  setup() {
+    return { sessionKey: ref('session-0') }
+  },
+  template: `
+    <ChatPanel project="/repo" :session-key="sessionKey" :hours="720" />
+  `,
+})
+
 /** KeepAlive harness cycling ChatPanel instances by session key, as index.vue does. */
 const KeepAliveHarness = defineComponent({
   components: { ChatPanel },
@@ -125,6 +143,16 @@ describe('ChatPanel', () => {
       query: { hours: 720 },
     }])
     expect(wrapper.get('textarea').element).toHaveProperty('value', '')
+
+    // A second flush, and it is load-bearing rather than defensive. The flush
+    // above settles the action's own promise, which is what clears the
+    // composer; the pulse `send()` writes afterwards reaches the feed through
+    // `pollingFeed`'s dropping buffer, and that buffer is a forked fiber, so
+    // the request it triggers lands one microtask later than the write. In the
+    // browser that hop is invisible. Here it is the difference between
+    // observing one poll and two.
+    await flushPromises()
+
     // An accepted action pulses the feed, so the question appears without
     // waiting out the interval — and the poll resumes from the cursor.
     expect(polls().map(poll => poll.since)).toEqual([0, 5])
@@ -181,6 +209,31 @@ describe('ChatPanel', () => {
     const reopened = polls().filter(poll => poll.key === 'session-0')
     expect(reopened.map(poll => poll.since)).toEqual([0, 1])
     expect(reopened.map(poll => poll.revision)).toEqual([0, 1])
+  })
+
+  it('follows its target when the panel is not re-keyed', async () => {
+    mounted = await mountWithAtoms(MovingTargetHarness, { api: answering() })
+    const wrapper = mounted.wrapper as VueWrapper<{ sessionKey: string }>
+    await flushPromises()
+    expect(polls().map(poll => poll.key)).toEqual(['session-0'])
+
+    wrapper.vm.sessionKey = 'session-1'
+    await nextTick()
+    await flushPromises()
+    await flushPromises()
+
+    // The conversation the panel is now showing polls, which it can only do if
+    // the activation moved with it. Without that, the atoms would have followed
+    // the reactive thunks to `session-1` while the `+1` stayed on `session-0` —
+    // a panel on screen that never fetches, and no error anywhere to say so.
+    expect(polls().map(poll => poll.key)).toContain('session-1')
+
+    // And the conversation it left is released rather than pinned: a stranded
+    // `+1` can never be handed back, so `session-0` would poll for as long as
+    // the page stayed open.
+    const before = polls().filter(poll => poll.key === 'session-0').length
+    await pulse('session-0')
+    expect(polls().filter(poll => poll.key === 'session-0')).toHaveLength(before)
   })
 
   it('holds two conversations at once without mixing them', async () => {

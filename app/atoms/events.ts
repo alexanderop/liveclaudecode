@@ -2,6 +2,7 @@ import { Effect } from 'effect'
 import * as Atom from 'effect/unstable/reactivity/Atom'
 import type { TranscriptEventWire } from '#shared/schemas/api'
 import { Api } from '~/api/api'
+import { type Activation, makeActivation } from './activation'
 import { pollingFeed } from './feed'
 import { appRuntime } from './runtime'
 
@@ -34,6 +35,12 @@ export const eventsKey = (
   hours: number,
 ): EventsKey => ({ project: project ?? '', key: key ?? '', hours })
 
+/** A transcript arriving on screen or leaving it. */
+export type EventsActivation = Activation<EventsKey>
+
+/** Identity of a transcript, as a string a `Map` can compare. */
+const identify = (key: EventsKey): string => `${key.project}\0${key.key}\0${key.hours}`
+
 /** The cursor threaded across polls, beside the buffer it has accumulated. */
 interface EventsCursor {
   readonly since: number
@@ -55,34 +62,57 @@ const EMPTY: ReadonlyArray<TranscriptEventWire> = []
  * agent and back within a couple of minutes resumes from the cursor instead of
  * refetching the whole transcript, which is what the old `reset()` discipline
  * deliberately avoided doing.
+ *
+ * That TTL is exactly why the `active` gate has to be here too. The two are a
+ * pair and the loop is unsafe without both: the TTL keeps the node — and so the
+ * stream — alive for two minutes after the last reader lets go, and with nothing
+ * telling it otherwise it spends those two minutes fetching a transcript nobody
+ * is looking at, once every two seconds. Clicking through ten agents leaves ten
+ * of those running at once. Reading "is anyone showing this" per tick is what
+ * separates *keep the buffer* from *keep fetching*, and it must stay out of the
+ * family key: re-keying on visibility would pause the feed by making it a
+ * different atom, which is the refetch the TTL exists to prevent.
  */
-export const makeEventsAtoms = (runtime: Atom.AtomRuntime<Api>) => ({
-  events: Atom.family((key: EventsKey) =>
-    runtime.atom(() =>
-      pollingFeed({
-        interval: POLL_INTERVAL,
-        initial: (): EventsCursor => ({ since: 0, revision: 0, events: EMPTY }),
-        enabled: () => Boolean(key.project && key.key),
-        fetch: cursor =>
-          Effect.gen(function*() {
-            const api = yield* Api
-            const page = yield* api.events({
-              project: key.project,
-              key: key.key,
-              hours: key.hours,
-              since: cursor.since,
-              revision: cursor.revision,
-            })
-            // `reset` is the provider having rewritten the transcript: the
-            // buffer is replaced rather than extended.
-            const events = page.reset ? page.events : [...cursor.events, ...page.events]
-            return [
-              { since: page.next, revision: page.revision, events },
-              events,
-            ] as const
-          }),
-      })).pipe(Atom.setIdleTTL(IDLE_TTL))),
-})
+export const makeEventsAtoms = (runtime: Atom.AtomRuntime<Api>) => {
+  const activation = makeActivation(identify)
+
+  return {
+    /**
+     * Which transcripts are on screen. Written by whatever renders one; see
+     * `useTranscriptActivation` in `app/composables/activation.ts`.
+     *
+     * Counted, because the activity view and the inspector overlay can both be
+     * reading the *same* transcript — the inspector opens on a node that is
+     * often the selected one — and either one closing must not stop the other.
+     */
+    active: activation.atom,
+    events: Atom.family((key: EventsKey) =>
+      runtime.atom(get =>
+        pollingFeed({
+          interval: POLL_INTERVAL,
+          initial: (): EventsCursor => ({ since: 0, revision: 0, events: EMPTY }),
+          enabled: () => Boolean(key.project && key.key) && activation.shows(get, key),
+          fetch: cursor =>
+            Effect.gen(function*() {
+              const api = yield* Api
+              const page = yield* api.events({
+                project: key.project,
+                key: key.key,
+                hours: key.hours,
+                since: cursor.since,
+                revision: cursor.revision,
+              })
+              // `reset` is the provider having rewritten the transcript: the
+              // buffer is replaced rather than extended.
+              const events = page.reset ? page.events : [...cursor.events, ...page.events]
+              return [
+                { since: page.next, revision: page.revision, events },
+                events,
+              ] as const
+            }),
+        })).pipe(Atom.setIdleTTL(IDLE_TTL))),
+  }
+}
 
 /** The transcript atoms, as one bundle. */
 export type EventsAtoms = ReturnType<typeof makeEventsAtoms>

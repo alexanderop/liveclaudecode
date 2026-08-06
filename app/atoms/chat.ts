@@ -3,6 +3,7 @@ import * as Atom from 'effect/unstable/reactivity/Atom'
 import type { ChatEventWire, ChatStatusWire } from '#shared/schemas/api'
 import type { ChatAction, ChatAgentId } from '#shared/types/chat'
 import { Api } from '~/api/api'
+import { type Activation, makeActivation } from './activation'
 import { pollingFeed } from './feed'
 import { appRuntime } from './runtime'
 
@@ -60,10 +61,7 @@ export const chatTarget = (project: string, key: string): ChatTarget => ({ proje
 const identify = (target: ChatTarget): string => `${target.project}\0${target.key}`
 
 /** A panel appearing or disappearing. `-1` must pair with exactly one `+1`. */
-export interface ChatActivation {
-  readonly target: ChatTarget
-  readonly delta: 1 | -1
-}
+export type ChatActivation = Activation<ChatTarget>
 
 /** What the server says about one conversation, as the panel renders it. */
 export interface ChatConversation {
@@ -111,33 +109,15 @@ interface ChatPulse {
  */
 export const makeChatAtoms = (runtime: Atom.AtomRuntime<Api>) => {
   /**
-   * Which conversations are on screen, by identity, counted.
+   * Which conversations are on screen, counted.
    *
-   * A count rather than a flag because the session panel and the inspector's
-   * subagent tab can be showing the *same* session at once — the inspector is
-   * handed the selected node's key, and the selected node is often the root.
-   * A shared boolean would let either one's deactivation stop the other's poll.
-   *
-   * `keepAlive` for the reason `apiLayerAtom` needs it: nothing subscribes to
-   * this, it is only ever written by a mounting panel and read with
-   * `AtomContext.once` from inside a running stream, so the registry's idle
-   * sweep would otherwise discard it and hand the next read an empty map —
-   * every visible panel silently stops polling.
+   * The count matters here because the session panel and the inspector's Ask
+   * tab can be showing the *same* session at once — the inspector is handed the
+   * selected node's key, and the selected node is often the root. See
+   * `app/atoms/activation.ts` for why this is a map and not a family key.
    */
-  const active: Atom.Writable<ReadonlyMap<string, number>, ChatActivation> = Atom.writable<
-    ReadonlyMap<string, number>,
-    ChatActivation
-  >(
-    () => new Map(),
-    (ctx, activation) => {
-      const id = identify(activation.target)
-      const next = new Map(ctx.get(active))
-      const count = (next.get(id) ?? 0) + activation.delta
-      if (count > 0) next.set(id, count)
-      else next.delete(id)
-      ctx.setSelf(next)
-    },
-  ).pipe(Atom.keepAlive)
+  const activation = makeActivation(identify)
+  const active = activation.atom
 
   /**
    * "Poll this conversation now", written after an action is accepted.
@@ -175,8 +155,7 @@ export const makeChatAtoms = (runtime: Atom.AtomRuntime<Api>) => {
         // Read per tick, never as a dependency. A tracked read would make this
         // atom a dependent of the flag and rebuild the stream when a panel is
         // hidden, discarding the cursor — the regression §3.9 exists to avoid.
-        enabled: () =>
-          Boolean(target.project && target.key) && (get.once(active).get(id) ?? 0) > 0,
+        enabled: () => Boolean(target.project && target.key) && activation.shows(get, target),
         pulses: get.stream(pulse, { withoutInitialValue: true }).pipe(
           Stream.filter(published => published.id === id),
         ),

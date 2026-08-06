@@ -256,6 +256,36 @@ describe('costs atoms', () => {
         assert.strictEqual(yield* stub.calls.costs.count, 1)
         assert.strictEqual(yield* atoms.get(refresh), 0)
       }).pipe(Effect.scoped))
+
+    it.effect('collapses a burst of clicks into one poll', () =>
+      Effect.gen(function*() {
+        const { atoms, stub, costs, refresh } = yield* withCosts({ costs: () => ok() })
+        const feed = costs(costsKey(24))
+        const next = yield* atoms.published(feed)
+
+        yield* atoms.settled(feed)
+        yield* next
+        yield* pulseIsLive
+
+        // Ten clicks with no chance to breathe between them — a double-click, or
+        // an impatient user on a page that has not visibly changed yet.
+        for (let click = 0; click < 10; click++) yield* atoms.set(refresh, undefined)
+        yield* next
+
+        // One. Each pulse is an element of the merged stream and `mapAccumEffect`
+        // runs them one at a time, so unbuffered this would be ten *whole*
+        // sequential fetches of the slowest route the dashboard has — the one
+        // this file gave a thirty-second interval precisely because it re-reads
+        // every transcript in the range. A queued "poll now" already answers
+        // every later click behind it.
+        assert.strictEqual(yield* stub.calls.costs.count, 2)
+
+        // And the click still works: coalescing must not mean swallowing.
+        yield* pulseIsLive
+        yield* atoms.set(refresh, undefined)
+        yield* next
+        assert.strictEqual(yield* stub.calls.costs.count, 3)
+      }).pipe(Effect.scoped))
   })
 
   describe('the stub itself', () => {

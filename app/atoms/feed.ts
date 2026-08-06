@@ -16,6 +16,17 @@ export interface Feed<A> {
 }
 
 /**
+ * How many "poll now" pulses may wait behind the request in flight.
+ *
+ * One, because a second waiting pulse would answer the same question the first
+ * one already has queued. It is not zero: `Stream.merge` hands elements over a
+ * rendezvous queue, so the pulse at the head is already blocked on the handover
+ * while a fetch runs, and a capacity of zero would drop the click that arrives
+ * during the *first* request rather than the redundant ones after it.
+ */
+const PENDING_PULSES = 1
+
+/**
  * Polls `fetch` on `interval`, threading the cursor state `S` across ticks.
  *
  * `Stream.tick` emits immediately on the first pull and delays only subsequent
@@ -43,6 +54,17 @@ export interface Feed<A> {
  * `AtomContext.stream` is the source to hand in: it subscribes rather than
  * registering a parent, so the pulse cannot rebuild the node either
  * (`repos/effect/packages/effect/src/unstable/reactivity/AtomRegistry.ts:973`).
+ *
+ * Pulses are coalesced, and that is not a nicety. A pulse is one element of the
+ * merged stream and `mapAccumEffect` runs one element at a time, so without a
+ * bound a user drumming on Refresh buys one *whole* fetch per click, serialised
+ * — against `/api/costs` and `/api/debug`, which re-read every transcript in the
+ * range and are the two slowest routes the dashboard has. `PENDING_PULSES` is
+ * the dropping bound: while a fetch is in flight one more pulse may wait and the
+ * rest are discarded, because "poll now" is a request for fresh data and the
+ * poll already queued will produce exactly that. It cannot be the *interval*
+ * that is dropped instead — the tick stream is merged unbuffered, so a slow
+ * request delays the next tick rather than stacking one behind it.
  *
  * `enabled` is how a feed stops without dying. It is read per tick, and a tick
  * it turns away emits **nothing** — the accumulator is handed straight back, so
@@ -81,7 +103,12 @@ export const pollingFeed = <S, A, R>(options: {
         )
 
   const ticks: Stream.Stream<unknown> = options.pulses
-    ? Stream.merge(Stream.tick(options.interval), options.pulses)
+    ? Stream.merge(
+        Stream.tick(options.interval),
+        options.pulses.pipe(
+          Stream.buffer({ capacity: PENDING_PULSES, strategy: 'dropping' }),
+        ),
+      )
     : Stream.tick(options.interval)
 
   // `mapAccumEffect` is sequential over the merged stream, so a pulse that lands

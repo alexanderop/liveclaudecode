@@ -12,6 +12,7 @@ import { selectionAtoms } from '~/atoms/selection'
 import { sessionEventsAtoms, sessionEventsKey } from '~/atoms/session-events'
 import { treeAtoms } from '~/atoms/tree'
 import { workspaceAtoms } from '~/atoms/workspace'
+import { useTranscriptActivation } from '~/composables/activation'
 import { useAtomModel } from '~/composables/atom'
 import { findNode, flattenRunTree } from '~/utils/execution-analysis'
 import { feedValue, toFeedView } from '~/utils/feed-view'
@@ -75,6 +76,27 @@ const setSelection = useAtomSet(() => selectionAtoms.selection)
 const setInspected = useAtomSet(() => selectionAtoms.inspected)
 const runResult = useAtomValue(() =>
   runAtoms.run(runKey(selectedProject.value, selectedKey.value, hours.value)))
+
+/**
+ * The two transcripts this page puts on screen, declared to the feed that
+ * serves them.
+ *
+ * Unlike the other feeds, a transcript keeps its buffer for two minutes after
+ * the last reader lets go, so that flipping between two agents resumes from the
+ * cursor instead of refetching. The node outliving its readers is the point —
+ * and it is why the feed cannot infer for itself that nobody is watching. These
+ * two calls are what tell it, and without them a session browsed for a minute
+ * leaves a dozen transcripts polling in the background.
+ *
+ * Two, because the selected agent's transcript reaches this page indirectly
+ * through `activityAtoms.feed` while the inspector overlay reads its own
+ * directly. They are frequently the same key, which is why the map counts.
+ */
+useTranscriptActivation(() =>
+  eventsKey(selectedProject.value, selectedKey.value, hours.value))
+useTranscriptActivation(() =>
+  eventsKey(selectedProject.value, inspectedKey.value, hours.value))
+
 const inspectedResult = useAtomValue(() =>
   eventsAtoms.events(eventsKey(selectedProject.value, inspectedKey.value, hours.value)))
 const sessionResult = useAtomValue(() =>

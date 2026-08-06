@@ -63,8 +63,10 @@ const pollNow = useAtomSet(() => chatAtoms.pulse)
  */
 let activated: ChatTarget | null = null
 let shown = false
+let visible = false
 
 function activate(): void {
+  visible = true
   if (activated) return
   activated = target.value
   setActive({ target: activated, delta: 1 })
@@ -77,6 +79,12 @@ function activate(): void {
 }
 
 function deactivate(): void {
+  visible = false
+  release()
+}
+
+/** Hand back the `+1` for whatever was last announced, if anything was. */
+function release(): void {
   if (!activated) return
   setActive({ target: activated, delta: -1 })
   activated = null
@@ -90,6 +98,21 @@ activate()
 onActivated(activate)
 onDeactivated(deactivate)
 onUnmounted(deactivate)
+
+// Both mount sites re-`:key` this panel, so in practice `target` is fixed for
+// the lifetime of one instance and this watcher never fires. It is here because
+// the atoms below do not share that assumption: their thunks are reactive, so a
+// dropped `:key` would move the conversation, the draft, and the agent choice to
+// the new target while the `+1` above stayed on the old one — leaving a panel on
+// screen that never polls, and a conversation nobody is reading pinned to a
+// permanent `+1`. The failure is silent, so the guard is cheaper than the
+// invariant. `release()` hands back what was actually announced rather than
+// recomputing it from `target`, which by then is already the new one.
+watch(target, () => {
+  if (!visible) return
+  release()
+  activate()
+})
 
 const conversation = useAtomValue(() => chatAtoms.conversation(target.value))
 const draft = useAtomModel(() => chatAtoms.draft(target.value))

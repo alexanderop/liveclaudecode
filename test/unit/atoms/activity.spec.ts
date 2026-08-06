@@ -1,7 +1,7 @@
 import { assert, describe, it } from '@effect/vitest'
 import { Effect } from 'effect'
 import { activitySession, makeActivityAtoms } from '~/atoms/activity'
-import { makeEventsAtoms } from '~/atoms/events'
+import { eventsKey, makeEventsAtoms } from '~/atoms/events'
 import { makeFiltersAtoms } from '~/atoms/filters'
 import { makePreferencesAtoms } from '~/atoms/preferences'
 import { makeRangeAtoms } from '~/atoms/range'
@@ -37,15 +37,30 @@ const withActivity = Effect.fn('withActivity')(function*(handlers: StubApiHandle
   const range = makeRangeAtoms()
   const tree = makeTreeAtoms(atoms.runtime, range)
   const selection = makeSelectionAtoms(tree, makeFiltersAtoms(tree), makePreferencesAtoms())
+  const events = makeEventsAtoms(atoms.runtime)
   const activity = makeActivityAtoms(
     selection,
     range,
-    makeEventsAtoms(atoms.runtime),
+    events,
     makeSessionEventsAtoms(atoms.runtime),
     makeRunAtoms(atoms.runtime),
   )
   yield* atoms.mount(tree.tree)
   yield* atoms.settled(tree.tree)
+
+  // The transcript feed only fetches for a transcript something says it is
+  // showing, which on the dashboard is `useTranscriptActivation` in
+  // `index.vue`. Standing in for it here is not scaffolding: the activity view
+  // reads the agent transcript, so without this it would assert against a feed
+  // that is switched off. `events.spec.ts` owns the rule itself.
+  yield* atoms.set(events.active, {
+    target: eventsKey(
+      yield* atoms.get(selection.project),
+      yield* atoms.get(selection.key),
+      yield* atoms.get(range.hours),
+    ),
+    delta: 1,
+  })
   yield* atoms.mount(activity.feed)
   return { atoms, activity, selection }
 })
