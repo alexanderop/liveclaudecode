@@ -135,6 +135,22 @@ without mounting — survives. Only the mechanism changed.
   are bugs.
 - A stream atom surfaces only the *last* element of each emitted chunk. Emit one
   value per tick, or emit cumulative snapshots.
+- **Never refresh a poll feed with `registry.refresh` / `useAtomRefresh`.**
+  Refreshing rebuilds the node, so the stream is constructed again, `initial()`
+  runs again, and the value the feed was holding is gone — a refresh against a
+  server that is down empties the screen instead of going stale over the data
+  already on it. Give `pollingFeed` a `pulses` stream built with
+  `get.stream(pulseAtom, { withoutInitialValue: true })`: it subscribes rather
+  than registering a parent, so it cannot rebuild the node either. `costs.ts` is
+  the worked example.
+- A writable atom that is only ever *subscribed* to is never evaluated, and its
+  first write evaluates it — notifying listeners with the initial value **and**
+  then the written one. Two pulses, two requests. Materialise it with
+  `get.once(atom)` before subscribing.
+- An atom holding configuration a test substitutes — `apiLayerAtom` — needs
+  `keepAlive`. It has no subscribers of its own, so the idle sweep can discard it
+  between the write and the first read and silently restore the production
+  default.
 - Imports between `app/atoms/**` follow a one-way DAG:
   `runtime → range → tree → {filters, selection} → {run-detail, events,
   session-events} → activity`. A back-edge is a review blocker. One file per
@@ -291,6 +307,17 @@ silently caught.
   registry's `defaultIdleTTL`, or node removal — those use raw `setTimeout` and
   a macrotask. Anything asserting on disposal needs real or `vi`-faked timers,
   and a macrotask flush rather than `await nextTick()`.
+- Assert an out-of-band emission with `published()` from
+  `test/fixtures/atom-registry.ts`, not by advancing the clock: it suspends until
+  the atom publishes again. A merged pulse stream registers its listener one
+  scheduler turn after the feed's first value, so drain that value and yield
+  before writing the pulse — no user can click inside that window, but a test
+  can, and the symptom is a hang.
+- Stub `Api` at the service boundary for pages and atoms, but keep `Api.layer`
+  itself covered from below, against a fake `FetchHttpClient.Fetch`
+  (`test/unit/api/costs-route.spec.ts`). Everything between the service and the
+  socket — status handling, error classification, response decoding, and the URL
+  the client actually built — is invisible to a service-level stub.
 - `@effect/atom-vue` ships a placeholder test suite, so
   `test/nuxt/atom-binding.spec.ts` owns coverage of the binding itself:
   synchronous value before first render, re-subscription on thunk dependency

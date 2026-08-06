@@ -33,11 +33,22 @@ export interface Feed<A> {
  *
  * Defects still terminate the stream, which is correct — a defect is a bug, not
  * a network blip.
+ *
+ * `pulses` is how a refresh button asks for a poll *now*. It must be an
+ * out-of-band stream rather than `registry.refresh`, because refreshing a stream
+ * atom rebuilds the node: the stream is constructed again, `initial()` runs
+ * again, and the accumulated `last` value is lost — so a refresh against a
+ * server that is down would empty the screen instead of going stale over the
+ * data already on it. Merging into the running stream keeps the accumulator.
+ * `AtomContext.stream` is the source to hand in: it subscribes rather than
+ * registering a parent, so the pulse cannot rebuild the node either
+ * (`repos/effect/packages/effect/src/unstable/reactivity/AtomRegistry.ts:973`).
  */
 export const pollingFeed = <S, A, R>(options: {
   readonly interval: Duration.Input
   readonly initial: () => S
   readonly fetch: (state: S) => Effect.Effect<readonly [S, A], ApiError, R>
+  readonly pulses?: Stream.Stream<unknown> | undefined
 }): Stream.Stream<Feed<A>, never, R> => {
   /** The cursor plus the newest value, threaded across ticks. */
   interface Accumulated {
@@ -54,7 +65,13 @@ export const pollingFeed = <S, A, R>(options: {
       Effect.catch(error => Effect.succeed([acc, [{ value: acc.last, error }]] as const)),
     )
 
-  return Stream.tick(options.interval).pipe(
+  const ticks: Stream.Stream<unknown> = options.pulses
+    ? Stream.merge(Stream.tick(options.interval), options.pulses)
+    : Stream.tick(options.interval)
+
+  // `mapAccumEffect` is sequential over the merged stream, so a pulse that lands
+  // mid-request queues behind it rather than racing it.
+  return ticks.pipe(
     Stream.mapAccumEffect((): Accumulated => ({ state: options.initial(), last: null }), tick),
   )
 }

@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import type {
-  CostOverviewGroup,
-  CostOverviewResponse,
-  SessionSource,
-} from '#shared/types/run'
+import { useAtomSet, useAtomValue } from '@effect/atom-vue'
+import type { CostOverviewGroupWire, SessionSourceWire } from '#shared/schemas/api'
+import { costsAtoms, costsKey } from '~/atoms/costs'
 import ChartLine from '~/components/charts/LineChart.vue'
 import ChartSparkline from '~/components/charts/Sparkline.vue'
 import type { ChartCategory, ChartDatum } from '~/components/charts/chart'
 
-type HarnessFilter = 'all' | SessionSource
+type HarnessFilter = 'all' | SessionSourceWire
 
 const route = useRoute()
 const router = useRouter()
@@ -21,22 +19,49 @@ const rangeOptions = [
   { label: 'Last 30 days', value: 720 },
   { label: 'All time', value: 0 },
 ]
-const sourceMeta: Record<SessionSource, { icon: string, color: string }> = {
+const sourceMeta: Record<SessionSourceWire, { icon: string, color: string }> = {
   claude: { icon: 'i-lucide-sparkles', color: '#d9915b' },
   codex: { icon: 'i-lucide-square-terminal', color: '#65b89a' },
   copilot: { icon: 'i-lucide-github', color: '#6f9de8' },
 }
 
-const { data, status, error, refresh } = await useFetch<CostOverviewResponse>('/api/costs', {
-  query: computed(() => ({ hours: hours.value })),
-  watch: [hours],
-})
+// The thunk depends on `hours`, so changing the range swaps which atom this page
+// is subscribed to; the family memoises structurally, so the same range always
+// resolves to the same atom. Both bindings must run during setup() —
+// `injectRegistry` falls back to a module singleton rather than throwing.
+const result = useAtomValue(() => costsAtoms.costs(costsKey(hours.value)))
+// A pulse into the running feed, not `registry.refresh`: refreshing a stream
+// atom rebuilds it, which would throw away the data already on screen.
+const pulse = useAtomSet(() => costsAtoms.refresh)
+
+// One string discriminant for the template. `result` is stream-backed, so it is
+// permanently `waiting` and neither `matchWithWaiting` nor `result.waiting` can
+// be used to decide anything.
+const view = computed(() => toFeedView(result.value))
+const data = computed(() =>
+  view.value.tag === 'ready' || view.value.tag === 'stale' ? view.value.value : null,
+)
 
 watch(hours, (value) => {
   void router.replace({ query: { ...route.query, hours: String(value) } })
 })
 
-const loading = computed(() => status.value === 'pending')
+// A stream atom's `waiting` flag is set on every chunk and never cleared, so the
+// atom cannot say whether a request is in flight. The button owns that: it goes
+// busy on click and clears on the next value the feed publishes, whether that
+// value is fresh data or a failure.
+const refreshing = ref(false)
+watch(result, () => {
+  refreshing.value = false
+})
+function refresh(): void {
+  refreshing.value = true
+  pulse()
+}
+
+// "Nothing on screen yet", which is what drives the skeletons — distinct from
+// `refreshing`, which is a request over data that is already rendered.
+const loading = computed(() => view.value.tag === 'loading')
 const harnesses = computed(() => data.value?.harnesses || [])
 const visibleModels = computed(() => (data.value?.models || []).filter(model =>
   selectedHarness.value === 'all' || model.source === selectedHarness.value,
@@ -99,7 +124,7 @@ function formatTokens(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 }
 
-function spendLabel(group: CostOverviewGroup): string {
+function spendLabel(group: CostOverviewGroupWire): string {
   return group.estimatedUsd === null ? 'Rate unavailable' : formatUsd(group.estimatedUsd)
 }
 
@@ -124,7 +149,7 @@ function exportCsv(): void {
     <header class="cost-appbar">
       <NuxtLink to="/" class="cost-brand"><span><UIcon name="i-lucide-terminal" /></span><strong>liveclaudecode</strong></NuxtLink>
       <nav aria-label="Workspace"><NuxtLink to="/">Sessions</NuxtLink><NuxtLink to="/costs" class="active">Costs</NuxtLink><NuxtLink to="/debug">Debug</NuxtLink></nav>
-      <div><span class="local-state"><i />Local transcripts</span><UButton color="neutral" variant="ghost" icon="i-lucide-refresh-cw" aria-label="Refresh costs" :loading="loading" @click="refresh()" /></div>
+      <div><span class="local-state"><i />Local transcripts</span><UButton color="neutral" variant="ghost" icon="i-lucide-refresh-cw" aria-label="Refresh costs" :loading="loading || refreshing" @click="refresh()" /></div>
     </header>
 
     <main class="cost-main">
@@ -136,10 +161,13 @@ function exportCsv(): void {
         </div>
       </section>
 
-      <UAlert v-if="error" class="state-alert" color="error" variant="soft" icon="i-lucide-cloud-off" title="Could not read cost data" description="The local transcript scan failed. Retry after checking the server output." />
-      <UAlert v-else-if="degradedSources.length" class="state-alert" color="warning" variant="soft" icon="i-lucide-triangle-alert" title="Some transcript data was skipped" :description="degradedSources.map(source => `${sessionSourceLabel(source.source)}: ${source.message}`).join(' · ')" />
+      <UAlert v-if="view.tag === 'error'" class="state-alert" color="error" variant="soft" icon="i-lucide-cloud-off" title="Could not read cost data" :description="`${view.message}. ${view.remedy}`" />
+      <UAlert v-else-if="view.tag === 'stale'" class="state-alert" color="warning" variant="soft" icon="i-lucide-cloud-off" title="Showing the last cost data read" :description="`${view.message}. ${view.remedy}`" />
+      <!-- Independent of the two above: partly-readable transcripts describe the
+           data on screen, so a failed poll must not silently retract the notice. -->
+      <UAlert v-if="degradedSources.length" class="state-alert" color="warning" variant="soft" icon="i-lucide-triangle-alert" title="Some transcript data was skipped" :description="degradedSources.map(source => `${sessionSourceLabel(source.source)}: ${source.message}`).join(' · ')" />
 
-      <section v-if="loading && !data" class="summary-grid" aria-label="Loading cost overview">
+      <section v-if="loading" class="summary-grid" aria-label="Loading cost overview">
         <USkeleton v-for="index in 4" :key="index" class="h-24 rounded-xl" />
       </section>
       <template v-else-if="data">

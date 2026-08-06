@@ -3,11 +3,12 @@ import { Cause } from 'effect'
 import * as AsyncResult from 'effect/unstable/reactivity/AsyncResult'
 import type { Feed } from '~/atoms/feed'
 import { feedIsOffline, feedValue, toFeedView } from '~/utils/feed-view'
-import { ApiUnreachable } from '~/api/errors'
+import type { ApiError } from '~/api/errors'
+import { ApiMalformed, ApiUnreachable } from '~/api/errors'
 
 const offline = new ApiUnreachable({ url: '/api/tree', detail: 'connection refused' })
 
-const feed = (value: string | null, error: ApiUnreachable | null = null): Feed<string> => ({
+const feed = (value: string | null, error: ApiError | null = null): Feed<string> => ({
   value,
   error,
 })
@@ -51,25 +52,50 @@ describe('toFeedView', () => {
   it('reports stale when a refresh failed but data is on screen', () => {
     assert.deepStrictEqual(
       toFeedView(success(feed('projects', offline))),
-      { tag: 'stale', value: 'projects', message: offline.message },
+      { tag: 'stale', value: 'projects', message: offline.message, remedy: offline.remedy },
     )
   })
 
   it('reports error when the very first request failed', () => {
     assert.deepStrictEqual(
       toFeedView(success(feed(null, offline))),
-      { tag: 'error', message: offline.message },
+      { tag: 'error', message: offline.message, remedy: offline.remedy },
     )
+  })
+
+  it('carries the failure\'s own remedy, not one sentence for every failure', () => {
+    // The page renders `message` and `remedy` together, and what to do differs:
+    // an unreachable server recovers by itself, a body this build cannot read
+    // never will.
+    const skew = new ApiMalformed({ url: '/api/costs', detail: 'sessions: expected number' })
+    assert.deepStrictEqual(
+      toFeedView(success(feed(null, skew))),
+      { tag: 'error', message: skew.message, remedy: skew.remedy },
+    )
+    assert.deepStrictEqual(
+      toFeedView(success(feed('projects', skew))),
+      { tag: 'stale', value: 'projects', message: skew.message, remedy: skew.remedy },
+    )
+    assert.notStrictEqual(skew.remedy, offline.remedy)
   })
 
   it('reports error for a typed stream failure', () => {
     const result = AsyncResult.failure<Feed<string>, ApiUnreachable>(Cause.fail(offline))
-    assert.deepStrictEqual(toFeedView(result), { tag: 'error', message: offline.message })
+    assert.deepStrictEqual(toFeedView(result), {
+      tag: 'error',
+      message: offline.message,
+      // A dead stream is a defect, so there is no ApiError to take advice from.
+      remedy: 'Reload the page. If it happens again, check the server output.',
+    })
   })
 
   it('reports error for a defect', () => {
     const result = AsyncResult.failure<Feed<string>, never>(Cause.die(new Error('boom')))
-    assert.deepStrictEqual(toFeedView(result), { tag: 'error', message: 'boom' })
+    assert.deepStrictEqual(toFeedView(result), {
+      tag: 'error',
+      message: 'boom',
+      remedy: 'Reload the page. If it happens again, check the server output.',
+    })
   })
 
   it('treats an interrupt-only failure as loading, not as an error', () => {

@@ -1,15 +1,22 @@
-import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
+import { Effect } from 'effect'
 import { afterEach, describe, expect, it } from 'vitest'
+import { USelect } from '#components'
+import type { CostOverviewResponseWire } from '#shared/schemas/api'
+import { ApiUnreachable } from '~/api/errors'
 import CostsPage from '~/pages/costs.vue'
-import { costOverviewGroup, costOverviewResponse, runNode } from '../fixtures/runs'
-import { mockLiveApi } from '../fixtures/live-api'
+import { deferred } from '../fixtures/deferred'
+import { costOverviewGroup, costOverviewResponse } from '../fixtures/runs'
+import { mountWithAtoms, type MountedAtoms } from '../fixtures/mount-atoms'
+import { recordedCalls, type StubApiHandlers } from '../fixtures/stub-api'
 
-let component: VueWrapper | null = null
+let mounted: MountedAtoms | null = null
 
 afterEach(() => {
-  component?.unmount()
-  component = null
+  mounted?.wrapper.unmount()
+  // The registry owns the poll loop; unmounting only releases the subscription.
+  mounted?.registry.dispose()
+  mounted = null
 })
 
 const stubs = { UTooltip: { template: '<slot />' } }
@@ -47,16 +54,65 @@ const codexModel = costOverviewGroup({
   unpricedRequests: 5,
 })
 
-const mountCosts = async (route?: string) => {
-  const wrapper = component = await mountSuspended(CostsPage, { global: { stubs }, route })
+/** The usual case: `/api/costs` answers, everything else is a defect. */
+const answering = (
+  response: Parameters<typeof costOverviewResponse>[0] = {},
+): StubApiHandlers => ({ costs: () => Effect.succeed(costOverviewResponse(response)) })
+
+const mountCosts = async (options: {
+  readonly api?: StubApiHandlers
+  readonly route?: string
+} = {}) => {
+  mounted = await mountWithAtoms(CostsPage, {
+    api: options.api ?? answering(),
+    route: options.route,
+    global: { stubs },
+  })
   await flushPromises()
-  return wrapper
+  return mounted.wrapper
+}
+
+/** Every `hours` the page asked `/api/costs` for, oldest request first. */
+const requestedHours = () =>
+  recordedCalls(mounted!.api.calls.costs).map(query => query.hours)
+
+/**
+ * Lets the atom's forked poll fiber run and Vue re-render.
+ *
+ * One `flushPromises` is not enough for a refresh: the click writes the pulse,
+ * the merged stream picks it up on a later scheduler turn, the request runs, and
+ * only then does the atom publish.
+ */
+const settle = async () => {
+  for (let round = 0; round < 4; round++) await flushPromises()
+}
+
+const clickRefresh = async (wrapper: VueWrapper) => {
+  await wrapper.get('[aria-label="Refresh costs"]').trigger('click')
+  await settle()
+}
+
+/** Succeeds on the first call, fails on every one after it. */
+const failsAfterFirst = (): StubApiHandlers => {
+  let calls = 0
+  return {
+    costs: () =>
+      ++calls === 1
+        ? Effect.succeed(costOverviewResponse({
+          sessions: 5,
+          sources: [
+            { source: 'claude', state: 'ready', sessions: 4, malformed: 0, message: '' },
+            { source: 'codex', state: 'degraded', sessions: 1, malformed: 3, message: '3 unreadable files' },
+          ],
+        }))
+        : Effect.fail(new ApiUnreachable({ url: '/api/costs', detail: 'connect refused' })),
+  }
 }
 
 describe('costs page', () => {
   it('summarises spend, harnesses, and every recorded model', async () => {
-    mockLiveApi(runNode(), {
-      costs: () => costOverviewResponse({
+    const wrapper = await mountCosts({
+      api: answering({
         estimatedUsd: 2,
         sessions: 5,
         usage: { in: 3_000, out: 600, cr: 6_000, cw: 100 },
@@ -64,7 +120,6 @@ describe('costs page', () => {
         models: [opus, codexModel],
       }),
     })
-    const wrapper = await mountCosts()
 
     assertSummary(wrapper)
     // Cache read share is cr / (in + cr): 6000 / 9000.
@@ -82,13 +137,9 @@ describe('costs page', () => {
   })
 
   it('filters models to the harness the user selects, and back again', async () => {
-    mockLiveApi(runNode(), {
-      costs: () => costOverviewResponse({
-        harnesses: [claude, codex],
-        models: [opus, codexModel],
-      }),
+    const wrapper = await mountCosts({
+      api: answering({ harnesses: [claude, codex], models: [opus, codexModel] }),
     })
-    const wrapper = await mountCosts()
 
     await wrapper.findAll('.harness-card')[1]!.trigger('click')
     expect(wrapper.findAll('.contributors li')).toHaveLength(1)
@@ -103,11 +154,6 @@ describe('costs page', () => {
   })
 
   it('takes its range from the route query, defaulting to 30 days', async () => {
-    const fetch = mockLiveApi(runNode(), { costs: () => costOverviewResponse() })
-    const requestedHours = () => fetch.mock.calls
-      .filter(([url]) => String(url).startsWith('/api/costs'))
-      .map(([, options]) => options?.query?.hours)
-
     await mountCosts()
     expect(requestedHours()).toEqual([720])
   })
@@ -115,24 +161,22 @@ describe('costs page', () => {
   it.each([['24', 24], ['0', 0], ['nonsense', 720], ['13', 720]])(
     'requests %s hours from the route as %i',
     async (query, expected) => {
-      const fetch = mockLiveApi(runNode(), { costs: () => costOverviewResponse() })
-      await mountCosts(`/costs?hours=${query}`)
-
-      const call = fetch.mock.calls.find(([url]) => String(url).startsWith('/api/costs'))
-      expect(call?.[1]?.query?.hours).toBe(expected)
+      await mountCosts({ route: `/costs?hours=${query}` })
+      // `0` means all time and has to reach the server as a value, not as an
+      // omitted parameter that lets the server apply its own default.
+      expect(requestedHours()[0]).toBe(expected)
     },
   )
 
   it('names the sources whose transcripts were only partly readable', async () => {
-    mockLiveApi(runNode(), {
-      costs: () => costOverviewResponse({
+    const wrapper = await mountCosts({
+      api: answering({
         sources: [
           { source: 'claude', state: 'ready', sessions: 4, malformed: 0, message: '' },
           { source: 'codex', state: 'degraded', sessions: 1, malformed: 3, message: '3 unreadable files' },
         ],
       }),
     })
-    const wrapper = await mountCosts()
 
     const alert = wrapper.get('.state-alert')
     expect(alert.text()).toContain('Some transcript data was skipped')
@@ -142,8 +186,8 @@ describe('costs page', () => {
   })
 
   it('offers nothing to export and says so when the range holds no models', async () => {
-    mockLiveApi(runNode(), {
-      costs: () => costOverviewResponse({
+    const wrapper = await mountCosts({
+      api: answering({
         estimatedUsd: 0,
         pricedRequests: 0,
         sessions: 0,
@@ -152,13 +196,98 @@ describe('costs page', () => {
         models: [],
       }),
     })
-    const wrapper = await mountCosts()
 
     expect(wrapper.get('.empty-models').text()).toContain('No model usage in this range')
     expect(wrapper.findAll('.harness-card')).toHaveLength(0)
     expect(wrapper.get('.summary-grid').text()).toContain('0.0%')
     const exportButton = wrapper.findAll('button').find(button => button.text().includes('Export CSV'))
     expect(exportButton?.attributes('disabled')).toBeDefined()
+  })
+
+  it('shows skeletons until the first response lands', async () => {
+    const pending = deferred<CostOverviewResponseWire>()
+    mounted = await mountWithAtoms(CostsPage, {
+      api: { costs: () => Effect.promise(() => pending.promise) },
+      global: { stubs },
+    })
+    await flushPromises()
+
+    expect(mounted.wrapper.findAll('[aria-label="Loading cost overview"]')).toHaveLength(1)
+    expect(mounted.wrapper.findAll('.harness-card')).toHaveLength(0)
+
+    pending.resolve(costOverviewResponse({ harnesses: [claude] }))
+    await settle()
+
+    expect(mounted.wrapper.findAll('[aria-label="Loading cost overview"]')).toHaveLength(0)
+    expect(mounted.wrapper.findAll('.harness-card')).toHaveLength(1)
+  })
+
+  it('keeps the data on screen when a manual refresh cannot reach the server', async () => {
+    const wrapper = await mountCosts({ api: failsAfterFirst() })
+    expect(wrapper.get('.summary-grid').text()).toContain('5')
+
+    await clickRefresh(wrapper)
+
+    // The regression this pins: `registry.refresh` would rebuild the feed and
+    // reset its accumulator, so the click would blank the page into the hard
+    // error state. A pulse into the running stream keeps the last good data.
+    const alerts = wrapper.findAll('.state-alert')
+    expect(alerts[0]!.text()).toContain('Showing the last cost data read')
+    expect(alerts[0]!.text()).toContain('/api/costs is unreachable: connect refused')
+    expect(wrapper.get('.summary-grid').text()).toContain('5')
+
+    // And the stale banner does not retract what we know about the data itself.
+    expect(alerts[1]!.text()).toContain('3 unreadable files')
+  })
+
+  it('spins the refresh button until the request it started comes back', async () => {
+    const pending = deferred<CostOverviewResponseWire>()
+    let calls = 0
+    const wrapper = await mountCosts({
+      api: {
+        costs: () =>
+          ++calls === 1
+            ? Effect.succeed(costOverviewResponse({}))
+            : Effect.promise(() => pending.promise),
+      },
+    })
+    const button = () => wrapper.get('[aria-label="Refresh costs"]')
+    expect(button().attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[aria-label="Refresh costs"]').trigger('click')
+    await flushPromises()
+    expect(button().find('.animate-spin').exists()).toBe(true)
+
+    pending.resolve(costOverviewResponse({}))
+    await settle()
+    expect(button().find('.animate-spin').exists()).toBe(false)
+  })
+
+  it('follows the range the user picks, not the one it mounted with', async () => {
+    const wrapper = await mountCosts({ route: '/costs?hours=720' })
+    expect(requestedHours()).toEqual([720])
+
+    await wrapper.findComponent(USelect).setValue(24)
+    await settle()
+
+    // A thunk frozen at setup would keep rendering the 30-day feed forever.
+    expect(requestedHours()).toEqual([720, 24])
+  })
+
+  it('says the server could not be reached, and shows the reason', async () => {
+    const wrapper = await mountCosts({
+      api: {
+        costs: () =>
+          Effect.fail(new ApiUnreachable({ url: '/api/costs', detail: 'connect refused' })),
+      },
+    })
+
+    const alert = wrapper.get('.state-alert')
+    expect(alert.text()).toContain('Could not read cost data')
+    expect(alert.text()).toContain('/api/costs is unreachable: connect refused')
+    // No data ever arrived, so there is nothing to keep on screen and no
+    // skeleton pretending a request is still in flight.
+    expect(wrapper.findAll('.summary-grid')).toHaveLength(0)
   })
 })
 

@@ -10,8 +10,16 @@ export type FeedView<A> =
   | { readonly tag: 'loading' }
   | { readonly tag: 'ready', readonly value: A }
   /** Data on screen, most recent refresh failed. The offline banner state. */
-  | { readonly tag: 'stale', readonly value: A, readonly message: string }
-  | { readonly tag: 'error', readonly message: string }
+  | { readonly tag: 'stale', readonly value: A, readonly message: string, readonly remedy: string }
+  | { readonly tag: 'error', readonly message: string, readonly remedy: string }
+
+/**
+ * What to tell the user when the stream itself died rather than a request.
+ *
+ * That is a defect — no `ApiError` reached the view — so there is no informed
+ * advice to give beyond starting the page over.
+ */
+const DEFECT_REMEDY = 'Reload the page. If it happens again, check the server output.'
 
 const causeMessage = (cause: Cause.Cause<unknown>): string => {
   const error = Cause.findError(cause)
@@ -61,17 +69,22 @@ export const toFeedView = <A, E>(
       // The feed loop folds transport failures into the emitted value, so a
       // Failure here is the stream itself dying — a defect, or the atom being
       // rebuilt. Either way there is nothing on screen to keep.
-      return { tag: 'error', message: causeMessage(result.cause) }
+      return { tag: 'error', message: causeMessage(result.cause), remedy: DEFECT_REMEDY }
 
     case 'Success': {
       const feed = result.value
       if (feed.value === null) {
         return feed.error
-          ? { tag: 'error', message: feed.error.message }
+          ? { tag: 'error', message: feed.error.message, remedy: feed.error.remedy }
           : { tag: 'loading' }
       }
       return feed.error
-        ? { tag: 'stale', value: feed.value, message: feed.error.message }
+        ? {
+            tag: 'stale',
+            value: feed.value,
+            message: feed.error.message,
+            remedy: feed.error.remedy,
+          }
         : { tag: 'ready', value: feed.value }
     }
   }

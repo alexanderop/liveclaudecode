@@ -1,5 +1,5 @@
 import type { Scope } from 'effect'
-import { Clock, Effect, Layer } from 'effect'
+import { Clock, Effect, Layer, Queue } from 'effect'
 import type * as AsyncResult from 'effect/unstable/reactivity/AsyncResult'
 import * as Atom from 'effect/unstable/reactivity/Atom'
 import * as AtomRegistry from 'effect/unstable/reactivity/AtomRegistry'
@@ -27,6 +27,18 @@ export interface TestAtoms<R> {
   readonly recorded: <A>(
     atom: Atom.Atom<A>,
   ) => Effect.Effect<Effect.Effect<ReadonlyArray<A>>, never, Scope.Scope>
+  /**
+   * Mounts the atom and hands back "take the next value it publishes".
+   *
+   * `recorded` answers what an atom has published *so far*, which needs the test
+   * to know when to look. This suspends until it publishes again, which is what
+   * an out-of-band trigger needs: there is no interval to advance and no request
+   * effect to await. Values published before the take are buffered, so drain the
+   * first poll before triggering the second.
+   */
+  readonly published: <A>(
+    atom: Atom.Atom<A>,
+  ) => Effect.Effect<Effect.Effect<A>, never, Scope.Scope>
 }
 
 /**
@@ -85,5 +97,12 @@ export const testAtoms = Effect.fn('testAtoms')(function* <R>(layer: Layer.Layer
         Effect.tap(({ unsubscribe }) => Effect.addFinalizer(() => Effect.sync(unsubscribe))),
         Effect.map(({ values }) => Effect.sync((): ReadonlyArray<A> => [...values])),
       ),
+    published: <A>(atom: Atom.Atom<A>) =>
+      Effect.gen(function*() {
+        const queue = yield* Queue.make<A>()
+        const unsubscribe = registry.subscribe(atom, value => void Queue.offerUnsafe(queue, value))
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribe))
+        return Queue.take(queue)
+      }),
   } satisfies TestAtoms<R>
 })

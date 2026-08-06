@@ -1,20 +1,30 @@
-import type { CostOverviewGroup, SessionSource, Usage } from '#shared/types/run'
+import type {
+  CostOverviewGroupWire,
+  SessionSourceWire,
+  UsageWire,
+} from '#shared/schemas/api'
 import { sessionSourceLabel } from './format'
 
+// Everything here takes the decoded, readonly wire shapes rather than the
+// mutable interfaces the server builds with. A mutable value is assignable to a
+// readonly one, so the server types and the test fixtures still flow in here
+// unchanged; the reverse is not true, which is why the signatures had to move
+// rather than the caller.
+
 /** Per-source series colors for the cost charts, strongest shade first. */
-export const MODEL_PALETTE: Readonly<Record<SessionSource, readonly string[]>> = {
+export const MODEL_PALETTE: Readonly<Record<SessionSourceWire, readonly string[]>> = {
   claude: ['#d9915b', '#efb27e', '#f1c79f', '#ba7044'],
   codex: ['#65b89a', '#96d5bd', '#45977b', '#bce9d8'],
   copilot: ['#6f9de8', '#9abcf2', '#477fcf', '#bed2f7'],
 }
 
 /** Total recorded tokens across input, output, and prompt caching. */
-export function usageTotal(usage?: Usage): number {
+export function usageTotal(usage?: UsageWire): number {
   return usage ? usage.in + usage.out + usage.cr + usage.cw : 0
 }
 
 /** Stable chart series key for a model group. */
-export function seriesKey(model: CostOverviewGroup): string {
+export function seriesKey(model: CostOverviewGroupWire): string {
   return `${model.source}-${model.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
 }
 
@@ -23,8 +33,8 @@ export function seriesKey(model: CostOverviewGroup): string {
  * model's position among the visible models of the same source.
  */
 export function modelColor(
-  model: CostOverviewGroup,
-  visibleModels: readonly CostOverviewGroup[],
+  model: CostOverviewGroupWire,
+  visibleModels: readonly CostOverviewGroupWire[],
   index = 0,
 ): string {
   const sameSource = visibleModels.filter(item => item.source === model.source)
@@ -34,14 +44,14 @@ export function modelColor(
 }
 
 /** Comparable magnitude of a model group: estimated USD or token volume. */
-export function modelMetric(model: CostOverviewGroup, useCost: boolean): number {
+export function modelMetric(model: CostOverviewGroupWire, useCost: boolean): number {
   return useCost && model.pricedRequests
     ? model.estimatedUsd || 0
     : usageTotal(model.usage)
 }
 
 /** How a group's estimate was priced, or that no rate was available. */
-export function pricingLabel(group: CostOverviewGroup): string {
+export function pricingLabel(group: CostOverviewGroupWire): string {
   if (group.estimatedUsd === null) return 'Rate unavailable'
   if (group.source === 'codex') return 'OpenAI API equivalent'
   if (group.source === 'copilot') return 'GitHub AI Credits'
@@ -49,7 +59,7 @@ export function pricingLabel(group: CostOverviewGroup): string {
 }
 
 /** Daily activity trend: estimated USD, or token totals when unpriced. */
-export function sparkline(group: CostOverviewGroup): number[] {
+export function sparkline(group: CostOverviewGroupWire): number[] {
   return group.days.map(day => group.estimatedUsd === null ? usageTotal(day.usage) : day.estimatedUsd)
 }
 
@@ -58,7 +68,7 @@ function csvValue(value: string | number): string {
 }
 
 /** RFC-4180 style CSV of the model cost table, one row per model group. */
-export function serializeCostCsv(models: readonly CostOverviewGroup[]): string {
+export function serializeCostCsv(models: readonly CostOverviewGroupWire[]): string {
   const rows: Array<Array<string | number>> = [
     ['Harness', 'Model', 'Estimated USD', 'Pricing', 'Sessions', 'Input', 'Output', 'Cache read', 'Cache write'],
     ...models.map((model): Array<string | number> => [
