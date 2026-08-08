@@ -185,6 +185,23 @@ function gitConfig(key: string, cwd: string): string {
 }
 
 /**
+ * Identity values that name an environment rather than a person.
+ *
+ * `root` is the container superuser and `Claude`/`noreply@anthropic.com` the
+ * commit identity agent containers configure — none of them says anything
+ * about an operator. Treating them as secrets makes the hygiene gate fail on
+ * any root-run agent container while protecting nobody: `root` fires on
+ * `workspace_roots` and `claude` on `claude-opus-5` in every cassette.
+ * Exported so the hygiene test pins the exclusion.
+ */
+export const GENERIC_IDENTITIES: ReadonlySet<string> = new Set([
+  'root',
+  '/root',
+  'claude',
+  'noreply@anthropic.com',
+])
+
+/**
  * Everything about *this machine* that must not appear in a cassette.
  *
  * Collected at scan time rather than baked into the repository, so the same
@@ -209,7 +226,10 @@ export function collectEnvironmentSecrets(cwd = process.cwd()): NamedSecret[] {
     }
   }
 
-  return secrets.filter(secret => secret.value.length >= MINIMUM_LITERAL_LENGTH)
+  return secrets.filter(secret =>
+    secret.value.length >= MINIMUM_LITERAL_LENGTH
+    && !GENERIC_IDENTITIES.has(secret.value.toLowerCase()),
+  )
 }
 
 function mask(value: string): string {
